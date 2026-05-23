@@ -1,28 +1,27 @@
-// Keyboard input. Tracks held keys and one-shot "edge" events.
+// Keyboard input. Tracks held keys + edge events.
+// WASD steers Zerble; arrow keys orbit/tilt the camera.
 
 const held = new Set();
 const edges = new Set();
 
-const KEY_ALIASES = {
-  ArrowUp: 'W',
-  ArrowDown: 'S',
-  ArrowLeft: 'A',
-  ArrowRight: 'D',
-};
-
 function normalize(e) {
-  if (e.key in KEY_ALIASES) return KEY_ALIASES[e.key];
   if (e.key === ' ') return 'SPACE';
   if (e.key === 'Shift') return 'SHIFT';
+  if (e.key === 'ArrowUp') return 'UP';
+  if (e.key === 'ArrowDown') return 'DOWN';
+  if (e.key === 'ArrowLeft') return 'LEFT';
+  if (e.key === 'ArrowRight') return 'RIGHT';
   if (e.key.length === 1) return e.key.toUpperCase();
   return e.key.toUpperCase();
 }
+
+const BLOCK_DEFAULT = new Set(['W', 'A', 'S', 'D', 'SPACE', 'SHIFT', 'UP', 'DOWN', 'LEFT', 'RIGHT']);
 
 window.addEventListener('keydown', (e) => {
   const k = normalize(e);
   if (!held.has(k)) edges.add(k);
   held.add(k);
-  if (['W', 'A', 'S', 'D', 'SPACE', 'SHIFT'].includes(k)) e.preventDefault();
+  if (BLOCK_DEFAULT.has(k)) e.preventDefault();
 });
 
 window.addEventListener('keyup', (e) => {
@@ -39,7 +38,6 @@ export const Input = {
     return held.has(k);
   },
 
-  // Consume a one-frame edge event (true on the frame the key was first pressed).
   consumePressed(k) {
     if (edges.has(k)) {
       edges.delete(k);
@@ -48,7 +46,7 @@ export const Input = {
     return false;
   },
 
-  // Helpers shaped for driving.
+  // ----- Driving (WASD) -----
   get throttle() {
     return (held.has('W') ? 1 : 0) - (held.has('S') ? 1 : 0);
   },
@@ -57,5 +55,15 @@ export const Input = {
   },
   get boost() {
     return held.has('SHIFT');
+  },
+
+  // ----- Camera (arrow keys) -----
+  get camYaw() {
+    // LEFT yaws the camera left around Zerble; RIGHT yaws right.
+    return (held.has('LEFT') ? 1 : 0) - (held.has('RIGHT') ? 1 : 0);
+  },
+  get camPitch() {
+    // UP tilts the camera up; DOWN tilts down.
+    return (held.has('UP') ? 1 : 0) - (held.has('DOWN') ? 1 : 0);
   },
 };

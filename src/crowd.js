@@ -1,240 +1,465 @@
-// Crowd: festival-goers scattered around stages and tents. They watch Zerble; when
-// they're charmed enough, they emit a smile.
+// Crowd v2: pool of stateful NPCs spawned by chunks.
+//
+// Each NPC has:
+//   - a personality (curiosity, skittishness, energy, social, talkativeness)
+//   - a state: idle | walking | watching | approaching | fleeing | smiling
+//   - a target (a registered attractor or random spot)
+//   - a group affiliation (optional; group members hover near each other)
+//
+// Movement uses simple steering: seek target, repel from buildings (via registry),
+// repel from neighbors slightly (separation), and a path-attraction nudge toward
+// the chunk grid lines so people *tend* to use the dirt paths but don't have to.
+//
+// Smile mechanic:
+//   - Eye-contact + bubble proximity raise happiness.
+//   - On threshold: emit a smile pickup, record Zerble's position at-smile.
+//   - The same NPC can't smile again until Zerble has driven SMILE_RESET_DIST
+//     away (avoids parking-near-crowd farming) AND a small time cooldown.
 
 import * as THREE from 'three';
+import { registry } from './registry.js';
 
-const CROWD_COUNT = 110;
-const SMILE_CONE_DEG = 80;    // half-angle of Zerble's "look at me" zone
-const SMILE_RANGE = 18;
-const BUBBLE_RANGE = 6;
-const HAPPINESS_THRESHOLD = 0.7;
-const COOLDOWN = 10;          // seconds before a single NPC can smile again
-const HONK_BOOST = 0.8;       // happiness instantly added by an in-range honk
-const HONK_RANGE = 14;
-
-const SHIRT_PALETTE = [
+const MAX_NPCS = 500;
+const NPC_ROW_SHIRT = [
   0xff6f9c, 0xffd28a, 0x6fcf6a, 0x66d9ff, 0xb285ff,
   0xff8a5b, 0xf2e8cf, 0x8ecae6, 0xffb703, 0xc77dff,
   0x7bd389, 0xe07a5f, 0x81b29a, 0xf4a261,
 ];
 
+// Awareness / charm
+const NOTICE_RANGE = 22;             // NPC starts paying attention to Zerble
+const SMILE_RANGE = 18;
+const SMILE_CONE_DEG = 80;
+const BUBBLE_RANGE = 6;
+const HAPPINESS_THRESHOLD = 0.7;
+const SMILE_RESET_DIST = 28;         // Zerble must drive this far for the same NPC to smile again
+const SMILE_TIME_COOLDOWN = 3;       // ...AND wait this long
+const HONK_BOOST = 0.8;
+const HONK_RANGE = 14;
+
+// Behavior
+const PATH_GRID = 80;                // matches CHUNK_SIZE — paths run along multiples of this
+const PATH_PULL_WIDTH = 4;           // how wide the "near path" band is
+const BUILDING_AVOID_RADIUS = 4;     // extra buffer beyond footprint
+const SEPARATION_RADIUS = 1.6;
+const ARRIVE_RADIUS = 1.5;
+
 export class Crowd {
   constructor(smiles) {
-    this.group = new THREE.Group();
-    this.group.name = 'Crowd';
     this.smiles = smiles;
-    this.people = [];
+    this.npcs = [];
+    this.free = []; // indices available
+    this.groups = new Map(); // groupId -> { center: Vector3, members: [npcs] }
 
-    this._buildBatched();
+    this._buildInstanced();
   }
 
-  _buildBatched() {
-    // We use one InstancedMesh per body part to keep draw calls low.
+  _buildInstanced() {
     const bodyGeo = new THREE.CapsuleGeometry(0.32, 1.0, 4, 8);
     const headGeo = new THREE.IcosahedronGeometry(0.28, 1);
 
-    // We need per-instance color, so use MeshStandardMaterial with vertexColors-via-instanceColor.
     const bodyMat = new THREE.MeshStandardMaterial({ roughness: 0.85, flatShading: true });
     const headMat = new THREE.MeshStandardMaterial({ color: 0xe6c098, roughness: 0.9, flatShading: true });
 
-    this.bodyMesh = new THREE.InstancedMesh(bodyGeo, bodyMat, CROWD_COUNT);
-    this.headMesh = new THREE.InstancedMesh(headGeo, headMat, CROWD_COUNT);
-    this.bodyMesh.instanceColor = new THREE.InstancedBufferAttribute(new Float32Array(CROWD_COUNT * 3), 3);
+    this.bodyMesh = new THREE.InstancedMesh(bodyGeo, bodyMat, MAX_NPCS);
+    this.headMesh = new THREE.InstancedMesh(headGeo, headMat, MAX_NPCS);
+    this.bodyMesh.instanceColor = new THREE.InstancedBufferAttribute(new Float32Array(MAX_NPCS * 3), 3);
     this.bodyMesh.castShadow = true;
     this.headMesh.castShadow = true;
+    this.bodyMesh.count = MAX_NPCS;
+    this.headMesh.count = MAX_NPCS;
+
+    this.group = new THREE.Group();
+    this.group.name = 'Crowd';
     this.group.add(this.bodyMesh);
     this.group.add(this.headMesh);
 
-    // Distribute people in clusters near the stages and along the path.
-    const clusters = [
-      { x: 0, z: -60, r: 22, count: 30 },    // Main stage front
-      { x: -40, z: 30, r: 18, count: 18 },   // Side stage left
-      { x: 50, z: 30, r: 18, count: 18 },    // Side stage right
-      { x: 0, z: 70, r: 25, count: 22 },     // Drum circle / open lawn
-      { x: -80, z: -40, r: 18, count: 12 },  // Vendor lawn
-      { x: 80, z: -20, r: 15, count: 10 },   // Foodtruck plaza
-    ];
+    // Hide all slots initially.
+    const zero = new THREE.Matrix4().makeScale(0, 0, 0);
+    for (let i = 0; i < MAX_NPCS; i++) {
+      this.bodyMesh.setMatrixAt(i, zero);
+      this.headMesh.setMatrixAt(i, zero);
+      this.free.push(i);
+    }
+    this.bodyMesh.instanceMatrix.needsUpdate = true;
+    this.headMesh.instanceMatrix.needsUpdate = true;
 
-    const mat4 = new THREE.Matrix4();
-    const quat = new THREE.Quaternion();
-    const vScale = new THREE.Vector3(1, 1, 1);
-    const c = new THREE.Color();
+    // Reusables
+    this._mat4 = new THREE.Matrix4();
+    this._tmpV = new THREE.Vector3();
+  }
 
-    let idx = 0;
-    for (const cluster of clusters) {
-      for (let i = 0; i < cluster.count && idx < CROWD_COUNT; i++, idx++) {
-        const ang = Math.random() * Math.PI * 2;
-        const rad = Math.sqrt(Math.random()) * cluster.r;
-        const x = cluster.x + Math.cos(ang) * rad;
-        const z = cluster.z + Math.sin(ang) * rad;
-        const yawSeed = Math.random() * Math.PI * 2;
+  // Called by chunk generator.
+  spawn({ pos, chunkKey, rng = Math.random }) {
+    if (this.free.length === 0) return null;
+    const idx = this.free.pop();
 
-        const shirt = SHIRT_PALETTE[Math.floor(Math.random() * SHIRT_PALETTE.length)];
-        c.setHex(shirt);
-        this.bodyMesh.instanceColor.setXYZ(idx, c.r, c.g, c.b);
+    // Personality
+    const curiosity = rng();
+    const skittish = (1 - curiosity) * rng();        // can't be both bold AND skittish
+    const social = rng();
+    const energy = 0.6 + rng() * 0.7;
+    const dance = rng();                              // some people sway in place to music
 
-        const person = {
-          idx,
-          pos: new THREE.Vector3(x, 0, z),
-          yaw: yawSeed,
-          baseYaw: yawSeed,
-          happiness: 0,
-          cooldownLeft: 0,
-          bob: Math.random() * Math.PI * 2,
-          shirt,
-          scale: 0.85 + Math.random() * 0.35,
-        };
-        this.people.push(person);
-
-        this._writeMatrices(person);
+    // Group: probability based on sociability
+    let groupId = null;
+    if (social > 0.55) {
+      // Try to join an existing nearby group, else start one
+      let joined = false;
+      for (const [gid, g] of this.groups) {
+        if (pos.distanceTo(g.center) < 9 && g.members.length < 6) {
+          groupId = gid;
+          g.members.push(idx);
+          joined = true;
+          break;
+        }
+      }
+      if (!joined) {
+        groupId = `g${idx}`;
+        this.groups.set(groupId, { center: pos.clone(), members: [idx] });
       }
     }
 
-    // Anyone left, drop into the loose ambient pool.
-    while (idx < CROWD_COUNT) {
-      const ang = Math.random() * Math.PI * 2;
-      const rad = 30 + Math.random() * 140;
-      const x = Math.cos(ang) * rad;
-      const z = Math.sin(ang) * rad;
-      const shirt = SHIRT_PALETTE[Math.floor(Math.random() * SHIRT_PALETTE.length)];
-      c.setHex(shirt);
-      this.bodyMesh.instanceColor.setXYZ(idx, c.r, c.g, c.b);
-      const person = {
-        idx,
-        pos: new THREE.Vector3(x, 0, z),
-        yaw: Math.random() * Math.PI * 2,
-        baseYaw: 0,
-        happiness: 0,
-        cooldownLeft: 0,
-        bob: Math.random() * Math.PI * 2,
-        shirt,
-        scale: 0.85 + Math.random() * 0.35,
-      };
-      this.people.push(person);
-      this._writeMatrices(person);
-      idx++;
-    }
+    const shirt = NPC_ROW_SHIRT[Math.floor(rng() * NPC_ROW_SHIRT.length)];
 
-    this.bodyMesh.instanceMatrix.needsUpdate = true;
-    this.headMesh.instanceMatrix.needsUpdate = true;
+    const npc = {
+      idx,
+      pos: pos.clone(),
+      vel: new THREE.Vector3(),
+      target: pos.clone(),
+      yaw: rng() * Math.PI * 2,
+      baseYaw: rng() * Math.PI * 2,
+      bob: rng() * Math.PI * 2,
+      scale: 0.85 + rng() * 0.4,
+      shirt,
+
+      state: 'idle',
+      stateTimer: rng() * 2,
+
+      // Personality
+      curiosity,
+      skittish,
+      social,
+      energy,
+      dance,
+
+      // Group
+      groupId,
+
+      // Charm
+      happiness: 0,
+      smileTimeCooldown: 0,
+      lastSmilePos: null,    // Zerble's position when this NPC last smiled
+
+      chunkKey,
+    };
+
+    this.npcs.push(npc);
+
+    // Color
+    const c = new THREE.Color(shirt);
+    this.bodyMesh.instanceColor.setXYZ(idx, c.r, c.g, c.b);
     this.bodyMesh.instanceColor.needsUpdate = true;
 
-    // Reusables for update loop
-    this._mat4 = new THREE.Matrix4();
-    this._toZerble = new THREE.Vector3();
+    // Initial transform
+    this._writeMatrices(npc);
+
+    return npc;
   }
 
-  _writeMatrices(person) {
-    const m = new THREE.Matrix4();
-    const q = new THREE.Quaternion().setFromEuler(new THREE.Euler(0, person.yaw, 0));
-    const bobY = Math.sin(person.bob) * 0.04;
-    m.compose(
-      new THREE.Vector3(person.pos.x, 0.85 * person.scale + bobY, person.pos.z),
-      q,
-      new THREE.Vector3(person.scale, person.scale, person.scale)
-    );
-    this.bodyMesh.setMatrixAt(person.idx, m);
-
-    m.compose(
-      new THREE.Vector3(person.pos.x, 1.65 * person.scale + bobY, person.pos.z),
-      q,
-      new THREE.Vector3(person.scale, person.scale, person.scale)
-    );
-    this.headMesh.setMatrixAt(person.idx, m);
+  unloadChunk(chunkKey) {
+    const kept = [];
+    const zero = new THREE.Matrix4().makeScale(0, 0, 0);
+    for (const npc of this.npcs) {
+      if (npc.chunkKey === chunkKey) {
+        this.bodyMesh.setMatrixAt(npc.idx, zero);
+        this.headMesh.setMatrixAt(npc.idx, zero);
+        this.free.push(npc.idx);
+      } else {
+        kept.push(npc);
+      }
+    }
+    this.npcs = kept;
+    this.bodyMesh.instanceMatrix.needsUpdate = true;
+    this.headMesh.instanceMatrix.needsUpdate = true;
   }
+
+  // -------------- per-frame --------------
 
   update(dt, zerble, bubbles) {
     const cosCone = Math.cos((SMILE_CONE_DEG * Math.PI) / 180);
-    const t = performance.now() * 0.001;
 
-    // Build a small array of nearby bubble positions for cheap proximity checks
+    // Collect live bubble positions once per frame
     const bubblePositions = [];
-    if (bubbles) {
-      bubbles.forEachAlive((b) => {
-        bubblePositions.push(b.pos);
-      });
-    }
+    if (bubbles) bubbles.forEachAlive((b) => bubblePositions.push(b.pos));
 
-    for (const p of this.people) {
-      if (p.cooldownLeft > 0) p.cooldownLeft -= dt;
-
-      // Animate bobbing/yaw
-      p.bob += dt * (1 + 0.3 * Math.sin(p.idx));
-
-      // Distance to Zerble
-      this._toZerble.set(zerble.position.x - p.pos.x, 0, zerble.position.z - p.pos.z);
-      const dist = this._toZerble.length();
-
-      // Face toward Zerble if he's nearby (so the crowd visibly watches)
-      if (dist < SMILE_RANGE * 1.4) {
-        const targetYaw = Math.atan2(this._toZerble.x, this._toZerble.z);
-        const dy = wrapAngle(targetYaw - p.yaw);
-        p.yaw += dy * Math.min(1, dt * 3);
-      } else {
-        // Drift back toward base yaw
-        const dy = wrapAngle(p.baseYaw - p.yaw);
-        p.yaw += dy * Math.min(1, dt * 0.5);
-      }
-
-      // Charm logic only if not on cooldown and within range
-      if (p.cooldownLeft <= 0 && dist < SMILE_RANGE) {
-        // Eye-contact bonus: is Zerble within the NPC's forward viewing cone?
-        // (We compute relative to Zerble's eye direction: is NPC in Zerble's front?)
-        const fwd = zerble.forwardWorld;
-        const dx = p.pos.x - zerble.position.x;
-        const dz = p.pos.z - zerble.position.z;
-        const dlen = Math.hypot(dx, dz) || 1;
-        const dot = (dx / dlen) * fwd.x + (dz / dlen) * fwd.z;
-
-        let gain = 0;
-        if (dot > cosCone) {
-          // Stronger at close range and well-centered
-          const closeness = 1 - dist / SMILE_RANGE;
-          const aim = (dot - cosCone) / (1 - cosCone);
-          gain += 1.2 * closeness * (0.4 + 0.6 * aim);
-        }
-
-        // Bubble charm: if any bubble is within range
-        for (const bp of bubblePositions) {
-          const bd = Math.hypot(bp.x - p.pos.x, bp.z - p.pos.z);
-          if (bd < BUBBLE_RANGE) {
-            gain += 1.0 * (1 - bd / BUBBLE_RANGE);
-            break;
-          }
-        }
-
-        if (gain > 0) p.happiness += gain * dt;
-
-        if (p.happiness >= HAPPINESS_THRESHOLD) {
-          p.happiness = 0;
-          p.cooldownLeft = COOLDOWN;
-          this.smiles.spawn(p.pos);
-        }
-      } else {
-        // Slow decay
-        p.happiness = Math.max(0, p.happiness - dt * 0.2);
-      }
-
-      this._writeMatrices(p);
+    for (const npc of this.npcs) {
+      this._updateNpc(dt, npc, zerble, bubblePositions, cosCone);
     }
 
     this.bodyMesh.instanceMatrix.needsUpdate = true;
     this.headMesh.instanceMatrix.needsUpdate = true;
   }
 
-  // Called when Zerble honks.
+  _updateNpc(dt, npc, zerble, bubblePositions, cosCone) {
+    if (npc.smileTimeCooldown > 0) npc.smileTimeCooldown -= dt;
+    npc.stateTimer -= dt;
+    npc.bob += dt * (1 + 0.4 * npc.dance);
+
+    const dx = zerble.position.x - npc.pos.x;
+    const dz = zerble.position.z - npc.pos.z;
+    const dToZerble = Math.hypot(dx, dz);
+
+    // --- state transitions driven by Zerble proximity ---
+    if (dToZerble < NOTICE_RANGE) {
+      if (npc.skittish > 0.55 && dToZerble < SMILE_RANGE * 0.6) {
+        npc.state = 'fleeing';
+      } else if (npc.curiosity > 0.65 && dToZerble < NOTICE_RANGE && dToZerble > 4) {
+        npc.state = 'approaching';
+      } else {
+        npc.state = 'watching';
+      }
+    } else if (npc.state !== 'idle' && npc.state !== 'walking') {
+      // Lost interest — go back to ambient behavior
+      npc.state = 'idle';
+      npc.stateTimer = 1 + Math.random() * 3;
+    }
+
+    // --- choose movement target based on state ---
+    let speed = 0;
+    let desiredX = npc.pos.x;
+    let desiredZ = npc.pos.z;
+
+    switch (npc.state) {
+      case 'idle': {
+        if (npc.stateTimer <= 0) {
+          // Pick a new wander target: prefer an attractor, else random nearby spot
+          const at = registry.pickAttractor(Math.random);
+          if (at && Math.hypot(at.position.x - npc.pos.x, at.position.z - npc.pos.z) < 60) {
+            npc.target.copy(at.position);
+            npc.target.x += (Math.random() - 0.5) * at.radius;
+            npc.target.z += (Math.random() - 0.5) * at.radius;
+          } else {
+            npc.target.set(
+              npc.pos.x + (Math.random() - 0.5) * 18,
+              0,
+              npc.pos.z + (Math.random() - 0.5) * 18
+            );
+          }
+          npc.state = 'walking';
+          npc.stateTimer = 10 + Math.random() * 12;
+        }
+        // Tiny in-place sway driven by music dance
+        npc.yaw += Math.sin(npc.bob * 0.5) * 0.01 * npc.dance;
+        break;
+      }
+
+      case 'walking': {
+        const tdx = npc.target.x - npc.pos.x;
+        const tdz = npc.target.z - npc.pos.z;
+        const td = Math.hypot(tdx, tdz);
+        if (td < ARRIVE_RADIUS || npc.stateTimer <= 0) {
+          npc.state = 'idle';
+          npc.stateTimer = 2 + Math.random() * 6;
+        } else {
+          desiredX = tdx / td;
+          desiredZ = tdz / td;
+          speed = 1.4 * npc.energy;
+        }
+        break;
+      }
+
+      case 'watching': {
+        // Face Zerble; tiny dance bob if music-y
+        const target = Math.atan2(dx, dz);
+        const diff = wrapAngle(target - npc.yaw);
+        npc.yaw += diff * Math.min(1, dt * 6);
+        break;
+      }
+
+      case 'approaching': {
+        // Walk toward Zerble, but stop ~5m away
+        if (dToZerble > 5.5) {
+          const inv = 1 / (dToZerble || 1);
+          desiredX = dx * inv;
+          desiredZ = dz * inv;
+          speed = 1.7 * npc.energy;
+        } else {
+          npc.state = 'watching';
+        }
+        const target = Math.atan2(dx, dz);
+        const diff = wrapAngle(target - npc.yaw);
+        npc.yaw += diff * Math.min(1, dt * 6);
+        break;
+      }
+
+      case 'fleeing': {
+        // Run perpendicular-away from Zerble (so they get out of his lane)
+        const inv = 1 / (dToZerble || 1);
+        // Bias 70% direct away, 30% sideways for a more natural scatter
+        const awayX = -dx * inv;
+        const awayZ = -dz * inv;
+        const sideX = -dz * inv;
+        const sideZ = dx * inv;
+        const sideSign = (npc.idx % 2 === 0) ? 1 : -1;
+        desiredX = awayX * 0.7 + sideX * 0.3 * sideSign;
+        desiredZ = awayZ * 0.7 + sideZ * 0.3 * sideSign;
+        const dn = Math.hypot(desiredX, desiredZ) || 1;
+        desiredX /= dn;
+        desiredZ /= dn;
+        speed = 3.5 * npc.energy;
+        const lookDir = Math.atan2(desiredX, desiredZ);
+        npc.yaw = lookDir;
+        if (dToZerble > NOTICE_RANGE + 4) {
+          npc.state = 'idle';
+          npc.stateTimer = 2;
+        }
+        break;
+      }
+    }
+
+    // --- steering modifiers ---
+    if (speed > 0) {
+      // Path attraction: nudge toward the nearest path grid line
+      const px = Math.round(npc.pos.x / PATH_GRID) * PATH_GRID;
+      const pz = Math.round(npc.pos.z / PATH_GRID) * PATH_GRID;
+      const offX = px - npc.pos.x;
+      const offZ = pz - npc.pos.z;
+      const closestPathOffset = Math.abs(offX) < Math.abs(offZ)
+        ? { x: offX, z: 0 }
+        : { x: 0, z: offZ };
+      const pathDist = Math.hypot(closestPathOffset.x, closestPathOffset.z);
+      if (pathDist > PATH_PULL_WIDTH) {
+        // Add a gentle pull (stronger the farther they are)
+        const pull = THREE.MathUtils.clamp((pathDist - PATH_PULL_WIDTH) / 20, 0, 0.4);
+        const pn = pathDist || 1;
+        desiredX += (closestPathOffset.x / pn) * pull;
+        desiredZ += (closestPathOffset.z / pn) * pull;
+      }
+
+      // Building avoidance: push away from any nearby footprint
+      const avoid = nearestFootprintAvoidance(npc.pos, BUILDING_AVOID_RADIUS);
+      if (avoid) {
+        desiredX += avoid.x * avoid.strength;
+        desiredZ += avoid.z * avoid.strength;
+      }
+
+      // Normalize again
+      const dn = Math.hypot(desiredX, desiredZ) || 1;
+      desiredX /= dn;
+      desiredZ /= dn;
+
+      // Smoothly accelerate velocity toward desired
+      npc.vel.x = THREE.MathUtils.lerp(npc.vel.x, desiredX * speed, Math.min(1, dt * 4));
+      npc.vel.z = THREE.MathUtils.lerp(npc.vel.z, desiredZ * speed, Math.min(1, dt * 4));
+    } else {
+      // Decelerate
+      npc.vel.multiplyScalar(Math.pow(0.5, dt * 6));
+    }
+
+    // Apply velocity
+    npc.pos.x += npc.vel.x * dt;
+    npc.pos.z += npc.vel.z * dt;
+
+    // Face direction of motion when walking/fleeing/approaching
+    if (Math.abs(npc.vel.x) + Math.abs(npc.vel.z) > 0.4 && npc.state !== 'watching') {
+      const targetYaw = Math.atan2(npc.vel.x, npc.vel.z);
+      const diff = wrapAngle(targetYaw - npc.yaw);
+      npc.yaw += diff * Math.min(1, dt * 6);
+    }
+
+    // --- charm logic ---
+    if (
+      npc.smileTimeCooldown <= 0 &&
+      (npc.lastSmilePos === null || zerble.position.distanceTo(npc.lastSmilePos) > SMILE_RESET_DIST) &&
+      dToZerble < SMILE_RANGE
+    ) {
+      const fwd = zerble.forwardWorld;
+      const ndx = npc.pos.x - zerble.position.x;
+      const ndz = npc.pos.z - zerble.position.z;
+      const ndlen = Math.hypot(ndx, ndz) || 1;
+      const dot = (ndx / ndlen) * fwd.x + (ndz / ndlen) * fwd.z;
+
+      let gain = 0;
+      if (dot > cosCone) {
+        const closeness = 1 - dToZerble / SMILE_RANGE;
+        const aim = (dot - cosCone) / (1 - cosCone);
+        gain += 1.4 * closeness * (0.4 + 0.6 * aim);
+      }
+      for (const bp of bubblePositions) {
+        const bd = Math.hypot(bp.x - npc.pos.x, bp.z - npc.pos.z);
+        if (bd < BUBBLE_RANGE) {
+          gain += 1.0 * (1 - bd / BUBBLE_RANGE);
+          break;
+        }
+      }
+      // Curious & approaching NPCs charm faster (they're really looking)
+      if (npc.state === 'approaching' || npc.state === 'watching') gain *= 1.2;
+      // Fleeing NPCs don't smile
+      if (npc.state === 'fleeing') gain = 0;
+
+      if (gain > 0) npc.happiness += gain * dt;
+
+      if (npc.happiness >= HAPPINESS_THRESHOLD) {
+        npc.happiness = 0;
+        npc.smileTimeCooldown = SMILE_TIME_COOLDOWN;
+        npc.lastSmilePos = zerble.position.clone();
+        this.smiles.spawn(npc.pos);
+      }
+    } else {
+      npc.happiness = Math.max(0, npc.happiness - dt * 0.2);
+    }
+
+    // Write transform
+    this._writeMatrices(npc);
+  }
+
+  _writeMatrices(npc) {
+    const m = this._mat4;
+    const quat = new THREE.Quaternion().setFromEuler(new THREE.Euler(0, npc.yaw, 0));
+    const bobY = Math.sin(npc.bob) * 0.04;
+    const danceTilt = npc.dance > 0.6 && (npc.state === 'idle' || npc.state === 'watching')
+      ? Math.sin(npc.bob * 2) * 0.05 * (npc.dance - 0.5)
+      : 0;
+
+    m.compose(
+      this._tmpV.set(npc.pos.x, 0.85 * npc.scale + bobY, npc.pos.z),
+      quat,
+      this._tmpV.set(npc.scale, npc.scale, npc.scale)
+    );
+    if (danceTilt) {
+      const t = new THREE.Matrix4().makeRotationZ(danceTilt);
+      m.multiply(t);
+    }
+    this.bodyMesh.setMatrixAt(npc.idx, m);
+
+    m.compose(
+      this._tmpV.set(npc.pos.x, 1.65 * npc.scale + bobY, npc.pos.z),
+      quat,
+      this._tmpV.set(npc.scale, npc.scale, npc.scale)
+    );
+    this.headMesh.setMatrixAt(npc.idx, m);
+  }
+
   applyHonk(zerble) {
-    for (const p of this.people) {
-      const dx = p.pos.x - zerble.position.x;
-      const dz = p.pos.z - zerble.position.z;
+    for (const npc of this.npcs) {
+      const dx = npc.pos.x - zerble.position.x;
+      const dz = npc.pos.z - zerble.position.z;
       const d = Math.hypot(dx, dz);
-      if (d < HONK_RANGE && p.cooldownLeft <= 0) {
+      if (d < HONK_RANGE && npc.smileTimeCooldown <= 0 && npc.state !== 'fleeing') {
         const k = 1 - d / HONK_RANGE;
-        p.happiness += HONK_BOOST * k;
-        if (p.happiness >= HAPPINESS_THRESHOLD) {
-          p.happiness = 0;
-          p.cooldownLeft = COOLDOWN;
-          this.smiles.spawn(p.pos);
+        npc.happiness += HONK_BOOST * k;
+        if (npc.happiness >= HAPPINESS_THRESHOLD) {
+          // Apply the same distance/time gate as natural smiles
+          if (npc.lastSmilePos === null || zerble.position.distanceTo(npc.lastSmilePos) > SMILE_RESET_DIST) {
+            npc.happiness = 0;
+            npc.smileTimeCooldown = SMILE_TIME_COOLDOWN;
+            npc.lastSmilePos = zerble.position.clone();
+            this.smiles.spawn(npc.pos);
+          } else {
+            // They're charmed but already smiled recently — just hold at threshold
+            npc.happiness = HAPPINESS_THRESHOLD * 0.95;
+          }
         }
       }
     }
@@ -245,4 +470,26 @@ function wrapAngle(a) {
   while (a > Math.PI) a -= Math.PI * 2;
   while (a < -Math.PI) a += Math.PI * 2;
   return a;
+}
+
+// Looks up nearby building footprints and returns a normalized repulsion direction.
+function nearestFootprintAvoidance(pos, lookAheadRadius) {
+  let pushX = 0, pushZ = 0, strength = 0;
+  for (const fp of registry.footprints()) {
+    if (fp.kind === 'tree' || fp.kind === 'path_node') continue;
+    const dx = pos.x - fp.position.x;
+    const dz = pos.z - fp.position.z;
+    const d = Math.hypot(dx, dz);
+    const intrusion = fp.radius + lookAheadRadius - d;
+    if (intrusion > 0) {
+      const inv = 1 / (d || 0.0001);
+      const w = intrusion / lookAheadRadius;
+      pushX += dx * inv * w;
+      pushZ += dz * inv * w;
+      strength += w;
+    }
+  }
+  if (strength <= 0) return null;
+  const n = Math.hypot(pushX, pushZ) || 1;
+  return { x: pushX / n, z: pushZ / n, strength: Math.min(1.2, strength) };
 }

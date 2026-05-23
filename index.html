@@ -1,0 +1,56 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Zerble at LEAF — A Bubble Adventure</title>
+  <link rel="stylesheet" href="styles.css" />
+  <script type="importmap">
+    {
+      "imports": {
+        "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
+        "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/"
+      }
+    }
+  </script>
+</head>
+<body>
+  <canvas id="game"></canvas>
+
+  <div id="hud">
+    <div id="score-panel">
+      <div class="row">
+        <span class="label">Smiles</span>
+        <span id="smiles" class="value">0</span>
+      </div>
+      <div class="row small">
+        <span class="label">Best</span>
+        <span id="best" class="value">0</span>
+      </div>
+    </div>
+
+    <div id="toast" class="hidden"></div>
+
+    <div id="hit-flash"></div>
+  </div>
+
+  <div id="title-card">
+    <div class="card">
+      <h1>Zerble at <span class="leaf">LEAF</span></h1>
+      <p class="tag">Black Mountain, NC — bring the bubbles, collect the smiles</p>
+
+      <div class="controls">
+        <div><kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> or arrows — drive</div>
+        <div><kbd>Shift</kbd> — boost</div>
+        <div><kbd>Space</kbd> — honk! (instant joy in a ring)</div>
+      </div>
+
+      <p class="hint">Glide near festival-goers so they see your glowing eyes and bubbles. Avoid the puppet parade, the brass band, food trucks, gaggles of kids, and the wooks.</p>
+
+      <button id="start-btn">Start the parade</button>
+    </div>
+  </div>
+
+  <script type="module" src="src/main.js"></script>
+</body>
+</html>

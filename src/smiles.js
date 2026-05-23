@@ -3,10 +3,10 @@
 import * as THREE from 'three';
 
 const PICKUP_RADIUS = 2.4;
-const SEEK_RANGE = 14;
-const SEEK_SPEED = 12;
-const RISE_SPEED = 1.5;
-const LIFETIME = 9;
+const SEEK_SPEED = 14;       // base speed; ramps up over time so distant smiles arrive eventually
+const RISE_TIME = 0.25;       // tiny "pop and rise" before homing
+const RISE_SPEED = 2.8;
+const LIFETIME = 14;
 
 export class Smiles {
   constructor() {
@@ -62,13 +62,14 @@ export class Smiles {
       toZerble.y += 1.5;
       const dist = toZerble.length();
 
-      if (!s.seeking && dist < SEEK_RANGE) s.seeking = true;
-
-      if (s.seeking) {
-        toZerble.normalize().multiplyScalar(SEEK_SPEED * dt);
-        s.mesh.position.add(toZerble);
-      } else {
+      if (s.age < RISE_TIME) {
+        // Brief upward pop so the player can see where the smile came from.
         s.mesh.position.y += RISE_SPEED * dt;
+      } else {
+        // Always home — speed ramps up so smiles from far-away NPCs catch up reasonably fast.
+        const speedScale = 1 + Math.min(2.5, s.age * 0.3);
+        toZerble.normalize().multiplyScalar(SEEK_SPEED * speedScale * dt);
+        s.mesh.position.add(toZerble);
       }
 
       // Bobble & spin

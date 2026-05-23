@@ -19,7 +19,20 @@ import { registry } from './registry.js';
 import { hash2, mulberry32 } from './rng.js';
 
 export const CHUNK_SIZE = 80;
-const LOAD_RADIUS = 3; // 7x7 chunks loaded around the player
+const LOAD_RADIUS = 2; // 5x5 chunks loaded around the player
+
+// Bands placed on stages — animated lightly each frame by the main loop.
+export const stagePerformers = [];
+
+export function updateStagePerformers(t) {
+  for (let i = 0; i < stagePerformers.length; i++) {
+    const p = stagePerformers[i];
+    const phase = t * 3 + p.phase;
+    p.group.position.y = p.baseY + Math.abs(Math.sin(phase)) * 0.08;
+    p.group.rotation.z = Math.sin(phase * 0.5) * 0.05;
+    p.group.rotation.y = p.baseYaw + Math.sin(phase * 0.3) * 0.15;
+  }
+}
 
 // ---------- Public API ----------
 
@@ -64,12 +77,12 @@ export class ChunkManager {
     // Every chunk: paths along its grid axes
     placePaths(ctx);
 
-    // Every chunk: scatter trees (count depends on theme)
+    // Build theme content FIRST so footprints register before we scatter trees & NPCs.
+    THEME_BUILDERS[theme](ctx);
+
+    // Scatter trees — will dodge the buildings we just registered.
     const treeDensity = THEME_PROPS[theme].treeDensity;
     scatterTrees(ctx, treeDensity);
-
-    // Theme content
-    THEME_BUILDERS[theme](ctx);
 
     // Ambient crowd
     spawnAmbientCrowd(ctx, THEME_PROPS[theme].ambientCrowd);
@@ -116,13 +129,13 @@ function pickTheme(cx, cz) {
 }
 
 const THEME_PROPS = {
-  main_stage:  { treeDensity: 0.15, ambientCrowd: 0 },
-  side_stage:  { treeDensity: 0.25, ambientCrowd: 6 },
-  food_plaza:  { treeDensity: 0.2, ambientCrowd: 8 },
-  vendor_row:  { treeDensity: 0.3, ambientCrowd: 7 },
-  drum_circle: { treeDensity: 0.4, ambientCrowd: 4 },
+  main_stage:  { treeDensity: 0.15, ambientCrowd: 18 }, // big audience right at the main stage
+  side_stage:  { treeDensity: 0.25, ambientCrowd: 9 },
+  food_plaza:  { treeDensity: 0.2, ambientCrowd: 10 },
+  vendor_row:  { treeDensity: 0.3, ambientCrowd: 8 },
+  drum_circle: { treeDensity: 0.4, ambientCrowd: 7 },
   grove:       { treeDensity: 1.0, ambientCrowd: 3 },
-  open_lawn:   { treeDensity: 0.2, ambientCrowd: 2 },
+  open_lawn:   { treeDensity: 0.2, ambientCrowd: 3 },
 };
 
 const THEME_BUILDERS = {
@@ -436,22 +449,22 @@ function buildStage(ctx, x, z, isMain) {
   banner.castShadow = true;
   ctx.group.add(banner);
 
-  // LEAF letters on main stage
+  // LEAF on the main stage — single banner plane painted with the word
   if (isMain) {
-    const letters = ['L', 'E', 'A', 'F'];
-    for (let i = 0; i < letters.length; i++) {
-      const letter = new THREE.Mesh(
-        new THREE.BoxGeometry(2.2, 2.6, 0.3),
-        new THREE.MeshStandardMaterial({
-          color: 0xfff4d0,
-          emissive: 0xffd28a,
-          emissiveIntensity: 0.7,
-          roughness: 0.5,
-        })
-      );
-      letter.position.set(x - 7.5 + i * 5, 5, z - d / 2);
-      ctx.group.add(letter);
-    }
+    const bannerW = Math.min(w - 2, 16);
+    const leaf = new THREE.Mesh(
+      new THREE.PlaneGeometry(bannerW, 3.4),
+      new THREE.MeshStandardMaterial({
+        map: leafBannerTexture('#fff4d0', '#6fcf6a'),
+        emissive: 0xffd28a,
+        emissiveMap: leafBannerTexture('#ffd28a', '#000000'),
+        emissiveIntensity: 0.55,
+        roughness: 0.6,
+        side: THREE.DoubleSide,
+      })
+    );
+    leaf.position.set(x, 5.3, z - d / 2 - 0.01);
+    ctx.group.add(leaf);
   }
 
   // Truss
@@ -651,28 +664,30 @@ function buildEntranceArch(ctx, x, z) {
   right.position.x = x + 6;
   ctx.group.add(right);
 
+  // The arch: half-torus, NOT rotated, so its curve opens downward like a real arch.
   const arch = new THREE.Mesh(
     new THREE.TorusGeometry(6, 0.4, 8, 24, Math.PI),
     new THREE.MeshStandardMaterial({ color: 0xff6f9c, roughness: 0.7, flatShading: true })
   );
   arch.position.set(x, 8, z);
-  arch.rotation.z = Math.PI;
   arch.castShadow = true;
   ctx.group.add(arch);
 
-  const letters = ['L', 'E', 'A', 'F'];
-  for (let i = 0; i < letters.length; i++) {
-    const ltr = new THREE.Mesh(
-      new THREE.BoxGeometry(1.4, 1.8, 0.4),
-      new THREE.MeshStandardMaterial({
-        color: 0xfff4d0, emissive: 0xffe066, emissiveIntensity: 0.6, roughness: 0.5,
-      })
-    );
-    ltr.position.set(x - 3.7 + i * 2.5, 9.5, z);
-    ctx.group.add(ltr);
-  }
+  // LEAF banner — a thin double-sided plane painted with the word, hung from the arch.
+  const bannerGeo = new THREE.PlaneGeometry(8, 2.2);
+  const bannerMat = new THREE.MeshStandardMaterial({
+    map: leafBannerTexture('#fff4d0', '#ff6f9c'),
+    emissive: 0xffe066,
+    emissiveMap: leafBannerTexture('#ffe066', '#000000'),
+    emissiveIntensity: 0.55,
+    roughness: 0.6,
+    side: THREE.DoubleSide,
+    transparent: false,
+  });
+  const banner = new THREE.Mesh(bannerGeo, bannerMat);
+  banner.position.set(x, 10.5, z);
+  ctx.group.add(banner);
 
-  // Each arch upright is a hard collider
   registry.add({
     kind: 'arch',
     position: new THREE.Vector3(x - 6, 1, z),
@@ -687,6 +702,38 @@ function buildEntranceArch(ctx, x, z) {
     collider: { radius: 1.0, damage: 4 },
     chunkKey: ctx.key,
   });
+}
+
+// Cached canvas texture for the "LEAF" banner used on arches and stage banners.
+const _leafTexCache = new Map();
+function leafBannerTexture(textColor, bgColor) {
+  const key = `${textColor}|${bgColor}`;
+  if (_leafTexCache.has(key)) return _leafTexCache.get(key);
+
+  const c = document.createElement('canvas');
+  c.width = 1024;
+  c.height = 256;
+  const cx = c.getContext('2d');
+
+  cx.fillStyle = bgColor;
+  cx.fillRect(0, 0, c.width, c.height);
+
+  // Subtle border
+  cx.strokeStyle = 'rgba(0,0,0,0.18)';
+  cx.lineWidth = 8;
+  cx.strokeRect(8, 8, c.width - 16, c.height - 16);
+
+  cx.fillStyle = textColor;
+  cx.font = 'bold 200px "Trebuchet MS", "Helvetica Neue", Helvetica, Arial, sans-serif';
+  cx.textAlign = 'center';
+  cx.textBaseline = 'middle';
+  cx.fillText('LEAF', c.width / 2, c.height / 2 + 8);
+
+  const tex = new THREE.CanvasTexture(c);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  tex.anisotropy = 8;
+  _leafTexCache.set(key, tex);
+  return tex;
 }
 
 function buildHammock(ctx, x, z) {
@@ -775,13 +822,28 @@ function placePolePair(ctx, ax, az, bx, bz) {
 
 function spawnAmbientCrowd(ctx, count) {
   if (!ctx.crowd || count <= 0) return;
+
+  // Collect attractors that live in this chunk so we can cluster crowds around them.
+  const chunkAttractors = [];
+  for (const e of registry.byChunk(ctx.key)) {
+    if (e.attractor && e.attractor.weight >= 0.5) chunkAttractors.push(e);
+  }
+
   for (let i = 0; i < count; i++) {
-    // Pick a position inside this chunk, biased toward attractors registered in this chunk.
     let x, z;
     let tries = 0;
     do {
-      x = ctx.cxWorld + (ctx.rng() - 0.5) * (CHUNK_SIZE - 8);
-      z = ctx.czWorld + (ctx.rng() - 0.5) * (CHUNK_SIZE - 8);
+      // 70% chance to spawn near an attractor (if any), 30% random in chunk
+      if (chunkAttractors.length > 0 && ctx.rng() < 0.7) {
+        const att = chunkAttractors[Math.floor(ctx.rng() * chunkAttractors.length)];
+        const a = ctx.rng() * Math.PI * 2;
+        const r = Math.sqrt(ctx.rng()) * att.attractor.radius;
+        x = att.position.x + Math.cos(a) * r;
+        z = att.position.z + Math.sin(a) * r;
+      } else {
+        x = ctx.cxWorld + (ctx.rng() - 0.5) * (CHUNK_SIZE - 8);
+        z = ctx.czWorld + (ctx.rng() - 0.5) * (CHUNK_SIZE - 8);
+      }
       tries++;
     } while (registry.closestBuilding(new THREE.Vector3(x, 0, z), 1.5) && tries < 6);
 

@@ -2,16 +2,25 @@
 
 import * as THREE from 'three';
 
-const MAX_BUBBLES = 80;
-const SPAWN_PER_SEC = 22;
-const GRAVITY = -0.6; // soap bubbles drift upward at low speed; we add gentle buoyancy in code
-const BUOYANCY = 1.4;
-const LIFETIME = 6.5;
+const MAX_BUBBLES = 120;
+const SPAWN_PER_SEC = 26;
+const GRAVITY = -0.45;
+const BUOYANCY = 1.0;
+const LIFETIME = 8;
 const POP_SCALE_TIME = 0.25;
+
+// Slowly varying global wind so all bubbles drift coherently most of the time.
+let _windT = 0;
+function sampleWind(t) {
+  return {
+    x: Math.sin(t * 0.21) * 0.8 + Math.cos(t * 0.07) * 0.5,
+    z: Math.cos(t * 0.18) * 0.8 + Math.sin(t * 0.05) * 0.5,
+  };
+}
 
 export class Bubbles {
   constructor() {
-    const geo = new THREE.IcosahedronGeometry(0.22, 1);
+    const geo = new THREE.IcosahedronGeometry(0.11, 1); // about half the previous size
     const mat = new THREE.MeshPhysicalMaterial({
       color: 0xffffff,
       roughness: 0.05,
@@ -61,6 +70,7 @@ export class Bubbles {
   }
 
   update(dt, zerble) {
+    _windT += dt;
     // Spawn rate scales with cart speed — at rest, slow ambient drip; moving, full stream.
     const speed = Math.abs(zerble.speed);
     const rate = SPAWN_PER_SEC * (0.25 + Math.min(1, speed / 8) * 0.75);
@@ -97,13 +107,17 @@ export class Bubbles {
         continue;
       }
 
-      // Physics: buoyant upward + slight wind drift + small randomness
+      // Physics: gentle buoyancy + wandering wind + per-bubble jitter
       p.vel.y += (BUOYANCY + GRAVITY) * dt;
-      p.vel.x += (Math.sin(p.age * 1.7 + i) * 0.6) * dt;
-      p.vel.z += (Math.cos(p.age * 1.3 + i) * 0.6) * dt;
+      const wind = sampleWind(_windT + i * 0.13);
+      // Per-bubble jitter (each bubble has its own swirl frequency)
+      const jitterX = Math.sin(p.age * (1.4 + (i % 7) * 0.2) + i) * 1.6;
+      const jitterZ = Math.cos(p.age * (1.1 + (i % 5) * 0.27) + i * 1.3) * 1.6;
+      p.vel.x += (wind.x + jitterX) * dt;
+      p.vel.z += (wind.z + jitterZ) * dt;
 
-      // Damping
-      p.vel.multiplyScalar(Math.pow(0.92, dt * 60));
+      // Light damping so they can build up some drift but not race off
+      p.vel.multiplyScalar(Math.pow(0.85, dt * 60));
 
       p.pos.addScaledVector(p.vel, dt);
       p.spin += dt * 0.5;

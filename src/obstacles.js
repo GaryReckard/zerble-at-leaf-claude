@@ -58,7 +58,9 @@ export class PuppetParade {
       p.userData.distance = (p.userData.distance + this.speed * dt + totalLen * 100) % totalLen;
       const { pos, dir } = samplePath(this.path, p.userData.distance, this._tmpA, this._tmpB);
       p.position.copy(pos);
-      const yaw = Math.atan2(dir.x, dir.z);
+      // Their "front" geometry (eyes/mouth) is at local -Z, so face the direction of travel
+      // by setting yaw so that local -Z points along dir.
+      const yaw = Math.atan2(-dir.x, -dir.z);
       p.rotation.y = yaw;
 
       // Per-puppet bob
@@ -212,7 +214,8 @@ export class BrassBand {
     const totalLen = pathLength(this.path);
     this.distance = (this.distance + this.speed * dt + totalLen * 100) % totalLen;
     const { pos: leadPos, dir: leadDir } = samplePath(this.path, this.distance, this._tmpA, this._tmpB);
-    const yaw = Math.atan2(leadDir.x, leadDir.z);
+    // Face the direction of travel: yaw rotates local -Z to align with dir.
+    const yaw = Math.atan2(-leadDir.x, -leadDir.z);
     const cos = Math.cos(yaw);
     const sin = Math.sin(yaw);
 
@@ -613,16 +616,67 @@ function makeWook() {
   head.castShadow = true;
   wookGroup.add(head);
 
-  // Hair (a few elongated boxes)
+  // Thick dreadlocks — chunky multi-segment cylinders with knobby joints
   const hairColor = 0x5a3a1a;
-  for (let i = 0; i < 6; i++) {
-    const strand = new THREE.Mesh(
-      new THREE.BoxGeometry(0.06, 0.8, 0.06),
-      new THREE.MeshStandardMaterial({ color: hairColor, roughness: 1, flatShading: true })
-    );
-    const ang = (i / 6) * TAU + Math.random() * 0.3;
-    strand.position.set(Math.cos(ang) * 0.25, 1.7, Math.sin(ang) * 0.25);
-    wookGroup.add(strand);
+  const dreadMat = new THREE.MeshStandardMaterial({ color: hairColor, roughness: 1, flatShading: true });
+  const dreadHighlightMat = new THREE.MeshStandardMaterial({
+    color: 0x7a5630, roughness: 1, flatShading: true,
+  });
+  const dreadCount = 10;
+  for (let i = 0; i < dreadCount; i++) {
+    const ang = (i / dreadCount) * TAU + (Math.random() - 0.5) * 0.25;
+    // Outer side of the head; inner ones in front are shorter so they hang behind/sides
+    const back = Math.cos(ang) < 0; // back of head
+    const len = back ? 1.4 + Math.random() * 0.5 : 0.9 + Math.random() * 0.5;
+    const segments = 4 + Math.floor(Math.random() * 2);
+    const segLen = len / segments;
+
+    // Each dreadlock starts at the scalp and grows downward in chunky segments
+    const baseAng = ang;
+    const baseR = 0.28;
+    const baseX = Math.cos(baseAng) * baseR;
+    const baseZ = Math.sin(baseAng) * baseR;
+    // Slight outward droop — dreads hang slightly away from the head
+    const droopX = baseX * 0.15;
+    const droopZ = baseZ * 0.15;
+
+    let prevX = baseX;
+    let prevZ = baseZ;
+    let yTop = 2.05;
+    for (let s = 0; s < segments; s++) {
+      const sX = baseX + droopX * (s + 1);
+      const sZ = baseZ + droopZ * (s + 1);
+      const r = 0.12 + (Math.random() - 0.5) * 0.04 - s * 0.005; // taper slightly toward the tip
+      const segH = segLen * (0.85 + Math.random() * 0.3);
+      const seg = new THREE.Mesh(
+        new THREE.CylinderGeometry(r, r * 0.95, segH, 6),
+        s % 2 === 0 ? dreadMat : dreadHighlightMat
+      );
+      const cx = (prevX + sX) / 2;
+      const cz = (prevZ + sZ) / 2;
+      seg.position.set(cx, yTop - segH / 2, cz);
+      // Rotate the segment so it tilts outward with the droop
+      const tiltX = Math.atan2(sX - prevX, segH);
+      const tiltZ = Math.atan2(sZ - prevZ, segH);
+      seg.rotation.x = -tiltZ;
+      seg.rotation.z = tiltX;
+      seg.castShadow = true;
+      wookGroup.add(seg);
+
+      // Knobby joint between segments
+      if (s < segments - 1) {
+        const knob = new THREE.Mesh(
+          new THREE.IcosahedronGeometry(r * 1.25, 0),
+          dreadMat
+        );
+        knob.position.set(sX, yTop - segH, sZ);
+        wookGroup.add(knob);
+      }
+
+      yTop -= segH;
+      prevX = sX;
+      prevZ = sZ;
+    }
   }
 
   // Bucket hat

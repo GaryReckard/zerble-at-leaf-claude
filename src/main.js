@@ -139,45 +139,22 @@ function tick() {
     // Procedural world expands around Zerble.
     updateWorld(zerble.position);
 
-    // Collisions: iterate everything in the registry.
+    // Collisions: deduct smiles only when Zerble is actively driving into the obstacle.
+    // If something brushes a stationary Zerble, just resolve the overlap silently.
     if (zerble.invulnLeft <= 0) {
-      for (const c of registry.colliders()) {
-        const dx = c.position.x - zerble.position.x;
-        const dz = c.position.z - zerble.position.z;
-        const d = Math.hypot(dx, dz);
-        const minD = c.radius + zerble.radius;
-        if (d < minD) {
-          const inv = 1 / (d || 0.0001);
-          const pushDir = new THREE.Vector3(-dx * inv, 0, -dz * inv);
-          zerble.applyHit(pushDir);
-          score = Math.max(0, score - c.damage);
-          HUD.setSmiles(score);
-          HUD.flashHit();
-          HUD.toast(toastForKind(c.kind), 1400);
-          break;
-        }
-      }
-      // Movers (parade, band, kids, wooks) still own their own collider arrays.
-      if (zerble.invulnLeft <= 0) {
-        const moverSources = [puppets.colliders, band.colliders, kids.colliders, wooks.colliders];
-        outer: for (const list of moverSources) {
-          for (const c of list) {
-            const dx = c.position.x - zerble.position.x;
-            const dz = c.position.z - zerble.position.z;
-            const d = Math.hypot(dx, dz);
-            const minD = c.radius + zerble.radius;
-            if (d < minD) {
-              const inv = 1 / (d || 0.0001);
-              const pushDir = new THREE.Vector3(-dx * inv, 0, -dz * inv);
-              zerble.applyHit(pushDir);
-              score = Math.max(0, score - c.damage);
-              HUD.setSmiles(score);
-              HUD.flashHit();
-              HUD.toast(toastForKind(c.kind), 1400);
-              break outer;
-            }
-          }
-        }
+      const allColliders = [
+        ...registry.colliders(),
+        ...puppets.colliders,
+        ...band.colliders,
+        ...kids.colliders,
+        ...wooks.colliders,
+      ];
+      const hit = resolveCollision(zerble, allColliders);
+      if (hit && hit.damaging) {
+        score = Math.max(0, score - hit.damage);
+        HUD.setSmiles(score);
+        HUD.flashHit();
+        HUD.toast(toastForKind(hit.kind), 1400);
       }
     }
 
@@ -198,6 +175,46 @@ function tick() {
 
   composer.render();
   requestAnimationFrame(tick);
+}
+
+// Threshold: Zerble must be closing on the obstacle at least this fast (m/s) for it
+// to count as "driving into" — anything below this is a glancing/passive touch.
+const APPROACH_DAMAGE_THRESHOLD = 1.2;
+
+function resolveCollision(zerble, colliders) {
+  // forward = (-sin(h), 0, -cos(h)); velocity = forward * speed
+  const fx = -Math.sin(zerble.heading);
+  const fz = -Math.cos(zerble.heading);
+  const velX = fx * zerble.speed;
+  const velZ = fz * zerble.speed;
+
+  for (const c of colliders) {
+    const tox = c.position.x - zerble.position.x;
+    const toz = c.position.z - zerble.position.z;
+    const d = Math.hypot(tox, toz);
+    const minD = c.radius + zerble.radius;
+    if (d >= minD) continue;
+
+    const inv = 1 / (d || 0.0001);
+    const approachSpeed = (velX * tox + velZ * toz) * inv;
+
+    if (approachSpeed > APPROACH_DAMAGE_THRESHOLD) {
+      // Damaging — Zerble is driving into it
+      const pushDir = new THREE.Vector3(-tox * inv, 0, -toz * inv);
+      zerble.applyHit(pushDir);
+      return { damaging: true, damage: c.damage, kind: c.kind };
+    }
+
+    // Non-damaging contact: nudge Zerble out of overlap, kill any small approach speed.
+    const overlap = minD - d;
+    zerble.position.x -= tox * inv * overlap;
+    zerble.position.z -= toz * inv * overlap;
+    if (approachSpeed > 0 && zerble.speed > 0) {
+      zerble.speed = Math.max(0, zerble.speed - approachSpeed * 0.6);
+    }
+    return { damaging: false };
+  }
+  return null;
 }
 
 function toastForKind(kind) {
@@ -226,5 +243,5 @@ window.addEventListener('resize', () => {
   bloomPass.setSize(w, h);
 });
 
-window.__game = { camera, zerble, scene, renderer, crowd, registry };
+window.__game = { camera, zerble, scene, renderer, crowd, registry, chaseCam };
 tick();

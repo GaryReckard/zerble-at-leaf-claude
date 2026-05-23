@@ -94,12 +94,14 @@ export class Zerble {
     frontSeatBack.castShadow = true;
     this.root.add(frontSeatBack);
 
-    // ----- Back bench seat (passenger row) -----
+    // ----- Back bench — REAR-FACING (EZ-GO style), passengers face out the back -----
+    // The back seat-back sits IN FRONT of the back cushion, immediately behind the
+    // front seat-back (back-to-back). Riders straddle the cushion facing +Z.
     const backSeat = new THREE.Mesh(
       this._roundedBoxGeometry(2.2, 0.55, 1.0, 0.1),
       mat(0xb56b3a, { roughness: 0.85 })
     );
-    backSeat.position.set(0, 1.45, 1.0);
+    backSeat.position.set(0, 1.45, 1.1);
     backSeat.castShadow = true;
     this.root.add(backSeat);
 
@@ -107,18 +109,19 @@ export class Zerble {
       this._roundedBoxGeometry(2.2, 0.9, 0.22, 0.08),
       mat(0xb56b3a, { roughness: 0.85 })
     );
-    backSeatBack.position.set(0, 1.9, 1.5);
+    backSeatBack.position.set(0, 1.9, 0.5);  // in front of the cushion (rear-facing)
     backSeatBack.castShadow = true;
     this.root.add(backSeatBack);
 
-    // ----- Roof poles (pushed to the very corners so two rows of seats fit underneath) -----
+    // ----- Roof poles — only over the FRONT seat. Back poles come up BETWEEN
+    // the front and back seats (at z=0.4) so the back bench is open-air. -----
     const poleGeo = new THREE.CylinderGeometry(0.07, 0.07, 2.4, 8);
     const poleMat = mat(COLOR_FRAME, { roughness: 0.4, metalness: 0.5 });
     for (const [x, z] of [
       [-1.3, -1.6],
       [1.3, -1.6],
-      [-1.3, 1.8],
-      [1.3, 1.8],
+      [-1.3, 0.4],
+      [1.3, 0.4],
     ]) {
       const p = new THREE.Mesh(poleGeo, poleMat);
       p.position.set(x, 2.5, z);
@@ -126,24 +129,43 @@ export class Zerble {
       this.root.add(p);
     }
 
-    // ----- Roof (pink, slightly extended to cover both rows) -----
+    // ----- Roof (pink) — shorter, covers only the front-seat area -----
     const roof = new THREE.Mesh(
-      this._roundedBoxGeometry(3.4, 0.25, 4.2, 0.12),
+      this._roundedBoxGeometry(3.4, 0.25, 2.4, 0.12),
       mat(COLOR_ROOF, { roughness: 0.5 })
     );
-    roof.position.set(0, 3.75, 0.1);
+    roof.position.set(0, 3.75, -0.6);
     roof.castShadow = true;
     this.root.add(roof);
 
-    // ----- "Oh-shit" bar — horizontal cross-brace across the very back -----
-    const ohShitBar = new THREE.Mesh(
-      new THREE.CylinderGeometry(0.06, 0.06, 2.4, 10),
-      mat(COLOR_FRAME, { roughness: 0.4, metalness: 0.7 })
+    // ----- Black floorboard at the back (cargo deck behind the back seat-back) -----
+    const floorboard = new THREE.Mesh(
+      this._roundedBoxGeometry(2.2, 0.08, 1.5, 0.04),
+      mat(0x1a1a22, { roughness: 0.7 })
     );
-    ohShitBar.rotation.z = Math.PI / 2;
-    ohShitBar.position.set(0, 2.55, 1.9);
-    ohShitBar.castShadow = true;
-    this.root.add(ohShitBar);
+    floorboard.position.set(0, 0.85, 1.4);
+    floorboard.castShadow = true;
+    floorboard.receiveShadow = true;
+    this.root.add(floorboard);
+
+    // ----- "Oh-shit" bar — inverted-U arch rising from the floorboard,
+    //       this is what the bubble machine mounts to. -----
+    const ohPoints = [
+      new THREE.Vector3(-0.9, 0.85, 1.95),
+      new THREE.Vector3(-0.9, 2.5,  1.95),
+      new THREE.Vector3(-0.6, 2.78, 1.95),
+      new THREE.Vector3( 0.0, 2.85, 1.95),
+      new THREE.Vector3( 0.6, 2.78, 1.95),
+      new THREE.Vector3( 0.9, 2.5,  1.95),
+      new THREE.Vector3( 0.9, 0.85, 1.95),
+    ];
+    const ohCurve = new THREE.CatmullRomCurve3(ohPoints);
+    const ohBar = new THREE.Mesh(
+      new THREE.TubeGeometry(ohCurve, 48, 0.07, 10, false),
+      mat(COLOR_FRAME, { roughness: 0.35, metalness: 0.75 })
+    );
+    ohBar.castShadow = true;
+    this.root.add(ohBar);
 
     // ----- Wheels -----
     this.wheels = [];
@@ -187,19 +209,19 @@ export class Zerble {
       this.wheels.push({ group: wheelGroup, spin: spinPivot, front: wp.front, baseY: wheelGroup.position.y });
     }
 
-    // ----- Eyes — HUGE globes with prominent black pupils, sitting atop the hood -----
+    // ----- Eyes — big globes with VISIBLE black pupils in front of blue irises -----
     this.eyes = [];
-    for (const ex of [-0.85, 0.85]) {
+    for (const ex of [-0.78, 0.78]) {
       const eye = new THREE.Group();
-      eye.position.set(ex, 2.2, -1.95);
+      eye.position.set(ex, 2.15, -1.95);
 
-      // Sclera — large white globe
+      // Sclera — slightly smaller than before
       const sclera = new THREE.Mesh(
-        new THREE.IcosahedronGeometry(0.85, 2),
+        new THREE.IcosahedronGeometry(0.7, 2),
         new THREE.MeshStandardMaterial({
           color: 0xffffff,
           emissive: COLOR_EYE_GLOW,
-          emissiveIntensity: 0.55,
+          emissiveIntensity: 0.5,
           roughness: 0.25,
           flatShading: false,
         })
@@ -207,37 +229,38 @@ export class Zerble {
       sclera.castShadow = false;
       eye.add(sclera);
 
-      // Iris — prominent blue ring
+      // Iris — sits at -0.45 with radius 0.4 (so front face is at z=-0.85)
       const iris = new THREE.Mesh(
-        new THREE.SphereGeometry(0.5, 16, 12),
+        new THREE.SphereGeometry(0.4, 16, 12),
         new THREE.MeshStandardMaterial({
           color: COLOR_IRIS,
           emissive: 0x0a3f8a,
-          emissiveIntensity: 0.3,
+          emissiveIntensity: 0.25,
           roughness: 0.3,
         })
       );
-      iris.position.z = -0.6;
+      iris.position.z = -0.45;
       eye.add(iris);
 
-      // Pupil — BIG, dominant, matches the reference art's expressive eye dots
+      // Pupil — pushed in FRONT of the iris so it actually shows.
+      // Pupil at z=-0.7 r=0.3 → front face z=-1.00, well in front of iris (-0.85).
       const pupil = new THREE.Mesh(
-        new THREE.SphereGeometry(0.34, 14, 12),
+        new THREE.SphereGeometry(0.3, 14, 12),
         new THREE.MeshStandardMaterial({ color: 0x000000, roughness: 1 })
       );
       pupil.position.z = -0.7;
       eye.add(pupil);
 
-      // Highlight
+      // Highlight catch-light on the pupil
       const hi = new THREE.Mesh(
-        new THREE.SphereGeometry(0.1, 10, 8),
+        new THREE.SphereGeometry(0.08, 10, 8),
         new THREE.MeshStandardMaterial({
           color: 0xffffff,
           emissive: 0xffffff,
           emissiveIntensity: 2,
         })
       );
-      hi.position.set(0.08, 0.1, -0.82);
+      hi.position.set(0.08, 0.08, -1.02);
       eye.add(hi);
 
       this.root.add(eye);
@@ -247,47 +270,51 @@ export class Zerble {
     // ----- Mustache -----
     this._buildMustache();
 
-    // ----- Mouth (small smile slot below the mustache) -----
-    const smileGeo = new THREE.TorusGeometry(0.35, 0.06, 8, 24, Math.PI);
-    const smileMesh = new THREE.Mesh(smileGeo, mat(0xffffff, { roughness: 1 }));
-    smileMesh.rotation.x = Math.PI;
-    smileMesh.rotation.z = Math.PI;
-    smileMesh.position.set(0, 0.85, -2.13);
-    this.root.add(smileMesh);
-
-    // Teeth — sit at chassis-front level below the mustache
-    const toothMat = mat(0xffffff, { roughness: 1 });
-    for (const tx of [-0.25, -0.08, 0.09, 0.26]) {
-      const t = new THREE.Mesh(new THREE.BoxGeometry(0.12, 0.12, 0.05), toothMat);
-      t.position.set(tx, 0.92, -2.16);
-      this.root.add(t);
+    // ----- LED headlight bar — a row of warm-yellow lamps across the front bumper -----
+    // (Used to be drawn as "teeth" — repurposed per the cart's actual headlight strip.)
+    const headlightMat = new THREE.MeshStandardMaterial({
+      color: 0xfff0c4,
+      emissive: 0xffe28a,
+      emissiveIntensity: 1.2,
+      roughness: 0.4,
+    });
+    // Chrome backing strip behind the lamps
+    const chromeStrip = new THREE.Mesh(
+      new THREE.BoxGeometry(1.6, 0.22, 0.05),
+      new THREE.MeshStandardMaterial({ color: 0x55525a, roughness: 0.4, metalness: 0.7 })
+    );
+    chromeStrip.position.set(0, 0.78, -2.13);
+    this.root.add(chromeStrip);
+    // Four warm-yellow lamps along the strip
+    for (const tx of [-0.55, -0.18, 0.18, 0.55]) {
+      const lamp = new THREE.Mesh(new THREE.BoxGeometry(0.22, 0.16, 0.06), headlightMat);
+      lamp.position.set(tx, 0.78, -2.15);
+      this.root.add(lamp);
     }
 
-    // ----- Bubble machine — mounted ON the oh-shit bar, pointing BACKWARDS -----
+    // ----- Bubble machine — sits ON the curved top of the oh-shit bar, pointing BACKWARDS -----
     const bm = new THREE.Mesh(
-      this._roundedBoxGeometry(0.9, 0.6, 0.6, 0.07),
+      this._roundedBoxGeometry(0.9, 0.45, 0.6, 0.07),
       mat(0x6b4ea0, { roughness: 0.4 })
     );
-    bm.position.set(0, 2.55, 2.0);
+    bm.position.set(0, 3.0, 1.95);
     bm.castShadow = true;
     this.root.add(bm);
 
-    // Mounting clamp connecting box to bar
-    const clamp = new THREE.Mesh(
-      new THREE.CylinderGeometry(0.09, 0.09, 0.3, 8),
-      mat(COLOR_FRAME, { roughness: 0.4, metalness: 0.7 })
+    // Strap from box down to the bar
+    const strap = new THREE.Mesh(
+      new THREE.BoxGeometry(0.5, 0.08, 0.18),
+      mat(COLOR_FRAME, { roughness: 0.5, metalness: 0.4 })
     );
-    clamp.position.set(0, 2.55, 1.9);
-    clamp.rotation.z = Math.PI / 2;
-    this.root.add(clamp);
+    strap.position.set(0, 2.81, 1.95);
+    this.root.add(strap);
 
     // Nozzle — horizontal, aimed +Z (backwards out the rear)
     this.nozzle = new THREE.Mesh(
       new THREE.ConeGeometry(0.22, 0.5, 14),
       mat(0xb89cf5, { roughness: 0.3, metalness: 0.5 })
     );
-    this.nozzle.position.set(0, 2.55, 2.45);
-    // Default cone points +Y; rotate so it points +Z (out the back)
+    this.nozzle.position.set(0, 3.0, 2.45);
     this.nozzle.rotation.x = Math.PI / 2;
     this.root.add(this.nozzle);
 
@@ -300,34 +327,12 @@ export class Zerble {
         emissiveIntensity: 2,
       })
     );
-    ring.position.set(0, 2.55, 2.7);
-    // Ring lies in the XY plane facing +Z
+    ring.position.set(0, 3.0, 2.7);
     ring.rotation.x = 0;
     this.root.add(ring);
     this._nozzleRing = ring;
 
-    // Headlights — round lenses on the front bumper. Subtle; the eyes should be the star.
-    for (const hx of [-1.0, 1.0]) {
-      const hl = new THREE.Mesh(
-        new THREE.SphereGeometry(0.18, 14, 10),
-        new THREE.MeshStandardMaterial({
-          color: 0xfff0c4,
-          emissive: 0xffe9b3,
-          emissiveIntensity: 0.45,
-          roughness: 0.35,
-        })
-      );
-      hl.position.set(hx, 0.55, -2.18);
-      this.root.add(hl);
-
-      // A chrome bezel around each headlight
-      const bezel = new THREE.Mesh(
-        new THREE.TorusGeometry(0.22, 0.04, 8, 16),
-        new THREE.MeshStandardMaterial({ color: 0x6a6a78, roughness: 0.4, metalness: 0.7 })
-      );
-      bezel.position.set(hx, 0.55, -2.13);
-      this.root.add(bezel);
-    }
+    // (Round headlights removed — the new LED bar above replaces them.)
 
     // A grounded shadow disc for fallback (in case shadow map quality drops)
     const shadowDisc = new THREE.Mesh(
@@ -344,21 +349,21 @@ export class Zerble {
     // ----- Passenger seat slots (local space, ordered: drivers seat is occupied) -----
     // Each slot is a local position + facing. Passengers attach here.
     this.seatSlots = [
-      // Front row
+      // Front row — face forward (cart's forward = -Z, so yaw=0)
       { name: 'front-right',  x:  0.55, y: 1.75, z: -0.35, yaw: 0,           occupied: false, kind: 'driver_seat' },
-      // Back row: 3 across
-      { name: 'back-left',    x: -0.65, y: 1.75, z:  1.0,  yaw: 0,           occupied: false, kind: 'bench' },
-      { name: 'back-center',  x:  0.0,  y: 1.75, z:  1.0,  yaw: 0,           occupied: false, kind: 'bench' },
-      { name: 'back-right',   x:  0.65, y: 1.75, z:  1.0,  yaw: 0,           occupied: false, kind: 'bench' },
+      // Back row — REAR-FACING. Riders face +Z (out the back), so yaw=Math.PI
+      { name: 'back-left',    x: -0.65, y: 1.75, z:  1.1,  yaw: Math.PI,     occupied: false, kind: 'bench' },
+      { name: 'back-center',  x:  0.0,  y: 1.75, z:  1.1,  yaw: Math.PI,     occupied: false, kind: 'bench' },
+      { name: 'back-right',   x:  0.65, y: 1.75, z:  1.1,  yaw: Math.PI,     occupied: false, kind: 'bench' },
       // Running-board / side-rider slots
-      { name: 'side-left',    x: -1.55, y: 1.4,  z:  0.5,  yaw: -Math.PI/2,  occupied: false, kind: 'standing' },
-      { name: 'side-right',   x:  1.55, y: 1.4,  z:  0.5,  yaw:  Math.PI/2,  occupied: false, kind: 'standing' },
-      // Roof riders (the brave ones)
+      { name: 'side-left',    x: -1.55, y: 1.4,  z:  0.4,  yaw: -Math.PI/2,  occupied: false, kind: 'standing' },
+      { name: 'side-right',   x:  1.55, y: 1.4,  z:  0.4,  yaw:  Math.PI/2,  occupied: false, kind: 'standing' },
+      // Roof riders (the brave ones) — the shorter roof spans z=-1.8 to z=0.6
       { name: 'roof-front',   x:  0.0,  y: 3.95, z: -1.2,  yaw: 0,           occupied: false, kind: 'roof' },
-      { name: 'roof-back',    x:  0.0,  y: 3.95, z:  1.3,  yaw: 0,           occupied: false, kind: 'roof' },
+      { name: 'roof-back',    x:  0.0,  y: 3.95, z:  0.0,  yaw: 0,           occupied: false, kind: 'roof' },
       // Two more squeezed in
       { name: 'lap-left',     x: -0.55, y: 2.05, z: -0.35, yaw: 0,           occupied: false, kind: 'lap' },
-      { name: 'back-lap',     x:  0.0,  y: 2.05, z:  1.0,  yaw: 0,           occupied: false, kind: 'lap' },
+      { name: 'back-lap',     x:  0.0,  y: 2.05, z:  1.1,  yaw: Math.PI,     occupied: false, kind: 'lap' },
     ];
   }
 
@@ -606,10 +611,10 @@ export class Zerble {
 
     // Cache useful world data for other systems
     this.forwardWorld.set(fx, 0, fz);
-    // Nozzle local is (0, 2.55, 2.7) — rotate by heading around Y.
+    // Nozzle local is (0, 3.0, 2.7) — rotate by heading around Y.
     this.nozzleWorld.set(
       this.position.x + Math.sin(this.heading) * 2.7,
-      this.position.y + 2.55,
+      this.position.y + 3.0,
       this.position.z + Math.cos(this.heading) * 2.7
     );
 

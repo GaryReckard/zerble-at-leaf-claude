@@ -49,7 +49,8 @@ const RIDE_MAX_TIME = 75;
 const PATH_GRID = 80;                // matches CHUNK_SIZE — paths run along multiples of this
 const PATH_PULL_WIDTH = 4;           // how wide the "near path" band is
 const BUILDING_AVOID_RADIUS = 4;     // extra buffer beyond footprint
-const SEPARATION_RADIUS = 1.6;
+const SEPARATION_RADIUS = 1.9;       // soft separation force kicks in within this
+const HARD_SEPARATION = 0.85;        // never let two NPCs get closer than this
 const ARRIVE_RADIUS = 1.5;
 
 export class Crowd {
@@ -289,12 +290,18 @@ export class Crowd {
     switch (npc.state) {
       case 'idle': {
         if (npc.stateTimer <= 0) {
-          // Pick a new wander target: prefer an attractor, else random nearby spot
+          // Pick a new wander target: prefer an attractor, else random nearby spot.
+          // Target a RING around the attractor (40-100% of its radius) so crowds
+          // distribute around the POI instead of all piling on the same center spot.
           const at = registry.pickAttractor(Math.random);
           if (at && Math.hypot(at.position.x - npc.pos.x, at.position.z - npc.pos.z) < 60) {
-            npc.target.copy(at.position);
-            npc.target.x += (Math.random() - 0.5) * at.radius;
-            npc.target.z += (Math.random() - 0.5) * at.radius;
+            const ang = Math.random() * Math.PI * 2;
+            const rad = (0.4 + Math.random() * 0.6) * at.radius;
+            npc.target.set(
+              at.position.x + Math.cos(ang) * rad,
+              0,
+              at.position.z + Math.sin(ang) * rad,
+            );
           } else {
             npc.target.set(
               npc.pos.x + (Math.random() - 0.5) * 18,
@@ -374,6 +381,33 @@ export class Crowd {
       }
     }
 
+    // --- NPC-NPC separation (always active — prevents the cluster-stack bug) ---
+    let sepX = 0, sepZ = 0, sepCount = 0;
+    let overlapPushX = 0, overlapPushZ = 0;
+    for (const other of this.npcs) {
+      if (other === npc || other.state === 'riding') continue;
+      const ox = npc.pos.x - other.pos.x;
+      const oz = npc.pos.z - other.pos.z;
+      const d2 = ox * ox + oz * oz;
+      if (d2 > 0 && d2 < SEPARATION_RADIUS * SEPARATION_RADIUS) {
+        const d = Math.sqrt(d2);
+        const inv = 1 / d;
+        const force = (SEPARATION_RADIUS - d) / SEPARATION_RADIUS;
+        sepX += ox * inv * force;
+        sepZ += oz * inv * force;
+        sepCount++;
+        // Hard floor: directly resolve overlap if very close
+        if (d < HARD_SEPARATION) {
+          const push = (HARD_SEPARATION - d) * 0.5;
+          overlapPushX += ox * inv * push;
+          overlapPushZ += oz * inv * push;
+        }
+      }
+    }
+    // Apply hard-overlap push instantly (so NPCs never visually stack)
+    npc.pos.x += overlapPushX;
+    npc.pos.z += overlapPushZ;
+
     // --- steering modifiers ---
     if (speed > 0) {
       // Path attraction: nudge toward the nearest path grid line
@@ -386,31 +420,39 @@ export class Crowd {
         : { x: 0, z: offZ };
       const pathDist = Math.hypot(closestPathOffset.x, closestPathOffset.z);
       if (pathDist > PATH_PULL_WIDTH) {
-        // Add a gentle pull (stronger the farther they are)
         const pull = THREE.MathUtils.clamp((pathDist - PATH_PULL_WIDTH) / 20, 0, 0.4);
         const pn = pathDist || 1;
         desiredX += (closestPathOffset.x / pn) * pull;
         desiredZ += (closestPathOffset.z / pn) * pull;
       }
 
-      // Building avoidance: push away from any nearby footprint
+      // Building avoidance
       const avoid = nearestFootprintAvoidance(npc.pos, BUILDING_AVOID_RADIUS);
       if (avoid) {
         desiredX += avoid.x * avoid.strength;
         desiredZ += avoid.z * avoid.strength;
       }
 
-      // Normalize again
+      // Soft separation contributes to the heading
+      if (sepCount > 0) {
+        desiredX += sepX * 1.2;
+        desiredZ += sepZ * 1.2;
+      }
+
       const dn = Math.hypot(desiredX, desiredZ) || 1;
       desiredX /= dn;
       desiredZ /= dn;
 
-      // Smoothly accelerate velocity toward desired
       npc.vel.x = THREE.MathUtils.lerp(npc.vel.x, desiredX * speed, Math.min(1, dt * 4));
       npc.vel.z = THREE.MathUtils.lerp(npc.vel.z, desiredZ * speed, Math.min(1, dt * 4));
     } else {
-      // Decelerate
-      npc.vel.multiplyScalar(Math.pow(0.5, dt * 6));
+      // Even when idle, drift apart slowly if neighbors are crowding in
+      if (sepCount > 0) {
+        npc.vel.x = THREE.MathUtils.lerp(npc.vel.x, sepX * 0.6, Math.min(1, dt * 3));
+        npc.vel.z = THREE.MathUtils.lerp(npc.vel.z, sepZ * 0.6, Math.min(1, dt * 3));
+      } else {
+        npc.vel.multiplyScalar(Math.pow(0.5, dt * 6));
+      }
     }
 
     // Apply velocity

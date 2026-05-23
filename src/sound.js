@@ -35,7 +35,7 @@ export const Sound = {
     masterGain.connect(ctx.destination);
 
     musicBus = ctx.createGain();
-    musicBus.gain.value = 0.85;
+    musicBus.gain.value = 1.6; // bump: stage bands should carry across the festival
     musicBus.connect(masterGain);
 
     engineNodes = createEngine(ctx, masterGain);
@@ -374,13 +374,14 @@ function createStageMusic(ctx, dest, x, y, z, seed) {
   const melody = new Array(8).fill(0).map(() => baseFreq * scale[Math.floor(rng() * scale.length)]);
   const bass = new Array(4).fill(0).map(() => baseFreq * 0.5 * scale[Math.floor(rng() * 4)]);
 
-  // ---- Panner: positional in 3D ----
+  // ---- Panner: positional in 3D. Tuned so each stage carries clearly across
+  // its surrounding chunk before fading. ----
   const panner = ctx.createPanner();
   panner.panningModel = 'HRTF';
   panner.distanceModel = 'inverse';
-  panner.refDistance = 8;
-  panner.maxDistance = 90;
-  panner.rolloffFactor = 1.6;
+  panner.refDistance = 14;     // stays at full volume up to this distance
+  panner.maxDistance = 140;
+  panner.rolloffFactor = 1.1;  // gentler falloff = audible from farther
   if (panner.positionX) {
     panner.positionX.value = x;
     panner.positionY.value = y;
@@ -434,7 +435,7 @@ function createStageMusic(ctx, dest, x, y, z, seed) {
       lead.frequency.setValueAtTime(m, t);
       leadGain.gain.cancelScheduledValues(t);
       leadGain.gain.setValueAtTime(0.0001, t);
-      leadGain.gain.exponentialRampToValueAtTime(0.18, t + 0.015);
+      leadGain.gain.exponentialRampToValueAtTime(0.28, t + 0.015);
       leadGain.gain.exponentialRampToValueAtTime(0.0001, t + beat * 0.85);
 
       // Bass note (every other beat)
@@ -443,7 +444,7 @@ function createStageMusic(ctx, dest, x, y, z, seed) {
         bassOsc.frequency.setValueAtTime(b, t);
         bassGain.gain.cancelScheduledValues(t);
         bassGain.gain.setValueAtTime(0.0001, t);
-        bassGain.gain.exponentialRampToValueAtTime(0.22, t + 0.02);
+        bassGain.gain.exponentialRampToValueAtTime(0.34, t + 0.02);
         bassGain.gain.exponentialRampToValueAtTime(0.0001, t + beat * 1.8);
       }
 
@@ -452,7 +453,7 @@ function createStageMusic(ctx, dest, x, y, z, seed) {
       kick.frequency.exponentialRampToValueAtTime(40, t + 0.08);
       kickGain.gain.cancelScheduledValues(t);
       kickGain.gain.setValueAtTime(0.0001, t);
-      kickGain.gain.exponentialRampToValueAtTime(0.35, t + 0.005);
+      kickGain.gain.exponentialRampToValueAtTime(0.5, t + 0.005);
       kickGain.gain.exponentialRampToValueAtTime(0.0001, t + 0.18);
 
       nextNoteTime += beat;

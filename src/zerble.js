@@ -361,9 +361,6 @@ export class Zerble {
       // Roof riders (the brave ones) — the shorter roof spans z=-1.8 to z=0.6
       { name: 'roof-front',   x:  0.0,  y: 3.95, z: -1.2,  yaw: 0,           occupied: false, kind: 'roof' },
       { name: 'roof-back',    x:  0.0,  y: 3.95, z:  0.0,  yaw: 0,           occupied: false, kind: 'roof' },
-      // Two more squeezed in
-      { name: 'lap-left',     x: -0.55, y: 2.05, z: -0.35, yaw: 0,           occupied: false, kind: 'lap' },
-      { name: 'back-lap',     x:  0.0,  y: 2.05, z:  1.1,  yaw: Math.PI,     occupied: false, kind: 'lap' },
     ];
   }
 

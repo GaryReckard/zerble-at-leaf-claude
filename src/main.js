@@ -149,12 +149,29 @@ function tick() {
     // Collisions: deduct smiles only when Zerble is actively driving into the obstacle.
     // If something brushes a stationary Zerble, just resolve the overlap silently.
     if (zerble.invulnLeft <= 0) {
+      // Build a per-frame collider list for nearby crowd NPCs so Zerble can actually
+      // bump them. Skip riders + anyone more than 5m away (cheap broad-phase reject).
+      const npcColliders = [];
+      const broadphaseR2 = 25;
+      for (const n of crowd.npcs) {
+        if (n.state === 'riding') continue;
+        const dx = n.pos.x - zerble.position.x;
+        const dz = n.pos.z - zerble.position.z;
+        if (dx * dx + dz * dz > broadphaseR2) continue;
+        npcColliders.push({
+          position: { x: n.pos.x, y: 0.85, z: n.pos.z },
+          radius: 0.45,
+          damage: 2,
+          kind: 'person',
+        });
+      }
       const allColliders = [
         ...registry.colliders(),
         ...puppets.colliders,
         ...band.colliders,
         ...kids.colliders,
         ...wooks.colliders,
+        ...npcColliders,
       ];
       const hit = resolveCollision(zerble, allColliders);
       if (hit && hit.damaging) {
@@ -240,6 +257,7 @@ function toastForKind(kind) {
     case 'tent': return 'You knocked over a craft tent!';
     case 'kid': return 'Oof — watch the kids!';
     case 'wook': return 'You spooked a wook.';
+    case 'person': return 'Watch where you\'re going!';
     case 'stage': return "That's the stage. Drive around it!";
     case 'arch': return 'Mind the arch.';
     case 'lamppost': return 'Bonked a lamppost.';

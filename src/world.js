@@ -19,12 +19,16 @@ const GROUND_SIZE = 1400; // very large flat-ish plane
 const GROUND_SEG = 220;
 
 let chunkManager = null;
+let groundMesh = null;
+let mountainsGroup = null;
+let skyMesh = null;
+let sun = null;
 
 export function buildWorld(scene, crowd) {
-  buildSky(scene);
-  buildLightsAndFog(scene);
-  buildGround(scene);
-  buildMountains(scene);
+  skyMesh = buildSky(scene);
+  sun = buildLightsAndFog(scene);
+  groundMesh = buildGround(scene);
+  mountainsGroup = buildMountains(scene);
 
   chunkManager = new ChunkManager(scene, crowd);
   // Pre-load the chunks around the origin so the first frame looks alive.
@@ -35,6 +39,19 @@ export function buildWorld(scene, crowd) {
 
 export function updateWorld(playerPos) {
   if (chunkManager) chunkManager.update(playerPos);
+  // Keep the sky dome, ground plane and mountain ring centered on the player
+  // so the world feels infinite — chunks at fixed world coords slide past,
+  // but the backdrops always look the same distance away.
+  if (skyMesh) skyMesh.position.set(playerPos.x, 0, playerPos.z);
+  if (groundMesh) groundMesh.position.set(playerPos.x, 0, playerPos.z);
+  if (mountainsGroup) mountainsGroup.position.set(playerPos.x, 0, playerPos.z);
+  // Keep the sun's shadow frustum centered on the player too, so shadows
+  // continue to render no matter how far Zerble drives.
+  if (sun) {
+    sun.position.set(playerPos.x + 80, 130, playerPos.z + 60);
+    sun.target.position.set(playerPos.x, 0, playerPos.z);
+    sun.target.updateMatrixWorld();
+  }
 }
 
 // ---------------- internals ----------------
@@ -71,11 +88,10 @@ function buildSky(scene) {
   });
   const sky = new THREE.Mesh(skyGeo, skyMat);
   scene.add(sky);
+  return sky;
 }
 
 function buildLightsAndFog(scene) {
-  // Fog reaches far enough to fade ground but stops short of mountains
-  // (mountains' material disables fog).
   scene.fog = new THREE.Fog(FOG_COLOR, 120, 520);
 
   const hemi = new THREE.HemisphereLight(HEMI_SKY, HEMI_GROUND, 0.75);
@@ -98,6 +114,7 @@ function buildLightsAndFog(scene) {
   scene.add(sun.target);
 
   scene.add(new THREE.AmbientLight(0xffffff, 0.15));
+  return sun;
 }
 
 function buildGround(scene) {
@@ -110,10 +127,13 @@ function buildGround(scene) {
   const grass = new THREE.Color(GROUND_GREEN);
   const dirt = new THREE.Color(DIRT);
 
+  // The ground follows the player; subtract the center's Y so the cart sits at y=0.
+  const centerOffset = terrainHeight(0, 0);
+
   for (let i = 0; i < pos.count; i++) {
     const x = pos.getX(i);
     const z = pos.getZ(i);
-    pos.setY(i, terrainHeight(x, z));
+    pos.setY(i, terrainHeight(x, z) - centerOffset);
 
     const patch = Math.sin(x * 0.04) * Math.cos(z * 0.045);
     const dirtAmt = THREE.MathUtils.clamp((patch + 1.1) * 0.4, 0, 1) * 0.35;
@@ -135,4 +155,5 @@ function buildGround(scene) {
   const ground = new THREE.Mesh(geo, mat);
   ground.receiveShadow = true;
   scene.add(ground);
+  return ground;
 }

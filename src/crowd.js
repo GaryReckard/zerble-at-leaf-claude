@@ -93,9 +93,11 @@ export class Crowd {
     this.bodyMesh.instanceMatrix.needsUpdate = true;
     this.headMesh.instanceMatrix.needsUpdate = true;
 
-    // Reusables
+    // Reusables — must be DISTINCT Vector3 instances; reusing one for both
+    // position and scale args of Matrix4.compose() silently corrupts position.
     this._mat4 = new THREE.Matrix4();
     this._tmpV = new THREE.Vector3();
+    this._tmpV2 = new THREE.Vector3();
   }
 
   // Called by chunk generator.
@@ -520,8 +522,6 @@ export class Crowd {
       ? Math.sin(npc.bob * 2) * 0.05 * (npc.dance - 0.5)
       : 0;
 
-    // Riding passengers sit AT seat height (using seatY captured in _tickRiding).
-    // Their body's vertical center is ~0.4 below the seat's top so they look seated.
     let bodyY, headY;
     if (npc.state === 'riding' && npc.seatY != null) {
       bodyY = npc.seatY - 0.05 + bobY;
@@ -531,22 +531,24 @@ export class Crowd {
       headY = 1.65 * npc.scale + bobY;
     }
 
-    m.compose(
-      this._tmpV.set(npc.pos.x, bodyY, npc.pos.z),
-      quat,
-      this._tmpV.set(npc.scale, npc.scale, npc.scale)
-    );
+    // CRITICAL: position and scale must be DISTINCT Vector3 instances.
+    // Reusing this._tmpV for both args caused position to be overwritten by scale,
+    // making every non-riding NPC render at (scale, scale, scale) ≈ (1,1,1).
+    const posV = this._tmpV;
+    const scaleV = this._tmpV2;
+
+    posV.set(npc.pos.x, bodyY, npc.pos.z);
+    scaleV.set(npc.scale, npc.scale, npc.scale);
+    m.compose(posV, quat, scaleV);
     if (danceTilt) {
       const t = new THREE.Matrix4().makeRotationZ(danceTilt);
       m.multiply(t);
     }
     this.bodyMesh.setMatrixAt(npc.idx, m);
 
-    m.compose(
-      this._tmpV.set(npc.pos.x, headY, npc.pos.z),
-      quat,
-      this._tmpV.set(npc.scale, npc.scale, npc.scale)
-    );
+    posV.set(npc.pos.x, headY, npc.pos.z);
+    scaleV.set(npc.scale, npc.scale, npc.scale);
+    m.compose(posV, quat, scaleV);
     this.headMesh.setMatrixAt(npc.idx, m);
   }
 

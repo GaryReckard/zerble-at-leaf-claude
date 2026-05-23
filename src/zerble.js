@@ -1,7 +1,6 @@
 // Zerble: the anthropomorphic golf cart. Geometry + arcade physics.
 
 import * as THREE from 'three';
-import { terrainHeight } from './rng.js';
 
 // --- Driving feel knobs ---
 const ACCEL = 18;          // m/s^2 throttle
@@ -58,15 +57,26 @@ export class Zerble {
         emissiveIntensity: opts.emissiveIntensity ?? 0,
       });
 
-    // ----- Chassis (the red lower body) -----
-    const chassis = new THREE.Mesh(
-      this._roundedBoxGeometry(3.0, 0.9, 4.2, 0.18),
+    // ----- Chassis: split into a full-height FRONT section and a lower REAR
+    // "pickup bed" so back-seat riders have foot room. The rear gets a
+    // black floorboard on top with LED light trim.
+    const chassisFront = new THREE.Mesh(
+      this._roundedBoxGeometry(3.0, 0.9, 2.6, 0.18),
       mat(COLOR_BODY, { roughness: 0.55 })
     );
-    chassis.position.y = 0.85;
-    chassis.castShadow = true;
-    chassis.receiveShadow = true;
-    this.root.add(chassis);
+    chassisFront.position.set(0, 0.85, -0.8);
+    chassisFront.castShadow = true;
+    chassisFront.receiveShadow = true;
+    this.root.add(chassisFront);
+
+    const chassisRear = new THREE.Mesh(
+      this._roundedBoxGeometry(3.0, 0.45, 1.6, 0.12),
+      mat(COLOR_BODY, { roughness: 0.55 })
+    );
+    chassisRear.position.set(0, 0.6, 1.3);
+    chassisRear.castShadow = true;
+    chassisRear.receiveShadow = true;
+    this.root.add(chassisRear);
 
     // Hood front (a small bulge at the front)
     const hood = new THREE.Mesh(
@@ -138,30 +148,60 @@ export class Zerble {
     roof.castShadow = true;
     this.root.add(roof);
 
-    // ----- Black floorboard at the back (cargo deck behind the back seat-back) -----
+    // ----- Black floorboard sitting ON the lower rear chassis -----
     const floorboard = new THREE.Mesh(
-      this._roundedBoxGeometry(2.2, 0.08, 1.5, 0.04),
-      mat(0x1a1a22, { roughness: 0.7 })
+      this._roundedBoxGeometry(2.4, 0.08, 1.6, 0.04),
+      mat(0x141418, { roughness: 0.6 })
     );
-    floorboard.position.set(0, 0.85, 1.4);
+    floorboard.position.set(0, 0.88, 1.4);
     floorboard.castShadow = true;
     floorboard.receiveShadow = true;
     this.root.add(floorboard);
 
-    // ----- "Oh-shit" bar — inverted-U arch rising from the floorboard,
-    //       this is what the bubble machine mounts to. -----
+    // ----- LED light trim along the floorboard's edge (real-Zerble vibe) -----
+    const LED_TRIM_COLORS = [0xff5577, 0xffaa33, 0xffe066, 0x66ff88, 0x66d9ff, 0xc080ff, 0xff66cc];
+    const trimGeo = new THREE.SphereGeometry(0.045, 6, 6);
+    this._floorLeds = [];
+    const placeLed = (x, z, hueIdx) => {
+      const hue = LED_TRIM_COLORS[hueIdx % LED_TRIM_COLORS.length];
+      const ledMat = new THREE.MeshStandardMaterial({
+        color: hue,
+        emissive: hue,
+        emissiveIntensity: 1.8,
+        roughness: 0.4,
+      });
+      const led = new THREE.Mesh(trimGeo, ledMat);
+      led.position.set(x, 0.94, z);
+      led.userData = { phase: hueIdx * 0.7, mat: ledMat };
+      this.root.add(led);
+      this._floorLeds.push(led);
+    };
+    // Trim the front edge (z = ~0.6), back edge (z = ~2.2) and the two sides
+    const ledSpacing = 0.22;
+    const halfW = 1.15;
+    let i = 0;
+    for (let x = -halfW; x <= halfW + 0.001; x += ledSpacing) placeLed(x, 0.6, i++);
+    for (let x = -halfW; x <= halfW + 0.001; x += ledSpacing) placeLed(x, 2.2, i++);
+    for (let z = 0.6 + ledSpacing; z <= 2.2 - ledSpacing + 0.001; z += ledSpacing) {
+      placeLed(-halfW, z, i++);
+      placeLed( halfW, z, i++);
+    }
+
+    // ----- "Oh-shit" bar — narrow centered handle (~6" wide) anchored to the
+    //       black platform behind the back seat. This is what the bubble
+    //       machine mounts to. -----
     const ohPoints = [
-      new THREE.Vector3(-0.9, 0.85, 1.95),
-      new THREE.Vector3(-0.9, 2.5,  1.95),
-      new THREE.Vector3(-0.6, 2.78, 1.95),
-      new THREE.Vector3( 0.0, 2.85, 1.95),
-      new THREE.Vector3( 0.6, 2.78, 1.95),
-      new THREE.Vector3( 0.9, 2.5,  1.95),
-      new THREE.Vector3( 0.9, 0.85, 1.95),
+      new THREE.Vector3(-0.22, 0.85, 1.95),
+      new THREE.Vector3(-0.22, 2.5,  1.95),
+      new THREE.Vector3(-0.12, 2.78, 1.95),
+      new THREE.Vector3( 0.0,  2.85, 1.95),
+      new THREE.Vector3( 0.12, 2.78, 1.95),
+      new THREE.Vector3( 0.22, 2.5,  1.95),
+      new THREE.Vector3( 0.22, 0.85, 1.95),
     ];
     const ohCurve = new THREE.CatmullRomCurve3(ohPoints);
     const ohBar = new THREE.Mesh(
-      new THREE.TubeGeometry(ohCurve, 48, 0.07, 10, false),
+      new THREE.TubeGeometry(ohCurve, 48, 0.06, 10, false),
       mat(COLOR_FRAME, { roughness: 0.35, metalness: 0.75 })
     );
     ohBar.castShadow = true;
@@ -251,17 +291,7 @@ export class Zerble {
       pupil.position.z = -0.7;
       eye.add(pupil);
 
-      // Highlight catch-light on the pupil
-      const hi = new THREE.Mesh(
-        new THREE.SphereGeometry(0.08, 10, 8),
-        new THREE.MeshStandardMaterial({
-          color: 0xffffff,
-          emissive: 0xffffff,
-          emissiveIntensity: 2,
-        })
-      );
-      hi.position.set(0.08, 0.08, -1.02);
-      eye.add(hi);
+      // (highlight catch-light removed — was floating in front of the eye)
 
       this.root.add(eye);
       this.eyes.push({ root: eye, pupil, iris, basePos: eye.position.clone() });
@@ -590,21 +620,9 @@ export class Zerble {
     this.position.z += fz * this.speed * dt;
     this.root.rotation.y = this.heading;
 
-    // World bound (push back softly)
-    const r = WORLD_BOUND;
-    if (Math.abs(this.position.x) > r) {
-      this.position.x = THREE.MathUtils.clamp(this.position.x, -r, r);
-      this.speed *= 0.5;
-    }
-    if (Math.abs(this.position.z) > r) {
-      this.position.z = THREE.MathUtils.clamp(this.position.z, -r, r);
-      this.speed *= 0.5;
-    }
-
-    // Follow terrain — sit on the displaced ground so wheels stay flush.
-    const groundY = terrainHeight(this.position.x, this.position.z);
-    const targetY = Math.max(0, groundY);
-    this.position.y = THREE.MathUtils.lerp(this.position.y, targetY, Math.min(1, dt * 8));
+    // (World is infinite — no clamp. Ground + mountains follow the player.)
+    // Cart Y stays at 0 since the followed ground is flattened to a 0-center.
+    this.position.y = 0;
 
     // Cache useful world data for other systems
     this.forwardWorld.set(fx, 0, fz);
@@ -635,11 +653,18 @@ export class Zerble {
       eye.pupil.position.x = Math.sin(t * 0.4) * 0.06;
     }
 
-    // ----- Animate LEDs (rainbow chase) -----
+    // ----- Animate mustache + floor LEDs (rainbow chase) -----
     for (let i = 0; i < this._mustacheLeds.length; i++) {
       const led = this._mustacheLeds[i];
       const phase = led.userData.phase + t * 3 + i * 0.4;
       led.userData.mat.emissiveIntensity = 1.0 + 0.9 * (0.5 + 0.5 * Math.sin(phase));
+    }
+    if (this._floorLeds) {
+      for (let i = 0; i < this._floorLeds.length; i++) {
+        const led = this._floorLeds[i];
+        const phase = led.userData.phase + t * 4 + i * 0.55;
+        led.userData.mat.emissiveIntensity = 1.2 + 1.0 * (0.5 + 0.5 * Math.sin(phase));
+      }
     }
 
     // ----- Pulse nozzle ring -----

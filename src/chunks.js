@@ -17,6 +17,7 @@
 import * as THREE from 'three';
 import { registry } from './registry.js';
 import { hash2, mulberry32 } from './rng.js';
+import { Sound } from './sound.js';
 
 export const CHUNK_SIZE = 80;
 const LOAD_RADIUS = 2;   // 5x5 chunks loaded around the player
@@ -24,6 +25,9 @@ const UNLOAD_RADIUS = 3; // hysteresis: only unload chunks beyond this distance
 
 // Bands placed on stages — animated lightly each frame by the main loop.
 export const stagePerformers = [];
+
+// Spatial music handles, one per stage, tagged by chunkKey so we can detach on unload.
+const stageMusic = [];
 
 export function updateStagePerformers(t) {
   for (let i = 0; i < stagePerformers.length; i++) {
@@ -88,11 +92,17 @@ export class ChunkManager {
     });
     this.scene.remove(chunk.group);
 
-    // Clean up registry + crowd + stage performers tagged with this chunk
+    // Clean up registry + crowd + stage performers + stage music tagged with this chunk
     registry.removeChunk(key);
     if (this.crowd) this.crowd.unloadChunk(key);
     for (let i = stagePerformers.length - 1; i >= 0; i--) {
       if (stagePerformers[i].chunkKey === key) stagePerformers.splice(i, 1);
+    }
+    for (let i = stageMusic.length - 1; i >= 0; i--) {
+      if (stageMusic[i].chunkKey === key) {
+        Sound.detachStageMusic(stageMusic[i].handle);
+        stageMusic.splice(i, 1);
+      }
     }
 
     this.loaded.delete(key);
@@ -168,13 +178,13 @@ function pickTheme(cx, cz) {
 }
 
 const THEME_PROPS = {
-  main_stage:  { treeDensity: 0.15, ambientCrowd: 18 }, // big audience right at the main stage
-  side_stage:  { treeDensity: 0.25, ambientCrowd: 9 },
-  food_plaza:  { treeDensity: 0.2, ambientCrowd: 10 },
-  vendor_row:  { treeDensity: 0.3, ambientCrowd: 8 },
-  drum_circle: { treeDensity: 0.4, ambientCrowd: 7 },
-  grove:       { treeDensity: 1.0, ambientCrowd: 3 },
-  open_lawn:   { treeDensity: 0.2, ambientCrowd: 3 },
+  main_stage:  { treeDensity: 0.15, ambientCrowd: 30 },
+  side_stage:  { treeDensity: 0.25, ambientCrowd: 16 },
+  food_plaza:  { treeDensity: 0.2,  ambientCrowd: 14 },
+  vendor_row:  { treeDensity: 0.3,  ambientCrowd: 13 },
+  drum_circle: { treeDensity: 0.4,  ambientCrowd: 12 },
+  grove:       { treeDensity: 1.0,  ambientCrowd: 7 },
+  open_lawn:   { treeDensity: 0.2,  ambientCrowd: 8 },
 };
 
 const THEME_BUILDERS = {
@@ -585,6 +595,12 @@ function buildStage(ctx, x, z, isMain) {
     attractor: { radius: 14, weight: isMain ? 3.5 : 2.0 },
     chunkKey: ctx.key,
   });
+
+  // ----- Spatial music for this stage -----
+  // Seed mixes chunk coords + stage flag so main vs side stages get distinct music.
+  const musicSeed = hash2(ctx.cx * 7 + (isMain ? 1 : 2), ctx.cz * 11 + (isMain ? 3 : 5));
+  const handle = Sound.attachStageMusic(x, 4, z, musicSeed);
+  if (handle) stageMusic.push({ handle, chunkKey: ctx.key });
 
   // ----- The band on stage -----
   // Main stage gets a bigger ensemble (6 performers). Side stages get a trio.

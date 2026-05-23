@@ -10,8 +10,11 @@
 // nasal boops for kids/puppets, brass for the band, wood knocks for the
 // arch, a "duuude" drone for the wooks, etc.
 
+import { mulberry32 } from './rng.js';
+
 let ctx = null;
 let masterGain = null;
+let musicBus = null;     // shared bus for stage music sources (so we can balance vs. SFX)
 let engineNodes = null;
 let initialized = false;
 
@@ -31,8 +34,44 @@ export const Sound = {
     masterGain.gain.value = 0.55;
     masterGain.connect(ctx.destination);
 
+    musicBus = ctx.createGain();
+    musicBus.gain.value = 0.85;
+    musicBus.connect(masterGain);
+
     engineNodes = createEngine(ctx, masterGain);
     initialized = true;
+  },
+
+  // ---- Spatial stage music ----
+
+  attachStageMusic(x, y, z, seed) {
+    if (!ctx) return null;
+    return createStageMusic(ctx, musicBus, x, y, z, seed);
+  },
+
+  detachStageMusic(handle) {
+    if (!handle) return;
+    handle.stop();
+  },
+
+  updateAudioListener(px, py, pz, fx, fy, fz) {
+    if (!ctx) return;
+    const lis = ctx.listener;
+    if (lis.positionX) {
+      lis.positionX.value = px;
+      lis.positionY.value = py;
+      lis.positionZ.value = pz;
+      lis.forwardX.value = fx;
+      lis.forwardY.value = fy;
+      lis.forwardZ.value = fz;
+      lis.upX.value = 0;
+      lis.upY.value = 1;
+      lis.upZ.value = 0;
+    } else if (lis.setPosition) {
+      // Older browsers
+      lis.setPosition(px, py, pz);
+      lis.setOrientation(fx, fy, fz, 0, 1, 0);
+    }
   },
 
   setEngineSpeed(speed) {
@@ -74,38 +113,59 @@ function createEngine(ctx, dest) {
   const lpf = ctx.createBiquadFilter();
   lpf.type = 'lowpass';
   lpf.frequency.value = 420;
-  lpf.Q.value = 1.1;
+  lpf.Q.value = 1.5;
 
   osc1.connect(lpf);
   osc2.connect(lpf);
 
-  // Noise rumble — 2-second loop buffer of band-limited noise
+  // Soft-clip WaveShaper — this is the "old wheezy" crunch.
+  // A steeper tanh = more distortion. Run the sawtooth-through-LPF signal
+  // through the shaper, then through a band-pass to focus the grit.
+  const shaper = ctx.createWaveShaper();
+  shaper.curve = makeTanhCurve(8, 2048);
+  shaper.oversample = '2x';
+  lpf.connect(shaper);
+
+  const grindBpf = ctx.createBiquadFilter();
+  grindBpf.type = 'bandpass';
+  grindBpf.frequency.value = 280;
+  grindBpf.Q.value = 1.4;
+  shaper.connect(grindBpf);
+
+  // Noise rumble — louder + grainier now. Mid-range filter so it sounds dirty.
   const bufSize = 2 * ctx.sampleRate;
   const buf = ctx.createBuffer(1, bufSize, ctx.sampleRate);
   const ch = buf.getChannelData(0);
-  for (let i = 0; i < bufSize; i++) ch[i] = (Math.random() * 2 - 1) * 0.7;
+  for (let i = 0; i < bufSize; i++) ch[i] = (Math.random() * 2 - 1) * 0.9;
   const noise = ctx.createBufferSource();
   noise.buffer = buf;
   noise.loop = true;
-  const noiseLpf = ctx.createBiquadFilter();
-  noiseLpf.type = 'lowpass';
-  noiseLpf.frequency.value = 240;
-  noise.connect(noiseLpf);
+  const noiseBpf = ctx.createBiquadFilter();
+  noiseBpf.type = 'bandpass';
+  noiseBpf.frequency.value = 200;
+  noiseBpf.Q.value = 0.8;
+  noise.connect(noiseBpf);
+  const noiseGain = ctx.createGain();
+  noiseGain.gain.value = 0.65;
+  noiseBpf.connect(noiseGain);
 
   // Master engine volume — driven by speed each frame
   const engineGain = ctx.createGain();
   engineGain.gain.value = 0;
-  lpf.connect(engineGain);
-  noiseLpf.connect(engineGain);
+  grindBpf.connect(engineGain);
+  noiseGain.connect(engineGain);
   engineGain.connect(dest);
 
   osc1.start();
   osc2.start();
   noise.start();
 
-  // Hand-driven putt-putt LFO so the engine has a rhythmic chug that speeds up.
+  // Hand-driven state for putt-putt LFO, warble, and misfires
   let lfoPhase = 0;
   let lastUpdate = ctx.currentTime;
+  let misfireUntil = 0;       // engine "stutter" silence ends at this time
+  let nextMisfireCheck = ctx.currentTime + 2 + Math.random() * 2;
+  let warblePhase = 0;
 
   return {
     update(absSpeed) {
@@ -113,30 +173,56 @@ function createEngine(ctx, dest) {
       const dt = Math.min(0.1, now - lastUpdate);
       lastUpdate = now;
 
-      // 0..1
       const t = Math.min(1, absSpeed / 18);
 
-      // Chug speeds up with throttle
-      const lfoHz = 4 + t * 14;
+      // Chug speeds up with throttle. Irregular rhythm: slight noise on the rate.
+      const lfoHz = 4 + t * 14 + Math.sin(lfoPhase * 0.31) * 1.2;
       lfoPhase += lfoHz * dt;
-      const chug = (Math.sin(lfoPhase) * 0.5 + 0.5) * 0.35 + 0.65;
+      // Chug envelope shape: peaky, not smooth sine (more "putt-putt")
+      const chugSin = Math.sin(lfoPhase);
+      const chug = (chugSin > 0 ? Math.pow(chugSin, 2) : chugSin * 0.15) * 0.4 + 0.55;
 
-      // Volume ramps with speed * chug. At 0 speed → 0 volume → silent.
-      const targetVol = t * 0.22 * chug;
+      // Random misfires: every couple seconds, kill the chug briefly
+      if (now > nextMisfireCheck) {
+        nextMisfireCheck = now + 1.5 + Math.random() * 3.5;
+        if (t > 0.1 && Math.random() < 0.6) {
+          misfireUntil = now + 0.07 + Math.random() * 0.12;
+        }
+      }
+      const misfireMul = now < misfireUntil ? 0.2 : 1;
+
+      // Volume ramps with speed * chug * misfire. At 0 speed → 0 volume → silent.
+      const targetVol = t * 0.24 * chug * misfireMul;
       engineGain.gain.setTargetAtTime(targetVol, now, 0.04);
 
-      // Pitch climbs with speed
-      const baseFreq = 50;
-      const maxFreq = 145;
-      const f = baseFreq + (maxFreq - baseFreq) * t;
-      osc1.frequency.setTargetAtTime(f, now, 0.08);
-      osc2.frequency.setTargetAtTime(f * 1.5, now, 0.08);
+      // Pitch climbs with speed + slow warble for the wheezy old-cart wobble.
+      warblePhase += dt * (1.8 + t * 1.5);
+      const warble = Math.sin(warblePhase) * (0.04 + t * 0.05); // ±5-9 % at high revs
 
-      // Open filter a touch at higher revs so it gets brighter
-      const filterFreq = 350 + t * 600;
+      const baseFreq = 48;
+      const maxFreq = 145;
+      const f = (baseFreq + (maxFreq - baseFreq) * t) * (1 + warble);
+      osc1.frequency.setTargetAtTime(f, now, 0.07);
+      osc2.frequency.setTargetAtTime(f * 1.5, now, 0.07);
+
+      // Open the filter at high revs (brighter), tighten at low (muddier)
+      const filterFreq = 320 + t * 700;
       lpf.frequency.setTargetAtTime(filterFreq, now, 0.1);
+
+      // Drive the grind band-pass slightly with speed so the crunch peaks shift
+      grindBpf.frequency.setTargetAtTime(230 + t * 280, now, 0.1);
     },
   };
+}
+
+// Tanh-shaped soft-clip curve for the engine WaveShaper.
+function makeTanhCurve(drive, samples) {
+  const c = new Float32Array(samples);
+  for (let i = 0; i < samples; i++) {
+    const x = (i / (samples - 1)) * 2 - 1;
+    c[i] = Math.tanh(x * drive) / Math.tanh(drive);
+  }
+  return c;
 }
 
 // ---------- Collision sound primitives ----------
@@ -265,6 +351,127 @@ function playHonk(ctx, dest) {
   osc.connect(lpf).connect(env);
   osc.start();
   osc.stop(t + 0.4);
+}
+
+// ---------- Spatial stage music ----------
+
+// Picks a key + tempo + pattern from the seed and runs a self-scheduling loop on
+// a PannerNode placed at the stage. Each stage's music is unique-ish and decays
+// with distance via HRTF panning.
+function createStageMusic(ctx, dest, x, y, z, seed) {
+  const rng = mulberry32(seed >>> 0);
+
+  // Pick a key (chromatic offset in semitones) and tempo
+  const semis = Math.floor(rng() * 12);
+  const baseFreq = 196 * Math.pow(2, semis / 12); // ~G3 ± an octave
+  const tempo = 96 + Math.floor(rng() * 36);
+  const beat = 60 / tempo;
+
+  // Major-pentatonic-ish scale ratios — sounds pleasant in any key
+  const scale = [1, 9 / 8, 5 / 4, 3 / 2, 5 / 3, 2, 9 / 4];
+
+  // Random melody (8 notes) + random bass (4 notes)
+  const melody = new Array(8).fill(0).map(() => baseFreq * scale[Math.floor(rng() * scale.length)]);
+  const bass = new Array(4).fill(0).map(() => baseFreq * 0.5 * scale[Math.floor(rng() * 4)]);
+
+  // ---- Panner: positional in 3D ----
+  const panner = ctx.createPanner();
+  panner.panningModel = 'HRTF';
+  panner.distanceModel = 'inverse';
+  panner.refDistance = 8;
+  panner.maxDistance = 90;
+  panner.rolloffFactor = 1.6;
+  if (panner.positionX) {
+    panner.positionX.value = x;
+    panner.positionY.value = y;
+    panner.positionZ.value = z;
+  } else if (panner.setPosition) {
+    panner.setPosition(x, y, z);
+  }
+  panner.connect(dest);
+
+  // ---- Lead oscillator (triangle: warm melodic tone) ----
+  const lead = ctx.createOscillator();
+  lead.type = 'triangle';
+  lead.frequency.value = melody[0];
+  const leadGain = ctx.createGain();
+  leadGain.gain.value = 0;
+  lead.connect(leadGain).connect(panner);
+  lead.start();
+
+  // ---- Bass oscillator (saw + low-pass: gives that PA-system thump) ----
+  const bassOsc = ctx.createOscillator();
+  bassOsc.type = 'sawtooth';
+  bassOsc.frequency.value = bass[0];
+  const bassLpf = ctx.createBiquadFilter();
+  bassLpf.type = 'lowpass';
+  bassLpf.frequency.value = 380;
+  const bassGain = ctx.createGain();
+  bassGain.gain.value = 0;
+  bassOsc.connect(bassLpf).connect(bassGain).connect(panner);
+  bassOsc.start();
+
+  // ---- Drum kick: a sub-bass oscillator we re-pluck per beat ----
+  const kick = ctx.createOscillator();
+  kick.type = 'sine';
+  kick.frequency.value = 50;
+  const kickGain = ctx.createGain();
+  kickGain.gain.value = 0;
+  kick.connect(kickGain).connect(panner);
+  kick.start();
+
+  // ---- Scheduler: queues ~0.6s of notes every 0.2s ----
+  let nextNoteTime = ctx.currentTime + 0.15;
+  let beatIdx = 0;
+
+  function schedule() {
+    const horizon = ctx.currentTime + 0.6;
+    while (nextNoteTime < horizon) {
+      const t = nextNoteTime;
+
+      // Melody note (each beat)
+      const m = melody[beatIdx % melody.length];
+      lead.frequency.setValueAtTime(m, t);
+      leadGain.gain.cancelScheduledValues(t);
+      leadGain.gain.setValueAtTime(0.0001, t);
+      leadGain.gain.exponentialRampToValueAtTime(0.18, t + 0.015);
+      leadGain.gain.exponentialRampToValueAtTime(0.0001, t + beat * 0.85);
+
+      // Bass note (every other beat)
+      if (beatIdx % 2 === 0) {
+        const b = bass[Math.floor(beatIdx / 2) % bass.length];
+        bassOsc.frequency.setValueAtTime(b, t);
+        bassGain.gain.cancelScheduledValues(t);
+        bassGain.gain.setValueAtTime(0.0001, t);
+        bassGain.gain.exponentialRampToValueAtTime(0.22, t + 0.02);
+        bassGain.gain.exponentialRampToValueAtTime(0.0001, t + beat * 1.8);
+      }
+
+      // Kick: every beat — short pitch sweep
+      kick.frequency.setValueAtTime(110, t);
+      kick.frequency.exponentialRampToValueAtTime(40, t + 0.08);
+      kickGain.gain.cancelScheduledValues(t);
+      kickGain.gain.setValueAtTime(0.0001, t);
+      kickGain.gain.exponentialRampToValueAtTime(0.35, t + 0.005);
+      kickGain.gain.exponentialRampToValueAtTime(0.0001, t + 0.18);
+
+      nextNoteTime += beat;
+      beatIdx++;
+    }
+  }
+  schedule();
+  const intervalId = setInterval(schedule, 200);
+
+  return {
+    panner,
+    stop() {
+      clearInterval(intervalId);
+      try { lead.stop(); } catch (e) {}
+      try { bassOsc.stop(); } catch (e) {}
+      try { kick.stop(); } catch (e) {}
+      try { panner.disconnect(); } catch (e) {}
+    },
+  };
 }
 
 // ---------- Per-obstacle dispatch ----------

@@ -10,11 +10,12 @@ const LIFETIME = 8;
 const POP_SCALE_TIME = 0.25;
 
 // Slowly varying global wind so all bubbles drift coherently most of the time.
+// Amplitudes are tuned so bubbles travel several meters from spawn before popping.
 let _windT = 0;
 function sampleWind(t) {
   return {
-    x: Math.sin(t * 0.21) * 0.8 + Math.cos(t * 0.07) * 0.5,
-    z: Math.cos(t * 0.18) * 0.8 + Math.sin(t * 0.05) * 0.5,
+    x: Math.sin(t * 0.21) * 2.4 + Math.cos(t * 0.07) * 1.6 + Math.sin(t * 0.43) * 0.8,
+    z: Math.cos(t * 0.18) * 2.4 + Math.sin(t * 0.05) * 1.6 + Math.cos(t * 0.37) * 0.8,
   };
 }
 
@@ -60,6 +61,20 @@ export class Bubbles {
       life: LIFETIME,
       popping: false,
       spin: Math.random() * Math.PI * 2,
+      // Personality, assigned at spawn:
+      //   0 = follower (mostly the global wind, tiny jitter)
+      //   1 = wanderer (ignores wind, strong own-drift)
+      //   2 = spinner  (corkscrew motion around a vertical axis)
+      //   3 = sprinter (high initial outward kick, then slows)
+      kind: 0,
+      // Per-bubble unique drift direction (for wanderers/sprinters)
+      driftX: 0,
+      driftZ: 0,
+      driftMag: 0,
+      // Per-bubble spinner phase + radius
+      swirlPhase: 0,
+      swirlRate: 0,
+      swirlRadius: 0,
     }));
 
     this._spawnAcc = 0;
@@ -107,17 +122,52 @@ export class Bubbles {
         continue;
       }
 
-      // Physics: gentle buoyancy + wandering wind + per-bubble jitter
+      // Physics: gentle buoyancy + per-bubble personality forces
       p.vel.y += (BUOYANCY + GRAVITY) * dt;
       const wind = sampleWind(_windT + i * 0.13);
-      // Per-bubble jitter (each bubble has its own swirl frequency)
-      const jitterX = Math.sin(p.age * (1.4 + (i % 7) * 0.2) + i) * 1.6;
-      const jitterZ = Math.cos(p.age * (1.1 + (i % 5) * 0.27) + i * 1.3) * 1.6;
-      p.vel.x += (wind.x + jitterX) * dt;
-      p.vel.z += (wind.z + jitterZ) * dt;
 
-      // Light damping so they can build up some drift but not race off
-      p.vel.multiplyScalar(Math.pow(0.85, dt * 60));
+      switch (p.kind) {
+        case 0: {
+          // FOLLOWER — full wind + small jitter
+          const jitterX = Math.sin(p.age * (1.4 + (i % 7) * 0.2) + i) * 1.2;
+          const jitterZ = Math.cos(p.age * (1.1 + (i % 5) * 0.27) + i * 1.3) * 1.2;
+          p.vel.x += (wind.x + jitterX) * dt;
+          p.vel.z += (wind.z + jitterZ) * dt;
+          break;
+        }
+        case 1: {
+          // WANDERER — mostly ignores wind, has its own steady drift
+          p.vel.x += (p.driftX * p.driftMag + wind.x * 0.1) * dt;
+          p.vel.z += (p.driftZ * p.driftMag + wind.z * 0.1) * dt;
+          // Small chaotic shudder
+          p.vel.x += Math.sin(p.age * 3 + i) * 1.6 * dt;
+          p.vel.z += Math.cos(p.age * 2.4 + i * 1.7) * 1.6 * dt;
+          break;
+        }
+        case 2: {
+          // SPINNER — corkscrew motion. Add a tangential force in a rotating direction.
+          p.swirlPhase += p.swirlRate * dt;
+          const tangX = -Math.sin(p.swirlPhase);
+          const tangZ = Math.cos(p.swirlPhase);
+          const swirlMag = p.swirlRadius * Math.abs(p.swirlRate);
+          p.vel.x += (tangX * swirlMag + wind.x * 0.3) * dt;
+          p.vel.z += (tangZ * swirlMag + wind.z * 0.3) * dt;
+          // Boost upward a touch — spinners rise faster
+          p.vel.y += 0.4 * dt;
+          break;
+        }
+        case 3: {
+          // SPRINTER — strong initial kick, decays. After 1s, behaves like a wanderer.
+          const burst = Math.max(0, 1 - p.age);
+          p.vel.x += (p.driftX * p.driftMag * 2 * burst + wind.x * 0.4) * dt;
+          p.vel.z += (p.driftZ * p.driftMag * 2 * burst + wind.z * 0.4) * dt;
+          break;
+        }
+      }
+
+      // Per-personality damping — wanderers/sprinters keep momentum longer
+      const dampingExp = p.kind === 0 ? 0.92 : (p.kind === 3 ? 0.96 : 0.95);
+      p.vel.multiplyScalar(Math.pow(dampingExp, dt * 60));
 
       p.pos.addScaledVector(p.vel, dt);
       p.spin += dt * 0.5;
@@ -155,11 +205,30 @@ export class Bubbles {
     p.pos.x += (Math.random() - 0.5) * 0.15;
     p.pos.z += (Math.random() - 0.5) * 0.15;
 
-    // Initial velocity: launched up-and-behind from the cart
+    // Roll a personality
+    const r = Math.random();
+    if (r < 0.55) p.kind = 0;       // follower (most bubbles)
+    else if (r < 0.78) p.kind = 1;  // wanderer
+    else if (r < 0.92) p.kind = 2;  // spinner
+    else p.kind = 3;                // sprinter
+
+    // Per-bubble random drift direction (used by wanderer/sprinter)
+    const ang = Math.random() * Math.PI * 2;
+    p.driftX = Math.cos(ang);
+    p.driftZ = Math.sin(ang);
+    p.driftMag = 2 + Math.random() * 3;
+
+    // Spinner config
+    p.swirlPhase = Math.random() * Math.PI * 2;
+    p.swirlRate = (Math.random() < 0.5 ? 1 : -1) * (3 + Math.random() * 3);
+    p.swirlRadius = 0.3 + Math.random() * 0.6;
+
+    // Initial velocity: launched straight out the back, mostly horizontal
     const back = zerble.forwardWorld.clone().multiplyScalar(-1);
-    p.vel.set(back.x * 1.6, 1.5 + Math.random() * 0.8, back.z * 1.6);
-    p.vel.x += (Math.random() - 0.5) * 0.5;
-    p.vel.z += (Math.random() - 0.5) * 0.5;
+    p.vel.set(back.x * 2.6, 0.3 + Math.random() * 0.5, back.z * 2.6);
+    p.vel.x += (Math.random() - 0.5) * 1.2;
+    p.vel.z += (Math.random() - 0.5) * 1.2;
+    p.vel.y += (Math.random() - 0.5) * 0.4;
 
     p.spin = Math.random() * Math.PI * 2;
 

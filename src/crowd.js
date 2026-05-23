@@ -37,6 +37,14 @@ const SMILE_TIME_COOLDOWN = 3;       // ...AND wait this long
 const HONK_BOOST = 0.8;
 const HONK_RANGE = 14;
 
+// Passenger system
+const MAX_PASSENGERS = 10;
+const ZERBLE_IDLE_SPEED = 0.6;       // |speed| below this counts as idle
+const BOARD_RANGE = 1.3;              // close enough to a seat to sit down
+const PASSENGER_BOARD_CHANCE_PER_SEC = 0.45;
+const RIDE_MIN_TIME = 15;
+const RIDE_MAX_TIME = 75;
+
 // Behavior
 const PATH_GRID = 80;                // matches CHUNK_SIZE — paths run along multiples of this
 const PATH_PULL_WIDTH = 4;           // how wide the "near path" band is
@@ -172,6 +180,11 @@ export class Crowd {
     const zero = new THREE.Matrix4().makeScale(0, 0, 0);
     for (const npc of this.npcs) {
       if (npc.chunkKey === chunkKey) {
+        // Free any seat the NPC was occupying so future passengers can claim it
+        if (npc.seatSlot) {
+          npc.seatSlot.occupied = false;
+          npc.seatSlot = null;
+        }
         this.bodyMesh.setMatrixAt(npc.idx, zero);
         this.headMesh.setMatrixAt(npc.idx, zero);
         this.free.push(npc.idx);
@@ -193,22 +206,47 @@ export class Crowd {
     const bubblePositions = [];
     if (bubbles) bubbles.forEachAlive((b) => bubblePositions.push(b.pos));
 
+    // Passenger bookkeeping: count active passengers + record Zerble idle state
+    const zerbleIdle = Math.abs(zerble.speed) < ZERBLE_IDLE_SPEED;
+    let activePassengers = 0;
+    for (const n of this.npcs) {
+      if (n.state === 'boarding' || n.state === 'riding') activePassengers++;
+    }
+
     for (const npc of this.npcs) {
-      this._updateNpc(dt, npc, zerble, bubblePositions, cosCone);
+      this._updateNpc(dt, npc, zerble, bubblePositions, cosCone, {
+        zerbleIdle,
+        activePassengersRef: { count: activePassengers, add: () => activePassengers++ },
+      });
     }
 
     this.bodyMesh.instanceMatrix.needsUpdate = true;
     this.headMesh.instanceMatrix.needsUpdate = true;
   }
 
-  _updateNpc(dt, npc, zerble, bubblePositions, cosCone) {
+  _updateNpc(dt, npc, zerble, bubblePositions, cosCone, ctx) {
     if (npc.smileTimeCooldown > 0) npc.smileTimeCooldown -= dt;
     npc.stateTimer -= dt;
     npc.bob += dt * (1 + 0.4 * npc.dance);
+    if (npc.rideTimer != null) npc.rideTimer -= dt;
 
     const dx = zerble.position.x - npc.pos.x;
     const dz = zerble.position.z - npc.pos.z;
     const dToZerble = Math.hypot(dx, dz);
+
+    // --- Passenger states get their OWN handling (skip the proximity switch below) ---
+    if (npc.state === 'riding') {
+      this._tickRiding(dt, npc, zerble);
+      return;
+    }
+    if (npc.state === 'boarding') {
+      this._tickBoarding(dt, npc, zerble, ctx);
+      return;
+    }
+    if (npc.state === 'disembarking') {
+      this._tickDisembarking(dt, npc);
+      // fall through to normal walking logic
+    }
 
     // --- state transitions driven by Zerble proximity ---
     if (dToZerble < NOTICE_RANGE) {
@@ -219,7 +257,25 @@ export class Crowd {
       } else {
         npc.state = 'watching';
       }
-    } else if (npc.state !== 'idle' && npc.state !== 'walking') {
+
+      // Boarding trigger: idle Zerble + curious NPC + open seat + under passenger cap
+      if (
+        ctx.zerbleIdle &&
+        npc.curiosity > 0.45 &&
+        ctx.activePassengersRef.count < MAX_PASSENGERS &&
+        dToZerble < 12 &&
+        Math.random() < PASSENGER_BOARD_CHANCE_PER_SEC * dt
+      ) {
+        const slot = this._claimFreeSeat(zerble);
+        if (slot) {
+          npc.state = 'boarding';
+          npc.seatSlot = slot;
+          npc.stateTimer = 20; // give up trying after 20s if we can't reach
+          ctx.activePassengersRef.add();
+          return;
+        }
+      }
+    } else if (npc.state !== 'idle' && npc.state !== 'walking' && npc.state !== 'disembarking') {
       // Lost interest — go back to ambient behavior
       npc.state = 'idle';
       npc.stateTimer = 1 + Math.random() * 3;
@@ -418,12 +474,23 @@ export class Crowd {
     const m = this._mat4;
     const quat = new THREE.Quaternion().setFromEuler(new THREE.Euler(0, npc.yaw, 0));
     const bobY = Math.sin(npc.bob) * 0.04;
-    const danceTilt = npc.dance > 0.6 && (npc.state === 'idle' || npc.state === 'watching')
+    const danceTilt = npc.dance > 0.6 && (npc.state === 'idle' || npc.state === 'watching' || npc.state === 'riding')
       ? Math.sin(npc.bob * 2) * 0.05 * (npc.dance - 0.5)
       : 0;
 
+    // Riding passengers sit AT seat height (using seatY captured in _tickRiding).
+    // Their body's vertical center is ~0.4 below the seat's top so they look seated.
+    let bodyY, headY;
+    if (npc.state === 'riding' && npc.seatY != null) {
+      bodyY = npc.seatY - 0.05 + bobY;
+      headY = npc.seatY + 0.7 + bobY;
+    } else {
+      bodyY = 0.85 * npc.scale + bobY;
+      headY = 1.65 * npc.scale + bobY;
+    }
+
     m.compose(
-      this._tmpV.set(npc.pos.x, 0.85 * npc.scale + bobY, npc.pos.z),
+      this._tmpV.set(npc.pos.x, bodyY, npc.pos.z),
       quat,
       this._tmpV.set(npc.scale, npc.scale, npc.scale)
     );
@@ -434,11 +501,133 @@ export class Crowd {
     this.bodyMesh.setMatrixAt(npc.idx, m);
 
     m.compose(
-      this._tmpV.set(npc.pos.x, 1.65 * npc.scale + bobY, npc.pos.z),
+      this._tmpV.set(npc.pos.x, headY, npc.pos.z),
       quat,
       this._tmpV.set(npc.scale, npc.scale, npc.scale)
     );
     this.headMesh.setMatrixAt(npc.idx, m);
+  }
+
+  // ----- Passenger system helpers -----
+
+  _claimFreeSeat(zerble) {
+    if (!zerble.seatSlots) return null;
+    // Try slots in a randomized order so passengers don't all stack the same way
+    const order = zerble.seatSlots.map((_, i) => i);
+    for (let i = order.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [order[i], order[j]] = [order[j], order[i]];
+    }
+    for (const idx of order) {
+      const slot = zerble.seatSlots[idx];
+      if (!slot.occupied) {
+        slot.occupied = true;
+        return slot;
+      }
+    }
+    return null;
+  }
+
+  _releaseSeat(slot) {
+    if (slot) slot.occupied = false;
+  }
+
+  _tickBoarding(dt, npc, zerble, ctx) {
+    if (!npc.seatSlot || !ctx.zerbleIdle) {
+      // Cart started moving (or we lost our slot) — abort
+      this._releaseSeat(npc.seatSlot);
+      npc.seatSlot = null;
+      npc.state = 'watching';
+      npc.stateTimer = 1;
+      return;
+    }
+    const target = this._tmpV;
+    zerble.worldSeatPosition(npc.seatSlot, target);
+
+    const tdx = target.x - npc.pos.x;
+    const tdz = target.z - npc.pos.z;
+    const td = Math.hypot(tdx, tdz);
+
+    if (td < BOARD_RANGE) {
+      // Climb aboard
+      npc.state = 'riding';
+      npc.rideTimer = RIDE_MIN_TIME + Math.random() * (RIDE_MAX_TIME - RIDE_MIN_TIME);
+      this._writeMatrices(npc); // snap into place
+      return;
+    }
+
+    // Steer toward seat at jog speed
+    const invD = 1 / (td || 1);
+    const dx = tdx * invD;
+    const dz = tdz * invD;
+    const speed = 2.4 * npc.energy;
+    npc.vel.x = THREE.MathUtils.lerp(npc.vel.x, dx * speed, Math.min(1, dt * 6));
+    npc.vel.z = THREE.MathUtils.lerp(npc.vel.z, dz * speed, Math.min(1, dt * 6));
+    npc.pos.x += npc.vel.x * dt;
+    npc.pos.z += npc.vel.z * dt;
+
+    // Face direction of motion
+    const targetYaw = Math.atan2(npc.vel.x, npc.vel.z);
+    const diff = wrapAngle(targetYaw - npc.yaw);
+    npc.yaw += diff * Math.min(1, dt * 6);
+
+    // Timeout — give up if we can't reach the seat
+    if (npc.stateTimer <= 0) {
+      this._releaseSeat(npc.seatSlot);
+      npc.seatSlot = null;
+      npc.state = 'idle';
+      npc.stateTimer = 2;
+    }
+
+    this._writeMatrices(npc);
+  }
+
+  _tickRiding(dt, npc, zerble) {
+    if (!npc.seatSlot) {
+      npc.state = 'idle';
+      npc.stateTimer = 1;
+      return;
+    }
+    // Lock position to the seat. Face the same way the cart is facing.
+    const out = this._tmpV;
+    zerble.worldSeatPosition(npc.seatSlot, out);
+    npc.pos.x = out.x;
+    npc.pos.z = out.z;
+    // Stash seat Y on the npc — we use it in _writeMatrices to lift the body.
+    npc.seatY = out.y;
+
+    // Yaw matches cart heading (passengers face forward like the cart) plus slot's offset
+    npc.yaw = zerble.heading + npc.seatSlot.yaw;
+
+    // Slight dance bob even while riding (extra dance-y characters wiggle a bit)
+    npc.bob += dt * (1.2 + 0.6 * npc.dance);
+
+    // Disembark only when Zerble is idle AND ride timer expired
+    if (npc.rideTimer <= 0 && Math.abs(zerble.speed) < ZERBLE_IDLE_SPEED) {
+      this._releaseSeat(npc.seatSlot);
+      const seatPos = { x: out.x, z: out.z };
+      npc.seatSlot = null;
+      npc.seatY = undefined;
+      npc.state = 'disembarking';
+      // Pick a destination 3-6m away from where we got off
+      const a = Math.random() * Math.PI * 2;
+      const r = 3 + Math.random() * 3;
+      npc.target.set(seatPos.x + Math.cos(a) * r, 0, seatPos.z + Math.sin(a) * r);
+      npc.stateTimer = 5;
+    }
+
+    this._writeMatrices(npc);
+  }
+
+  _tickDisembarking(dt, npc) {
+    // Just lean toward the disembark target; the regular walking loop below handles motion.
+    const tdx = npc.target.x - npc.pos.x;
+    const tdz = npc.target.z - npc.pos.z;
+    const td = Math.hypot(tdx, tdz);
+    if (td < ARRIVE_RADIUS || npc.stateTimer <= 0) {
+      npc.state = 'idle';
+      npc.stateTimer = 1 + Math.random() * 2;
+    }
   }
 
   applyHonk(zerble) {

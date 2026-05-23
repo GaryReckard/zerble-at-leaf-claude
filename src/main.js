@@ -113,6 +113,7 @@ HUD.onStart(() => {
 
 // ---------- Game loop ----------
 const clock = new THREE.Clock();
+const _camFwd = new THREE.Vector3();
 
 function tick() {
   const dt = Math.min(clock.getDelta(), 0.05);
@@ -179,6 +180,13 @@ function tick() {
   }
 
   chaseCam.update(dt, Input);
+
+  // Keep spatial audio in sync with the camera
+  camera.getWorldDirection(_camFwd);
+  Sound.updateAudioListener(
+    camera.position.x, camera.position.y, camera.position.z,
+    _camFwd.x, _camFwd.y, _camFwd.z
+  );
 
   composer.render();
   requestAnimationFrame(tick);

@@ -19,7 +19,8 @@ import { registry } from './registry.js';
 import { hash2, mulberry32 } from './rng.js';
 
 export const CHUNK_SIZE = 80;
-const LOAD_RADIUS = 2; // 5x5 chunks loaded around the player
+const LOAD_RADIUS = 2;   // 5x5 chunks loaded around the player
+const UNLOAD_RADIUS = 3; // hysteresis: only unload chunks beyond this distance
 
 // Bands placed on stages — animated lightly each frame by the main loop.
 export const stagePerformers = [];
@@ -47,6 +48,7 @@ export class ChunkManager {
     const ccx = Math.round(playerPos.x / CHUNK_SIZE);
     const ccz = Math.round(playerPos.z / CHUNK_SIZE);
 
+    // Load nearby chunks
     for (let dx = -LOAD_RADIUS; dx <= LOAD_RADIUS; dx++) {
       for (let dz = -LOAD_RADIUS; dz <= LOAD_RADIUS; dz++) {
         const cx = ccx + dx;
@@ -57,6 +59,43 @@ export class ChunkManager {
         }
       }
     }
+
+    // Unload distant chunks (hysteresis: only beyond UNLOAD_RADIUS, so we don't
+    // thrash when straddling a boundary)
+    for (const [key, chunk] of this.loaded) {
+      const ddx = Math.abs(chunk.cx - ccx);
+      const ddz = Math.abs(chunk.cz - ccz);
+      if (ddx > UNLOAD_RADIUS || ddz > UNLOAD_RADIUS) {
+        this._unload(key, chunk);
+      }
+    }
+  }
+
+  _unload(key, chunk) {
+    // Dispose all geometries and materials in this chunk's group so the GPU can
+    // free them. We don't share geometries across chunks in this codebase, so
+    // disposing per-chunk is safe.
+    chunk.group.traverse((obj) => {
+      if (obj.isMesh) {
+        obj.geometry?.dispose();
+        const m = obj.material;
+        if (Array.isArray(m)) {
+          for (const sub of m) sub?.dispose?.();
+        } else {
+          m?.dispose?.();
+        }
+      }
+    });
+    this.scene.remove(chunk.group);
+
+    // Clean up registry + crowd + stage performers tagged with this chunk
+    registry.removeChunk(key);
+    if (this.crowd) this.crowd.unloadChunk(key);
+    for (let i = stagePerformers.length - 1; i >= 0; i--) {
+      if (stagePerformers[i].chunkKey === key) stagePerformers.splice(i, 1);
+    }
+
+    this.loaded.delete(key);
   }
 
   _generate(cx, cz) {
@@ -568,6 +607,7 @@ function buildStage(ctx, x, z, isMain) {
 
     stagePerformers.push({
       group: performer,
+      chunkKey: ctx.key,
       baseY: h,
       baseYaw: Math.PI,
       phase: Math.random() * Math.PI * 2,

@@ -16,6 +16,7 @@ import { Smiles } from './smiles.js';
 import { Crowd } from './crowd.js';
 import { ChaseCamera } from './camera.js';
 import { registry } from './registry.js';
+import { Sound } from './sound.js';
 import {
   PuppetParade,
   BrassBand,
@@ -106,6 +107,7 @@ HUD.showTitle();
 HUD.onStart(() => {
   HUD.hideTitle();
   running = true;
+  Sound.init();
   HUD.toast('Drive around — make people smile, dodge the parade.', 2800);
 });
 
@@ -117,11 +119,13 @@ function tick() {
 
   if (running) {
     zerble.update(dt, Input);
+    Sound.setEngineSpeed(zerble.speed);
 
     if (Input.consumePressed('SPACE') && zerble.canHonk()) {
       zerble.honk();
       honkAge = 0;
       crowd.applyHonk(zerble);
+      Sound.playHonk();
     }
 
     bubbles.update(dt, zerble);
@@ -157,6 +161,7 @@ function tick() {
         HUD.setSmiles(score);
         HUD.flashHit();
         HUD.toast(toastForKind(hit.kind), 1400);
+        Sound.playCollision(hit.kind);
       }
     }
 

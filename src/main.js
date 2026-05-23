@@ -9,6 +9,7 @@ import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
 import { Input } from './input.js';
 import { HUD } from './hud.js';
 import { buildWorld, updateWorld } from './world.js';
+import { updateStagePerformers } from './chunks.js';
 import { Zerble } from './zerble.js';
 import { Bubbles } from './bubbles.js';
 import { Smiles } from './smiles.js';
@@ -135,6 +136,7 @@ function tick() {
     band.update(dt);
     kids.update(dt);
     wooks.update(dt);
+    updateStagePerformers(performance.now() * 0.001);
 
     // Procedural world expands around Zerble.
     updateWorld(zerble.position);

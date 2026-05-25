@@ -188,24 +188,27 @@ export function buildLake(scene, mcx, mcz, rng, opts = {}) {
   causeway.renderOrder = 1;
   group.add(causeway);
 
-  // ~50% of large lakes get a tan sand beach tangent to the shore. Doubles as
-  // a people attractor — NPCs hang out at the beach. `opts.forceBeach` is used
-  // by the sandbox to render a beach unconditionally for inspection.
-  // y=0.15 lifts the sand a few cm above the water surface (y=0.08) so the wet
-  // end peeks clearly through the transparent water and the dry end lays on
-  // the grass. (Was 0.20 chance + y=0.10 — Gary still couldn't find them.)
+  // Every large lake gets a small sand beach on its shore. Beach radius is
+  // sized to cover roughly 5% of the lake's shoreline arc — for a typical
+  // 70-100m lake that's a ~10-15m wide beach. Center sits slightly OUTSIDE
+  // the lake circle (1.05× lake radius) so 2/3 of the sand lays on dry grass
+  // and 1/3 peeks into the shallow water. Doubles as a people attractor —
+  // NPCs hang out at the beach. y=0.15 puts the sand above water (y=0.08) so
+  // the wet end shows through clearly.
   let beachSpec = null;
-  if (opts.forceBeach || rng() < 0.50) {
+  {
     const sandMat = new THREE.MeshStandardMaterial({
       color: 0xd9b878,
       roughness: 1.0,
       flatShading: true,
     });
-    const sandRadius = bigR * 0.4;
+    // For 5% of shore arc ≈ 0.314·R chord, a circular beach centered on the
+    // shore needs radius ~0.16·R (chord across a small tangent disc ≈ 2r).
+    const sandRadius = bigR * 0.16;
     const sandAngle = rng() * Math.PI * 2;
-    const sandX = bigCx + Math.cos(sandAngle) * (bigR * 0.9);
-    const sandZ = bigCz + Math.sin(sandAngle) * (bigR * 0.9);
-    const sandMesh = new THREE.Mesh(new THREE.CircleGeometry(sandRadius, 18), sandMat);
+    const sandX = bigCx + Math.cos(sandAngle) * (bigR * 1.05);
+    const sandZ = bigCz + Math.sin(sandAngle) * (bigR * 1.05);
+    const sandMesh = new THREE.Mesh(new THREE.CircleGeometry(sandRadius, 14), sandMat);
     sandMesh.rotation.x = -Math.PI / 2;
     sandMesh.position.set(sandX, 0.15, sandZ);
     sandMesh.castShadow = false;

@@ -166,6 +166,17 @@ export const Sound = {
     playHonk(ctx, sfxBus);
   },
 
+  // Specific-sound variants (bound to B and H keys for direct triggering).
+  playBicycleBell() {
+    if (!ctx) return;
+    playBicycleBell(ctx, sfxBus);
+  },
+
+  playClownHorn() {
+    if (!ctx) return;
+    playClownBulb(ctx, sfxBus);
+  },
+
   // Optional: lower-volume bump when Zerble brushes something without damage.
   playSoftBump() {
     if (!ctx) return;

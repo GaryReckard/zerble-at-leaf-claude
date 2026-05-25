@@ -946,6 +946,8 @@ export class Zerble {
   }
 
   honk() {
-    this.honkCooldown = 2.5;
+    // Short cooldown to prevent overlapping ring animations from stomping each
+    // other — but low enough that mashing the key feels responsive.
+    this.honkCooldown = 0.15;
   }
 }

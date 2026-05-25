@@ -141,7 +141,8 @@ function buildPanel() {
   helpBlock.style.lineHeight = '1.5';
   helpBlock.innerHTML = `
     <div style="margin-bottom:4px;opacity:0.7">Controls</div>
-    <div><b>W A S D</b> drive · <b>Shift</b> boost · <b>Space</b> honk</div>
+    <div><b>W A S D</b> drive · <b>Shift</b> boost · <b>Space</b> honk (random)</div>
+    <div><b>B</b> bicycle bell · <b>H</b> clown horn (specific)</div>
     <div><b>← ↑ ↓ →</b> orbit/tilt camera</div>
     <div><b>V</b> first-person / chase view</div>
     <div><b>I</b> / <b>O</b> eye glow brighter / dimmer</div>

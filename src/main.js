@@ -187,11 +187,18 @@ function tickBody(dt) {
     zerble.update(dt, Input, nightness);
     Sound.setEngineSpeed(zerble.speed, zerble.isBoosting ? 1 : 0);
 
-    if (Input.consumePressed('SPACE') && zerble.canHonk()) {
+    // SPACE = random honk (bell or clown). B = always bell. H = always clown.
+    // All three share the honk ring + crowd reaction + cooldown.
+    const spaceHonk = Input.consumePressed('SPACE');
+    const bellHonk  = Input.consumePressed('B');
+    const hornHonk  = Input.consumePressed('H');
+    if ((spaceHonk || bellHonk || hornHonk) && zerble.canHonk()) {
       zerble.honk();
       honkAge = 0;
       crowd.applyHonk(zerble);
-      Sound.playHonk();
+      if (bellHonk)      Sound.playBicycleBell();
+      else if (hornHonk) Sound.playClownHorn();
+      else               Sound.playHonk();   // SPACE → random
     }
 
     // V toggles first-person view from Zerble's eyes.

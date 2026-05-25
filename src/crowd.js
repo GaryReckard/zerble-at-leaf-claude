@@ -19,8 +19,16 @@
 import * as THREE from 'three';
 import { registry } from './registry.js';
 import { PERF } from './perf.js';
+import { CHUNK_SIZE } from './chunks.js';
 
 const MAX_NPCS = PERF.crowdMax;
+
+// Despawn NPCs that drift more than this far from Zerble. Anchored to the
+// chunk-load radius so we keep NPCs alive across the area that's actually
+// rendered, plus a half-chunk buffer to avoid visible blink-out at the edge.
+// Riding/boarding NPCs are exempt — they're physically tied to the cart.
+const DESPAWN_RADIUS = (PERF.chunkUnloadRadius + 0.5) * CHUNK_SIZE;
+const DESPAWN_R2 = DESPAWN_RADIUS * DESPAWN_RADIUS;
 const NPC_ROW_SHIRT = [
   0xff6f9c, 0xffd28a, 0x6fcf6a, 0x66d9ff, 0xb285ff,
   0xff8a5b, 0xf2e8cf, 0x8ecae6, 0xffb703, 0xc77dff,
@@ -78,6 +86,14 @@ export class Crowd {
     this.headMesh.castShadow = PERF.shadows;
     this.bodyMesh.count = MAX_NPCS;
     this.headMesh.count = MAX_NPCS;
+    // InstancedMesh frustum culling uses a bounding sphere that's computed once
+    // and cached — it does NOT auto-expand when instance matrices move. As
+    // Zerble drives far from spawn, the cached sphere falls behind the camera
+    // and the entire crowd vanishes (while game logic keeps running →
+    // invisible collisions, invisible smiles). Bubbles already disables
+    // culling for the same reason. One drawcall per mesh either way.
+    this.bodyMesh.frustumCulled = false;
+    this.headMesh.frustumCulled = false;
 
     this.group = new THREE.Group();
     this.group.name = 'Crowd';
@@ -179,31 +195,66 @@ export class Crowd {
     return npc;
   }
 
-  unloadChunk(chunkKey) {
+  // Kept as a no-op for chunk-unload back-compat. Lifecycle is now driven by
+  // distance from Zerble in update() — that way NPCs who wander across chunk
+  // boundaries don't blink out when their *spawn* chunk unloads, and NPCs in
+  // a still-loaded chunk don't linger after they've drifted out of view.
+  unloadChunk(_chunkKey) {
+    // intentionally empty
+  }
+
+  // Despawn NPCs farther than DESPAWN_RADIUS from Zerble. Skips riders and
+  // boarders so passengers can't get yanked off the cart. Called from update().
+  _despawnDistant(zerble) {
+    const zx = zerble.position.x;
+    const zz = zerble.position.z;
     const kept = [];
-    const zero = new THREE.Matrix4().makeScale(0, 0, 0);
+    const zero = this._zeroMat || (this._zeroMat = new THREE.Matrix4().makeScale(0, 0, 0));
+    let freed = 0;
     for (const npc of this.npcs) {
-      if (npc.chunkKey === chunkKey) {
-        // Free any seat the NPC was occupying so future passengers can claim it
+      if (npc.state === 'riding' || npc.state === 'boarding') {
+        kept.push(npc);
+        continue;
+      }
+      const dx = npc.pos.x - zx;
+      const dz = npc.pos.z - zz;
+      if (dx * dx + dz * dz > DESPAWN_R2) {
         if (npc.seatSlot) {
           npc.seatSlot.occupied = false;
           npc.seatSlot = null;
         }
+        // Remove from any group it belonged to so dead idx's don't leak.
+        if (npc.groupId) {
+          const g = this.groups.get(npc.groupId);
+          if (g) {
+            const i = g.members.indexOf(npc.idx);
+            if (i >= 0) g.members.splice(i, 1);
+            if (g.members.length === 0) this.groups.delete(npc.groupId);
+          }
+        }
         this.bodyMesh.setMatrixAt(npc.idx, zero);
         this.headMesh.setMatrixAt(npc.idx, zero);
         this.free.push(npc.idx);
+        freed++;
       } else {
         kept.push(npc);
       }
     }
-    this.npcs = kept;
-    this.bodyMesh.instanceMatrix.needsUpdate = true;
-    this.headMesh.instanceMatrix.needsUpdate = true;
+    if (freed > 0) {
+      this.npcs = kept;
+      this.bodyMesh.instanceMatrix.needsUpdate = true;
+      this.headMesh.instanceMatrix.needsUpdate = true;
+    }
   }
 
   // -------------- per-frame --------------
 
   update(dt, zerble, bubbles) {
+    // First sweep: free any NPC who has drifted too far from Zerble. Lifecycle
+    // is intentionally distance-based (not chunk-based) so wandering NPCs
+    // don't vanish when their spawn chunk unloads.
+    this._despawnDistant(zerble);
+
     const cosCone = Math.cos((SMILE_CONE_DEG * Math.PI) / 180);
 
     // Collect live bubble positions once per frame

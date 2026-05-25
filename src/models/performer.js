@@ -87,6 +87,9 @@ export function buildPerformer(instrument, rng = Math.random) {
 
   const brass = new THREE.MeshStandardMaterial({
     color: 0xe8b042, roughness: 0.4, metalness: 0.85, flatShading: true,
+    // DoubleSide so the openEnded sax bell cone renders from the open-mouth
+    // side too (otherwise back-faces get culled and the bell looks transparent).
+    side: THREE.DoubleSide,
   });
   const black = new THREE.MeshStandardMaterial({ color: 0x121212, roughness: 0.6, flatShading: true });
   const wood = new THREE.MeshStandardMaterial({ color: 0x6a4a2a, roughness: 0.9, flatShading: true });

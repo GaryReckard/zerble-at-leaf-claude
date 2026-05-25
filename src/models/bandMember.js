@@ -67,6 +67,10 @@ export function buildBandMember(instrument, seed = 0) {
     roughness: 0.4,
     metalness: 0.85,
     flatShading: true,
+    // DoubleSide so the openEnded cone bells (trumpet/trombone/tuba) render
+    // from both sides — otherwise you can see straight through them when
+    // viewed from the open-mouth side and the back-faces get culled.
+    side: THREE.DoubleSide,
   });
 
   if (instrument === 'tuba') {

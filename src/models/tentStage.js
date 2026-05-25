@@ -28,15 +28,13 @@ export function buildTentStage(opts = {}) {
 
   // ---- Tent canopy: A symmetric "barn" tent built from custom faces. ----
   // - Two long slanted roof panels (left + right) meeting at the ridge
-  // - Two triangular end caps (back-wall closed, front-wall is the open
-  //   entrance — we omit it)
-  // - Two short vertical side walls at the bottom (so Zerble can stand
-  //   under the eaves without poking through)
+  // - Back-wall closed; front-wall is the open entrance (omitted)
+  // - LEFT and RIGHT sides intentionally open per the reference: tent is
+  //   only closed at the back, so Zerble can drive in from any of the three
+  //   open sides.
+  // All canvas is a single off-white shade (no stripes).
   const canvasMat = new THREE.MeshStandardMaterial({
     color: 0xfff8eb, roughness: 0.85, side: THREE.DoubleSide, flatShading: true,
-  });
-  const stripeMat = new THREE.MeshStandardMaterial({
-    color: 0xff6f9c, roughness: 0.85, side: THREE.DoubleSide, flatShading: true,
   });
 
   // Helper: convex polygon from CCW vertices into a Mesh.
@@ -57,21 +55,7 @@ export function buildTentStage(opts = {}) {
     return new THREE.Mesh(geo, mat);
   };
 
-  // Side walls — vertical rectangles forming the tent's lower edges.
-  // Left wall (-x): rectangle at x=-halfW, z spanning -halfD..halfD, y 0..WALL_H.
-  group.add(polyMesh([
-    [-halfW, 0,           -halfD],
-    [-halfW, 0,            halfD],
-    [-halfW, TENT_WALL_HEIGHT, halfD],
-    [-halfW, TENT_WALL_HEIGHT, -halfD],
-  ], canvasMat));
-  // Right wall (+x)
-  group.add(polyMesh([
-    [ halfW, 0,            halfD],
-    [ halfW, 0,           -halfD],
-    [ halfW, TENT_WALL_HEIGHT, -halfD],
-    [ halfW, TENT_WALL_HEIGHT,  halfD],
-  ], canvasMat));
+  // (No left or right side walls — Zerble can drive in from either side.)
 
   // Back wall (closed end, z = -halfD)
   // Triangle on top + rectangle below = pentagon.
@@ -83,46 +67,22 @@ export function buildTentStage(opts = {}) {
     [ halfW, 0,                       -halfD],
   ], canvasMat));
 
-  // Front wall: open at the bottom — Zerble drives in here. Show a small
-  // valance/lintel above the entrance (a triangle apex with rectangular
-  // strip across the top). This frames the opening.
-  const lintelHeight = TENT_WALL_HEIGHT + 2;   // top of opening
-  group.add(polyMesh([
-    [-halfW, lintelHeight,          halfD],
-    [-halfW, TENT_WALL_HEIGHT,      halfD],
-    [ halfW, TENT_WALL_HEIGHT,      halfD],
-    [ halfW, lintelHeight,          halfD],
-  ], stripeMat));
-  // Triangle apex above the front wall lintel
-  group.add(polyMesh([
-    [-halfW, lintelHeight,          halfD],
-    [ halfW, lintelHeight,          halfD],
-    [0,      TENT_RIDGE_HEIGHT,     halfD],
-  ], canvasMat));
+  // (No front wall — fully open front entrance.)
 
-  // Roof panels — long trapezoidal slopes from each side wall up to the ridge.
-  // Add a few stripe panels for festival flair.
-  const stripeCount = 7;
-  const stripeWidth = TENT_DEPTH / stripeCount;
-  for (let i = 0; i < stripeCount; i++) {
-    const z0 = -halfD + i * stripeWidth;
-    const z1 = -halfD + (i + 1) * stripeWidth;
-    const mat = (i % 2 === 0) ? canvasMat : stripeMat;
-    // Left slope
-    group.add(polyMesh([
-      [-halfW, TENT_WALL_HEIGHT, z0],
-      [-halfW, TENT_WALL_HEIGHT, z1],
-      [0,      TENT_RIDGE_HEIGHT, z1],
-      [0,      TENT_RIDGE_HEIGHT, z0],
-    ], mat));
-    // Right slope
-    group.add(polyMesh([
-      [0,      TENT_RIDGE_HEIGHT, z0],
-      [0,      TENT_RIDGE_HEIGHT, z1],
-      [ halfW, TENT_WALL_HEIGHT, z1],
-      [ halfW, TENT_WALL_HEIGHT, z0],
-    ], mat));
-  }
+  // Roof panels — two long trapezoidal slopes from each side wall up to the
+  // ridge. Solid white now (no stripes).
+  group.add(polyMesh([
+    [-halfW, TENT_WALL_HEIGHT, -halfD],
+    [-halfW, TENT_WALL_HEIGHT,  halfD],
+    [0,      TENT_RIDGE_HEIGHT, halfD],
+    [0,      TENT_RIDGE_HEIGHT, -halfD],
+  ], canvasMat));
+  group.add(polyMesh([
+    [0,      TENT_RIDGE_HEIGHT, -halfD],
+    [0,      TENT_RIDGE_HEIGHT,  halfD],
+    [ halfW, TENT_WALL_HEIGHT,  halfD],
+    [ halfW, TENT_WALL_HEIGHT, -halfD],
+  ], canvasMat));
 
   // Ridge pole — visible spine running along the peak. Adds structural feel.
   const ridgeMat = new THREE.MeshStandardMaterial({
@@ -150,13 +110,11 @@ export function buildTentStage(opts = {}) {
   const stageBuild = buildStage({
     isMain: false, leafTexture, rng,
   });
-  // Stage faces toward the entrance (+Z). In buildStage local space, the
-  // banner is at -Z (back of stage). We need the band to face +Z, so the
-  // banner should be at the back wall (Z = -halfD + something). The stage
-  // model's -Z is its back, so positioning it at z=-halfD+stageInset places
-  // the deck near the back wall. To face the band toward +Z (audience), we
-  // ROTATE the stage 180° around Y so its +Z (front) points toward halfD.
-  stageBuild.group.rotation.y = Math.PI;
+  // The stage's local +Z is its FRONT (banner side at -Z is the BACK). We
+  // want the band facing +Z toward the open front of the tent. With NO
+  // rotation, the stage already points its front at +Z — which is exactly
+  // where the entrance is. (Previously we rotated by π which flipped them
+  // to face the back wall — that was the bug.)
   const stageZ = -halfD + STAGE_INSET + stageBuild.deckDepth / 2;
   stageBuild.group.position.set(0, 0, stageZ);
   group.add(stageBuild.group);

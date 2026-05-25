@@ -13,12 +13,16 @@ import * as THREE from 'three';
 import { buildPerformer } from './performer.js';
 
 export function buildStage(opts = {}) {
-  const { isMain = false, leafTexture = null, rng = Math.random } = opts;
+  // `scale` (default 1.0) scales the deck dimensions + truss + speakers +
+  // stage lights uniformly so chunks.js can give each stage a different
+  // size for visual variety. The returned dimensions reflect the scale so
+  // callers can register correctly-sized colliders.
+  const { isMain = false, leafTexture = null, rng = Math.random, scale = 1.0 } = opts;
 
   const g = new THREE.Group();
-  const w = isMain ? 24 : 14;
-  const d = isMain ? 12 : 8;
-  const h = 1.5;
+  const w = (isMain ? 24 : 14) * scale;
+  const d = (isMain ? 12 : 8) * scale;
+  const h = 1.5 * scale;
 
   const deck = new THREE.Mesh(
     new THREE.BoxGeometry(w, h, d),
@@ -33,17 +37,17 @@ export function buildStage(opts = {}) {
     ? 0x6fcf6a
     : [0xff9a8b, 0xc77dff, 0x66d9ff, 0xffd28a][Math.floor(rng() * 4)];
   const banner = new THREE.Mesh(
-    new THREE.BoxGeometry(w, 7, 0.4),
+    new THREE.BoxGeometry(w, 7 * scale, 0.4 * scale),
     new THREE.MeshStandardMaterial({ color: bannerColor, roughness: 0.9, flatShading: true })
   );
-  banner.position.set(0, 4.5, -d / 2 - 0.2);
+  banner.position.set(0, 4.5 * scale, -d / 2 - 0.2 * scale);
   banner.castShadow = true;
   g.add(banner);
 
   if (isMain && leafTexture) {
-    const bannerW = Math.min(w - 2, 16);
+    const bannerW = Math.min(w - 2 * scale, 16 * scale);
     const leaf = new THREE.Mesh(
-      new THREE.PlaneGeometry(bannerW, 3.4),
+      new THREE.PlaneGeometry(bannerW, 3.4 * scale),
       new THREE.MeshStandardMaterial({
         map: leafTexture.diffuse,
         emissive: 0xffd28a,
@@ -53,39 +57,43 @@ export function buildStage(opts = {}) {
         side: THREE.DoubleSide,
       })
     );
-    leaf.position.set(0, 5.3, -d / 2 + 0.06);
+    leaf.position.set(0, 5.3 * scale, -d / 2 + 0.06 * scale);
     g.add(leaf);
   }
 
   // Truss
   const trussMat = new THREE.MeshStandardMaterial({ color: 0x2a1f3a, roughness: 0.5, metalness: 0.4, flatShading: true });
+  const trussH = 9 * scale;
+  const trussThk = 0.25 * scale;
   for (const [px, pz] of [
-    [-w / 2 + 0.3, -d / 2 + 0.3], [w / 2 - 0.3, -d / 2 + 0.3],
-    [-w / 2 + 0.3, d / 2 - 0.3], [w / 2 - 0.3, d / 2 - 0.3],
+    [-w / 2 + 0.3 * scale, -d / 2 + 0.3 * scale], [w / 2 - 0.3 * scale, -d / 2 + 0.3 * scale],
+    [-w / 2 + 0.3 * scale, d / 2 - 0.3 * scale], [w / 2 - 0.3 * scale, d / 2 - 0.3 * scale],
   ]) {
-    const p = new THREE.Mesh(new THREE.BoxGeometry(0.25, 9, 0.25), trussMat);
-    p.position.set(px, 4.5, pz);
+    const p = new THREE.Mesh(new THREE.BoxGeometry(trussThk, trussH, trussThk), trussMat);
+    p.position.set(px, trussH / 2, pz);
     g.add(p);
   }
   for (const dx of [-w / 2, w / 2]) {
-    const b = new THREE.Mesh(new THREE.BoxGeometry(0.25, 0.25, d), trussMat);
-    b.position.set(dx, 9, 0);
+    const b = new THREE.Mesh(new THREE.BoxGeometry(trussThk, trussThk, d), trussMat);
+    b.position.set(dx, trussH, 0);
     g.add(b);
   }
   for (const dz of [-d / 2, d / 2]) {
-    const b = new THREE.Mesh(new THREE.BoxGeometry(w, 0.25, 0.25), trussMat);
-    b.position.set(0, 9, dz);
+    const b = new THREE.Mesh(new THREE.BoxGeometry(w, trussThk, trussThk), trussMat);
+    b.position.set(0, trussH, dz);
     g.add(b);
   }
 
   // Speaker stacks
-  for (const sx of [-w / 2 - 1, w / 2 + 1]) {
+  const spkW = 1.6 * scale;
+  const spkH = 1.4 * scale;
+  for (const sx of [-w / 2 - 1 * scale, w / 2 + 1 * scale]) {
     for (let sy = 0; sy < 3; sy++) {
       const spk = new THREE.Mesh(
-        new THREE.BoxGeometry(1.6, 1.4, 1.4),
+        new THREE.BoxGeometry(spkW, spkH, spkW),
         new THREE.MeshStandardMaterial({ color: 0x121212, roughness: 0.8, flatShading: true })
       );
-      spk.position.set(sx, 1.4 + sy * 1.45, -d / 2 + 1.2);
+      spk.position.set(sx, 1.4 * scale + sy * 1.45 * scale, -d / 2 + 1.2 * scale);
       spk.castShadow = true;
       g.add(spk);
     }
@@ -99,7 +107,7 @@ export function buildStage(opts = {}) {
       ? [0xff6f9c, 0xffd28a, 0xb285ff][Math.floor(rng() * 3)]
       : 0xffd28a;
     const lampLens = new THREE.Mesh(
-      new THREE.ConeGeometry(0.4, 0.6, 12, 1, true),
+      new THREE.ConeGeometry(0.4 * scale, 0.6 * scale, 12, 1, true),
       new THREE.MeshStandardMaterial({
         color: colorHex,
         emissive: colorHex,
@@ -109,7 +117,7 @@ export function buildStage(opts = {}) {
         opacity: 0.85,
       })
     );
-    lampLens.position.set(lx, 8.3, 0);
+    lampLens.position.set(lx, trussH - 0.7 * scale, 0);
     lampLens.rotation.x = Math.PI;
     g.add(lampLens);
     stageLights.push(lampLens);
@@ -120,6 +128,7 @@ export function buildStage(opts = {}) {
     deckWidth: w,
     deckDepth: d,
     deckHeight: h,
+    scale,
     frontZ: d / 2,           // local Z of the deck front edge (audience side)
     stageLights,
   };

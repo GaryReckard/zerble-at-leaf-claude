@@ -157,6 +157,30 @@ export class Lurleen {
       this.root.add(wheel);
       this._wheels.push({ mesh: wheel, baseY: 0.42, front: wz < 0 });
     }
+
+    // ----- Front bench seat — bench cushion + seatback, like Zerble's -----
+    // Chassis top sits at y=1.2 and is 2.0 wide × 3.0 deep. We tuck the bench
+    // into the front half (z = -0.6..-1.3 area, between the two front posts).
+    const seatMat = new THREE.MeshStandardMaterial({
+      // Muted purple/blue cushion — distinct from the chassis pink so the
+      // seat reads cleanly against the body.
+      color: 0x5b3a7a, roughness: 0.85, flatShading: true,
+    });
+    const seatCushion = new THREE.Mesh(
+      new THREE.BoxGeometry(1.7, 0.30, 0.85),
+      seatMat,
+    );
+    seatCushion.position.set(0, 1.40, -0.85);
+    seatCushion.castShadow = true;
+    this.root.add(seatCushion);
+
+    const seatBack = new THREE.Mesh(
+      new THREE.BoxGeometry(1.7, 0.80, 0.20),
+      seatMat,
+    );
+    seatBack.position.set(0, 1.85, -0.40);
+    seatBack.castShadow = true;
+    this.root.add(seatBack);
   }
 
   // ---------- Windshield — a clear plane between the front posts ----------
@@ -186,11 +210,16 @@ export class Lurleen {
     this._windshield = windshield;
   }
 
-  // ---------- Lips — plump pink pillow with a horizontal seam ----------
-  // Taller, fuller, more prominent than v1. Reference: large fabric/plush
-  // lips stretched across the windshield front.
+  // ---------- Lips — flat stuffed-fabric prop with cupid's bow ----------
+  // Per the real reference photo: lips are a fabric/plush prop slapped on
+  // the front, not anatomical 3D shapes. We build them with ShapeGeometry
+  // (2D silhouettes) extruded slightly into Z so they read as a thin
+  // pillow. Top lip has the cupid's bow dip in the middle; bottom lip is
+  // one big rounded pillow.
 
   _buildLips() {
+    // Pink prop color (restored from the previous Lurleen v2 — Gary asked
+    // me to keep the color, only update the shape).
     const lipMat = new THREE.MeshStandardMaterial({
       color: 0xff3580,
       emissive: 0xff1466,
@@ -199,28 +228,85 @@ export class Lurleen {
     });
 
     const lipGroup = new THREE.Group();
-    // Upper lobe + lower lobe stacked vertically gives the cupid's-bow shape.
-    const upper = new THREE.Mesh(new THREE.SphereGeometry(0.45, 22, 12), lipMat);
-    upper.scale.set(1.7, 0.55, 0.7);
-    upper.position.y = 0.18;
-    upper.castShadow = true;
-    lipGroup.add(upper);
 
-    const lower = new THREE.Mesh(new THREE.SphereGeometry(0.45, 22, 12), lipMat);
-    lower.scale.set(1.85, 0.65, 0.75);   // lower lip a bit bigger
-    lower.position.y = -0.20;
-    lower.castShadow = true;
-    lipGroup.add(lower);
+    // ---- TOP LIP ----
+    // Silhouette walks COUNTER-CLOCKWISE around the perimeter starting at
+    // the outer-left corner. The top edge has two bumps (the two halves of
+    // the cupid's bow) with a dip in the middle. The bottom edge is the
+    // gentle curve that meets the lower lip.
+    //
+    // Coordinate frame: x is horizontal mouth width, y is vertical (top
+    // lip lives entirely above y=0).
+    {
+      const w = 1.4;             // half-width of the mouth
+      const peakY = 0.45;        // height of the cupid's-bow peaks
+      const dipY = 0.18;         // dip between peaks (lower than peakY)
+      const top = new THREE.Shape();
+      top.moveTo(-w, 0);
+      // ----- Bottom edge (left → right) — gentle curve hugging the seam -----
+      top.bezierCurveTo(-w * 0.6, -0.04, w * 0.6, -0.04, w, 0);
+      // ----- Right outer slope going up to the right peak -----
+      top.bezierCurveTo(w * 0.9, peakY * 0.4, w * 0.6, peakY * 0.95, w * 0.45, peakY);
+      // ----- Down into the cupid's-bow dip at center -----
+      top.bezierCurveTo(w * 0.25, peakY * 0.85, w * 0.10, dipY, 0, dipY);
+      top.bezierCurveTo(-w * 0.10, dipY, -w * 0.25, peakY * 0.85, -w * 0.45, peakY);
+      // ----- Up & back out to the left corner -----
+      top.bezierCurveTo(-w * 0.6, peakY * 0.95, -w * 0.9, peakY * 0.4, -w, 0);
 
-    // Horizontal seam in the middle
-    const seam = new THREE.Mesh(
-      new THREE.BoxGeometry(1.55, 0.04, 0.06),
-      new THREE.MeshStandardMaterial({ color: 0x88112c, roughness: 0.9 }),
-    );
-    seam.position.set(0, 0, -0.45);
-    lipGroup.add(seam);
+      const topGeo = new THREE.ExtrudeGeometry(top, {
+        depth: 0.18,
+        bevelEnabled: true,
+        bevelSize: 0.04,
+        bevelThickness: 0.04,
+        bevelSegments: 2,
+        curveSegments: 16,
+      });
+      // Extrude pushes +Z; recenter so the prop sits flat against the bumper.
+      topGeo.translate(0, 0, -0.09);
+      const topMesh = new THREE.Mesh(topGeo, lipMat);
+      topMesh.position.y = 0.05;
+      topMesh.castShadow = true;
+      lipGroup.add(topMesh);
+    }
 
-    lipGroup.position.set(0, 1.10, -1.65);
+    // ---- BOTTOM LIP ----
+    // Wider, fuller, one continuous belly. Top edge mirrors the top lip's
+    // bottom (the seam) and the bottom edge is a deep rounded curve.
+    {
+      const w = 1.5;
+      const bellyY = -0.55;      // deepest point of the bottom curve
+      const bot = new THREE.Shape();
+      bot.moveTo(-w, 0);
+      // ----- Top edge — slight upward curve to meet the seam cleanly -----
+      bot.bezierCurveTo(-w * 0.55, 0.04, w * 0.55, 0.04, w, 0);
+      // ----- Right edge sweeping down + around the belly + up the left side -----
+      bot.bezierCurveTo(w * 0.95, bellyY * 0.35, w * 0.65, bellyY, 0, bellyY);
+      bot.bezierCurveTo(-w * 0.65, bellyY, -w * 0.95, bellyY * 0.35, -w, 0);
+
+      const botGeo = new THREE.ExtrudeGeometry(bot, {
+        depth: 0.22,
+        bevelEnabled: true,
+        bevelSize: 0.05,
+        bevelThickness: 0.05,
+        bevelSegments: 2,
+        curveSegments: 16,
+      });
+      botGeo.translate(0, 0, -0.11);
+      const botMesh = new THREE.Mesh(botGeo, lipMat);
+      botMesh.position.y = -0.05;
+      botMesh.castShadow = true;
+      lipGroup.add(botMesh);
+    }
+
+    // Stick the prop on the front bumper, facing forward (-Z = cart front).
+    // Slight scale-down so the prop reads as fabric stuck on the chassis,
+    // not a freestanding sculpture wider than the cart.
+    lipGroup.scale.setScalar(0.82);
+    lipGroup.position.set(0, 1.10, -1.55);
+    // ExtrudeGeometry's depth runs along +Z; rotating π around Y points the
+    // extruded face toward the viewer in front of the cart so the bevel /
+    // shading reads from the front rather than from the chassis side.
+    lipGroup.rotation.y = Math.PI;
     this.root.add(lipGroup);
   }
 
@@ -236,10 +322,15 @@ export class Lurleen {
       emissive: 0xffffff,
       emissiveIntensity: 0.10,
       roughness: 0.4,
+      // Double-sided so the back of the eye reads as a white circle when
+      // we drive up behind Lurleen — matches the real-cart reference where
+      // googly-eye stickers have plain white backs.
+      side: THREE.DoubleSide,
     });
     const ringMat = new THREE.MeshStandardMaterial({
       color: 0x111111,
       roughness: 0.7,
+      side: THREE.DoubleSide,
     });
     const pupilMat = new THREE.MeshStandardMaterial({
       color: 0x080808,
@@ -250,11 +341,12 @@ export class Lurleen {
     });
     const lashMat = new THREE.MeshStandardMaterial({ color: 0x111111, roughness: 0.9 });
 
-    // Per Gary's feedback: a tad smaller eyes than v2 and a bit closer
-    // together. Position them ON the windshield surface (z=-1.45 + tilt) so
-    // they read as actual stickers, not floating discs.
-    const eyeR = 0.38;     // sclera radius (was 0.50)
-    const eyeSep = 0.55;   // ±X (was 0.78 → closer together)
+    // Per Gary's feedback: eyes should sit much closer together. Halving
+    // center-to-center put them on top of each other; instead, halve the
+    // visible GAP between inner edges. Previous gap was ~0.34 → new ~0.17,
+    // which gives center separation of (gap/2 + eyeR) ≈ 0.46.
+    const eyeR = 0.38;
+    const eyeSep = 0.46;
     const eyeY = 2.55;     // sits on the upper half of the windshield
     // Windshield front face: z = -1.45 with a 0.08 forward tilt at top.
     // Stick eyes slightly in front of it so they sit on the surface visibly.
@@ -355,43 +447,114 @@ export class Lurleen {
       { x:  halfW, z: roofZ - halfD, normX:  1, normZ: -1 },    // back-right
     ];
 
+    // ----- Perimeter strands that arc DOWN toward the nearest corner tie -----
+    // Reference photo: hair comes down from along the ENTIRE roof edge, not
+    // just the corners. Each strand curves toward the nearest corner's hair
+    // tie about 1/3 of the way down, where it joins the bunch. From the tie
+    // on, the strand falls straight (the corner-bunch loop below handles
+    // the below-tie portion).
+    const arcStrandMat = (matRoll) =>
+      matRoll < 0.4 ? goldHair : matRoll < 0.75 ? brownHair : lightHair;
+    const tieDropY = 0.55;     // how far below the roof the tie sits
+    const arcEndOffset = 0.06; // small offset so the strand visually lands inside the tie
+
+    // Sample 22 points per edge — gives a dense fringe without being a
+    // performance hog. Halfway between two adjacent points on an edge, the
+    // strand picks whichever corner is closer (the boundary is the edge
+    // midpoint, which we deliberately don't sample exactly).
+    const edges = [
+      // front (z = roofZ + halfD), corners 0 and 1
+      { axis: 'x', from: -halfW, to: halfW, fixedZ: roofZ + halfD,
+        cornerA: corners[0], cornerB: corners[1] },
+      // back (z = roofZ - halfD), corners 2 and 3
+      { axis: 'x', from: halfW,  to: -halfW, fixedZ: roofZ - halfD,
+        cornerA: corners[3], cornerB: corners[2] },
+      // left (x = -halfW), corners 0 (front-left) and 2 (back-left)
+      { axis: 'z', from: roofZ + halfD, to: roofZ - halfD, fixedX: -halfW,
+        cornerA: corners[0], cornerB: corners[2] },
+      // right (x = halfW), corners 1 (front-right) and 3 (back-right)
+      { axis: 'z', from: roofZ + halfD, to: roofZ - halfD, fixedX: halfW,
+        cornerA: corners[1], cornerB: corners[3] },
+    ];
+
+    for (const edge of edges) {
+      const stranesPerEdge = 22;
+      for (let i = 0; i < stranesPerEdge; i++) {
+        // Offset i slightly so we don't sample exactly at the corner (the
+        // corner bunch covers that already).
+        const t = (i + 1) / (stranesPerEdge + 1);
+        let sx, sz;
+        if (edge.axis === 'x') {
+          sx = edge.from + (edge.to - edge.from) * t;
+          sz = edge.fixedZ;
+        } else {
+          sx = edge.fixedX;
+          sz = edge.from + (edge.to - edge.from) * t;
+        }
+        // Pick the nearest corner of the two endpoints of this edge.
+        const dA = Math.hypot(sx - edge.cornerA.x, sz - edge.cornerA.z);
+        const dB = Math.hypot(sx - edge.cornerB.x, sz - edge.cornerB.z);
+        const corner = dA < dB ? edge.cornerA : edge.cornerB;
+
+        // Build the arc as a CatmullRom curve from the origin point down to
+        // the tie position. Middle control point is pulled outward & down
+        // so the strand bows away from the roof before snapping back at the
+        // tie.
+        const startV = new THREE.Vector3(sx, hairTopY, sz);
+        const endV = new THREE.Vector3(corner.x, hairTopY - tieDropY + arcEndOffset, corner.z);
+        // Middle of the curve: halfway in XZ, plus a small outward bow.
+        const midX = (sx + corner.x) * 0.5 + corner.normX * 0.05;
+        const midZ = (sz + corner.z) * 0.5 + corner.normZ * 0.05;
+        const midY = hairTopY - tieDropY * 0.55;
+        const midV = new THREE.Vector3(midX, midY, midZ);
+
+        const curve = new THREE.CatmullRomCurve3([startV, midV, endV]);
+        const radius = 0.024 + Math.random() * 0.008;
+        const tubeGeo = new THREE.TubeGeometry(curve, 10, radius, 4, false);
+        const strand = new THREE.Mesh(tubeGeo, arcStrandMat(Math.random()));
+        strand.castShadow = true;
+        this.root.add(strand);
+      }
+    }
+
+    // Length of the straight-down portion of each bunch (after the tie).
+    const belowTieLen = hairLen - tieDropY;
     for (const c of corners) {
-      // Each corner has a "hair tie" gather (a small dark ring), then a fan
-      // of strands fanning out + hanging down.
+      // Each corner has a "hair tie" gather (a small colored ring) — the
+      // point where the perimeter arcs converge before the bunch falls
+      // straight down. The tie sits where the arcs end.
       const tieMat = new THREE.MeshStandardMaterial({
         color: 0x66d9ff, roughness: 0.5, flatShading: true,
       });
       const tie = new THREE.Mesh(
-        new THREE.TorusGeometry(0.10, 0.04, 6, 14),
+        new THREE.TorusGeometry(0.12, 0.05, 8, 16),
         tieMat,
       );
-      tie.position.set(c.x, hairTopY - 0.05, c.z);
+      const tieY = hairTopY - tieDropY;
+      tie.position.set(c.x, tieY, c.z);
       tie.rotation.x = Math.PI / 2;       // ring lies flat horizontally
       this.root.add(tie);
 
-      // Bunch of strands. Each strand starts at the tie and falls straight
-      // down with a tiny outward bias toward the corner's diagonal — that's
-      // the "draped over the edge" feel.
-      const strandsPerBunch = 90;
+      // Bunch of straight-down strands BELOW the tie — the ponytail tail.
+      const strandsPerBunch = 70;
       for (let i = 0; i < strandsPerBunch; i++) {
-        // Cluster radius ~0.18 around the tie's center
+        // Cluster radius ~0.14 around the tie's center
         const a = Math.random() * Math.PI * 2;
-        const r = Math.sqrt(Math.random()) * 0.18;
+        const r = Math.sqrt(Math.random()) * 0.14;
         const sx = c.x + Math.cos(a) * r;
         const sz = c.z + Math.sin(a) * r;
-        // Length jitter
-        const len = hairLen * (0.75 + Math.random() * 0.45);
+        // Length jitter — these fall the rest of the way to the chassis.
+        const len = belowTieLen * (0.85 + Math.random() * 0.30);
 
         const cone = new THREE.ConeGeometry(0.022, len, 5, 1);
         cone.translate(0, -len / 2, 0);       // anchor strand's top at origin
         const matRoll = Math.random();
         const mat = matRoll < 0.4 ? goldHair : matRoll < 0.75 ? brownHair : lightHair;
         const strand = new THREE.Mesh(cone, mat);
-        strand.position.set(sx, hairTopY, sz);
-        // Mostly straight down. Tilt slightly outward along the corner's
-        // diagonal so the bunch reads as a swept ponytail.
-        strand.rotation.x = c.normZ * 0.08 + (Math.random() - 0.5) * 0.12;
-        strand.rotation.z = -c.normX * 0.08 + (Math.random() - 0.5) * 0.12;
+        strand.position.set(sx, tieY, sz);
+        // Mostly straight down, tiny outward bias toward the diagonal.
+        strand.rotation.x = c.normZ * 0.06 + (Math.random() - 0.5) * 0.10;
+        strand.rotation.z = -c.normX * 0.06 + (Math.random() - 0.5) * 0.10;
         strand.castShadow = true;
         this.root.add(strand);
       }

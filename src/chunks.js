@@ -21,7 +21,7 @@ import { Sound } from './sound.js';
 import { PERF } from './perf.js';
 import { chunkOverlapsLake, chunkInLake } from './lakes.js';
 import { buildTent } from './models/tent.js';
-import { buildFoodTruck } from './models/foodTruck.js';
+import { buildFoodTruck, FOOD_TRUCK_SCALE } from './models/foodTruck.js';
 import { buildHammock as buildHammockModel } from './models/hammock.js';
 import { buildEntranceArch as buildEntranceArchModel } from './models/entranceArch.js';
 import { buildStage as buildStageModel, placeBandOnStage } from './models/stage.js';
@@ -218,25 +218,29 @@ function pickTheme(cx, cz) {
   const rng = mulberry32(hash2(cx, cz, 1));
   const r = rng();
 
+  // INNER ring (chunks immediately around the main stage): keep this band
+  // light on stages so spawn doesn't feel cluttered with concert decks. The
+  // main stage already lives at (0,0) — neighbors should be food/vendors
+  // and ambient lawn, with at most an occasional smaller stage.
   if (dist <= 1.5) {
-    if (r < 0.18) return 'tent_stage';     // ~18% near origin
-    if (r < 0.40) return 'side_stage';
-    if (r < 0.58) return 'food_plaza';
-    if (r < 0.80) return 'vendor_row';
-    if (r < 0.92) return 'drum_circle';
-    return 'grove';
+    if (r < 0.05) return 'tent_stage';     // rare
+    if (r < 0.12) return 'side_stage';     // was 35% → 7%
+    if (r < 0.35) return 'food_plaza';
+    if (r < 0.65) return 'vendor_row';
+    if (r < 0.80) return 'drum_circle';
+    if (r < 0.92) return 'grove';
+    return 'open_lawn';
   }
   if (dist <= 3.5) {
-    if (r < 0.10) return 'tent_stage';
-    if (r < 0.25) return 'side_stage';
-    if (r < 0.40) return 'food_plaza';
+    if (r < 0.08) return 'tent_stage';
+    if (r < 0.18) return 'side_stage';     // was 25% → 10%
+    if (r < 0.36) return 'food_plaza';
     if (r < 0.58) return 'vendor_row';
     if (r < 0.72) return 'drum_circle';
     if (r < 0.90) return 'grove';
     return 'open_lawn';
   }
-  // Outer rings — keep stages + food plazas discoverable far from spawn so
-  // exploration always finds new POIs.
+  // Outer rings — keep stages discoverable far from spawn.
   if (r < 0.05) return 'tent_stage';
   if (r < 0.13) return 'side_stage';
   if (r < 0.23) return 'food_plaza';
@@ -563,11 +567,13 @@ function buildTentStageTheme(ctx) {
 }
 
 function buildFoodPlaza(ctx) {
-  // 3-5 food trucks arranged around a central area
+  // 3-5 food trucks arranged around a central area. Trucks are scaled up
+  // visually (FOOD_TRUCK_SCALE) — push the ring outward + scale colliders to
+  // match so we don't end up parked-on-truck-roof.
   const count = 3 + Math.floor(ctx.rng() * 3);
   const centerX = ctx.cxWorld;
   const centerZ = ctx.czWorld;
-  const ring = 14;
+  const ring = 14 * FOOD_TRUCK_SCALE;
   for (let i = 0; i < count; i++) {
     const ang = (i / count) * Math.PI * 2 + ctx.rng() * 0.4;
     const x = centerX + Math.cos(ang) * ring;
@@ -579,21 +585,23 @@ function buildFoodPlaza(ctx) {
 
     registry.add({
       kind: 'truck',
-      position: new THREE.Vector3(x, 1.5, z),
-      footprint: 4.4,
-      collider: { radius: 3.6, damage: 12 },
-      attractor: { radius: 8, weight: 1.2 },
+      position: new THREE.Vector3(x, 1.5 * FOOD_TRUCK_SCALE, z),
+      footprint: 4.4 * FOOD_TRUCK_SCALE,
+      collider: { radius: 3.6 * FOOD_TRUCK_SCALE, damage: 12 },
+      attractor: { radius: 8 * FOOD_TRUCK_SCALE, weight: 1.2 },
       chunkKey: ctx.key,
     });
   }
 }
 
 function buildVendorRow(ctx) {
-  // Two parallel rows of tents along one axis
+  // Two parallel rows of tents along one axis. Tent canopies are ~3.2m
+  // radius; tight spacing (~5m) keeps adjacent canopies nearly touching so
+  // the row reads as a real market stall lineup, not isolated tents.
   const axisH = ctx.rng() < 0.5;
-  const count = 4 + Math.floor(ctx.rng() * 3);
-  const spacing = 9;
-  const rowOffset = 8;
+  const count = 5 + Math.floor(ctx.rng() * 3);
+  const spacing = 5.0;
+  const rowOffset = 7;
   for (let i = 0; i < count; i++) {
     for (const side of [-1, 1]) {
       const t = i - (count - 1) / 2;
@@ -719,8 +727,14 @@ function buildOpenLawn(ctx) {
 
 function buildStage(ctx, x, z, isMain) {
   // ----- Visual model — the deck, banner, truss, speakers, lights -----
+  // Per-stage scale gives the festival real variety. Main stage gets a
+  // mild boost (1.15-1.4) because it anchors spawn; side stages range from
+  // 1.0 to 1.5x for more obvious differences.
+  const scale = isMain
+    ? 1.15 + ctx.rng() * 0.25
+    : 1.0 + ctx.rng() * 0.5;
   const leafTex = isMain ? leafBannerTextures('#fff4d0', '#6fcf6a', '#ffd28a') : null;
-  const stage = buildStageModel({ isMain, leafTexture: leafTex, rng: ctx.rng });
+  const stage = buildStageModel({ isMain, leafTexture: leafTex, rng: ctx.rng, scale });
   stage.group.position.set(x, 0, z);
   // Match the original orientation: the front (banner side) faces -Z so the
   // crowd attractor in +Z is "in front" of the stage.
@@ -735,17 +749,15 @@ function buildStage(ctx, x, z, isMain) {
   }
 
   // ----- Colliders: spheres INSCRIBED in the deck rectangle -----
-  // Previously: spheres at the deck corners with radius 3 extended ~3m past
-  // the visible deck edge — Zerble would "hit" empty grass beside the stage.
-  // Now: sphere centers are pulled in by `sphereR` so the union of spheres
-  // matches the deck outline exactly, with overlap inside.
-  const sphereR = 2.5;
+  // Sphere radius scales with the stage so larger stages have proportionally
+  // larger spheres (still inscribed, never extending past the visible deck).
+  const sphereR = 2.5 * scale;
   const collDamage = isMain ? 14 : 9;
   const innerW = Math.max(0.001, w - sphereR * 2);
   const innerD = Math.max(0.001, d - sphereR * 2);
-  // Use spacing of ~3.5m so spheres overlap (radius 2.5 → 5m diameter, 1.5m overlap).
-  const cols = Math.max(2, Math.ceil(innerW / 3.5) + 1);
-  const rows = Math.max(2, Math.ceil(innerD / 3.5) + 1);
+  // Use spacing of ~3.5m * scale so spheres overlap on bigger stages too.
+  const cols = Math.max(2, Math.ceil(innerW / (3.5 * scale)) + 1);
+  const rows = Math.max(2, Math.ceil(innerD / (3.5 * scale)) + 1);
   for (let cc = 0; cc < cols; cc++) {
     for (let rr = 0; rr < rows; rr++) {
       const lx = -innerW / 2 + (cc / (cols - 1)) * innerW;
@@ -760,12 +772,12 @@ function buildStage(ctx, x, z, isMain) {
     }
   }
 
-  // Attractor in front of the stage so crowds gather there
+  // Attractor in front of the stage so crowds gather there (scaled too).
   registry.add({
     kind: 'stage_front',
-    position: new THREE.Vector3(x, 0, z + d / 2 + 6),
+    position: new THREE.Vector3(x, 0, z + d / 2 + 6 * scale),
     footprint: 0,
-    attractor: { radius: 14, weight: isMain ? 3.5 : 2.0 },
+    attractor: { radius: 14 * scale, weight: isMain ? 3.5 : 2.0 },
     chunkKey: ctx.key,
   });
 

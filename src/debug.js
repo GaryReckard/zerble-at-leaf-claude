@@ -108,16 +108,66 @@ function buildPanel() {
     zIndex: '999',
     font: '11px/1.35 ui-monospace, Menlo, monospace',
     color: '#dff',
-    background: 'rgba(8, 18, 28, 0.78)',
+    background: 'rgba(8, 18, 28, 0.85)',
     padding: '8px 10px',
     borderRadius: '6px',
     border: '1px solid #2a4a5a',
-    maxWidth: '260px',
-    whiteSpace: 'pre',
-    pointerEvents: 'none',
+    maxWidth: '280px',
+    pointerEvents: 'auto',  // need clicks for the sliders
     display: 'none',
   });
+
+  // Text readout (pre-formatted)
+  const text = document.createElement('div');
+  text.style.whiteSpace = 'pre';
+  el.appendChild(text);
+  state.textEl = text;
+
+  // ----- Time-of-day controls -----
+  // A horizontal slider 0..1 maps to TimeOfDay.t. Three preset shortcut
+  // buttons jump to common times.
+  const todBlock = document.createElement('div');
+  todBlock.style.marginTop = '8px';
+  todBlock.style.borderTop = '1px solid #2a4a5a';
+  todBlock.style.paddingTop = '6px';
+  todBlock.innerHTML = `
+    <div style="margin-bottom:4px;opacity:0.7">Time of day <span id="dbg-tod-readout" style="float:right"></span></div>
+    <input id="dbg-tod-slider" type="range" min="0" max="1" step="0.001" value="0.15"
+      style="width:100%;accent-color:#ffe066;cursor:pointer" />
+    <div style="display:flex;gap:4px;margin-top:6px">
+      <button data-t="0.10" class="dbg-tod-preset">Morning</button>
+      <button data-t="0.30" class="dbg-tod-preset">Noon</button>
+      <button data-t="0.50" class="dbg-tod-preset">Dusk</button>
+      <button data-t="0.75" class="dbg-tod-preset">Midnight</button>
+    </div>
+  `;
+  el.appendChild(todBlock);
+
   document.body.appendChild(el);
+
+  // Wire slider + buttons to the timeOfDay hook (which may be null until
+  // world.js finishes booting — getTimeOfDay() resolves lazily).
+  const slider = todBlock.querySelector('#dbg-tod-slider');
+  const readout = todBlock.querySelector('#dbg-tod-readout');
+  state.todSlider = slider;
+  state.todReadout = readout;
+  slider.addEventListener('input', () => {
+    const tod = state.hooks.getTimeOfDay && state.hooks.getTimeOfDay();
+    if (tod) tod.setT(parseFloat(slider.value));
+  });
+  for (const btn of todBlock.querySelectorAll('.dbg-tod-preset')) {
+    Object.assign(btn.style, {
+      flex: '1', font: 'inherit', padding: '3px 4px', cursor: 'pointer',
+      background: 'rgba(255,224,102,0.15)', color: 'inherit',
+      border: '1px solid rgba(255,224,102,0.4)', borderRadius: '4px',
+    });
+    btn.addEventListener('click', () => {
+      const t = parseFloat(btn.dataset.t);
+      const tod = state.hooks.getTimeOfDay && state.hooks.getTimeOfDay();
+      if (tod) { tod.setT(t); slider.value = t; }
+    });
+  }
+
   state.panelEl = el;
 }
 
@@ -157,7 +207,12 @@ function updatePanel(dt) {
   const colliderCount = [...h.registry.colliders()].length;
   const running = h.getRunning();
 
-  state.panelEl.textContent =
+  const tod = h.getTimeOfDay && h.getTimeOfDay();
+  const todStr = tod
+    ? `t=${tod.t.toFixed(2)} night=${tod.nightness.toFixed(2)}`
+    : 'n/a';
+
+  state.textEl.textContent =
     `~ debug (P pause · . step · C colliders · G god · F freeze)\n` +
     `fps          ${fps}    ${state.paused ? '[PAUSED]' : ''}\n` +
     `running      ${running}\n` +
@@ -166,7 +221,15 @@ function updatePanel(dt) {
     `chunk        (${cx}, ${cz})\n` +
     `npcs         ${npcs}  riding ${riders}  watch ${watching}  flee ${fleeing}\n` +
     `registry     ${registryCount}  colliders ${colliderCount}\n` +
+    `time of day  ${todStr}\n` +
     `flags        god=${state.god} freezeNPCs=${state.freezeNPCs} colliderViz=${state.showColliders}`;
+
+  // Keep the slider in sync if t advances naturally — but don't fight the
+  // user mid-drag.
+  if (tod && state.todSlider && document.activeElement !== state.todSlider) {
+    state.todSlider.value = String(tod.t);
+    if (state.todReadout) state.todReadout.textContent = todStr;
+  }
 }
 
 let _colliderGroup = null;

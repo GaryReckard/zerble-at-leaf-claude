@@ -12,8 +12,23 @@ import { buildParasolMarshal } from './models/parasolMarshal.js';
 import { buildKid } from './models/kid.js';
 import { buildWook } from './models/wook.js';
 import { Sound } from './sound.js';
+import { projectOutOfLake } from './lakes.js';
+import { registry } from './registry.js';
 
 const TAU = Math.PI * 2;
+
+// Walk an array of Vector3 path points and push any that land inside a lake
+// out to the shoreline. Mutates the array in place. Called from the parade
+// constructors so the visible march never wanders onto water.
+function avoidLakes(path) {
+  for (let i = 0; i < path.length; i++) {
+    const fixed = projectOutOfLake(path[i].x, path[i].z, 3.0);
+    if (fixed) {
+      path[i].x = fixed.x;
+      path[i].z = fixed.z;
+    }
+  }
+}
 
 // =================================================================
 // PUPPET PARADE  — the Street Creature Puppet Collective
@@ -24,7 +39,8 @@ export class PuppetParade {
     this.group = new THREE.Group();
     this.group.name = 'PuppetParade';
 
-    // A patrol path that loops through the festival center.
+    // A patrol path that loops through the festival center. Project out of
+    // any lake footprints so the parade doesn't walk on water.
     this.path = [
       new THREE.Vector3(-70, 0, -10),
       new THREE.Vector3(-30, 0, 20),
@@ -34,6 +50,7 @@ export class PuppetParade {
       new THREE.Vector3(-20, 0, -50),
       new THREE.Vector3(-60, 0, -30),
     ];
+    avoidLakes(this.path);
     this.speed = 2.4;
 
     this.puppets = [];
@@ -100,6 +117,7 @@ export class BrassBand {
       new THREE.Vector3(60, 0, 30),
       new THREE.Vector3(85, 0, 50),
     ];
+    avoidLakes(this.path);
     this.speed = 1.8;
 
     this.members = [];
@@ -296,6 +314,12 @@ export class KidGaggle {
         }
       }
 
+      // ---- Respect hard colliders (stages, food trucks, tents, etc.) ----
+      // Push the kid radially out of any collider they overlap. Also nudge
+      // their heading away so they don't keep marching into the same wall
+      // every frame. Kid radius treated as 0.4m for the overlap check.
+      pushOutOfHardColliders(k, 0.4);
+
       k.rotation.y = k.userData.heading;
 
       // Lil hop — bouncier when chasing a bubble (they're excited)
@@ -305,6 +329,32 @@ export class KidGaggle {
 
       this.colliders[i].position.copy(k.position);
       this.colliders[i].position.y = 0.6;
+    }
+  }
+}
+
+// Push a kid (or any small object with .position + .userData.heading) out
+// of every registry collider it currently overlaps. Mutates position +
+// flips heading so the next step isn't right back into the wall.
+function pushOutOfHardColliders(obj, kidRadius) {
+  for (const c of registry.colliders()) {
+    const dx = obj.position.x - c.position.x;
+    const dz = obj.position.z - c.position.z;
+    const minD = c.radius + kidRadius;
+    const d2 = dx * dx + dz * dz;
+    if (d2 >= minD * minD) continue;
+    const d = Math.sqrt(d2) || 0.001;
+    const inv = 1 / d;
+    // Hard-resolve the overlap so the kid is exactly outside the radius.
+    const overlap = minD - d;
+    obj.position.x += dx * inv * overlap;
+    obj.position.z += dz * inv * overlap;
+    // Aim their next step outward + jitter so they don't stutter against
+    // the surface.
+    if (obj.userData) {
+      obj.userData.heading = Math.atan2(dx * inv, -dz * inv)
+        + (Math.random() - 0.5) * 0.6;
+      obj.userData.turnTimer = 0.3 + Math.random() * 0.4;
     }
   }
 }

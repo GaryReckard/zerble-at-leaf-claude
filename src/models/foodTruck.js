@@ -3,6 +3,11 @@
 
 import * as THREE from 'three';
 
+// Trucks read as too dainty next to Zerble — bump them up so they feel like
+// proper rigs you have to drive around, not toy cars. Caller-side colliders
+// (chunks.js) scale to match.
+export const FOOD_TRUCK_SCALE = 1.7;
+
 export function buildFoodTruck(rng = Math.random) {
   const g = new THREE.Group();
 
@@ -60,5 +65,7 @@ export function buildFoodTruck(rng = Math.random) {
   sign.rotation.x = -0.15;
   g.add(sign);
 
+  // Uniform scale so all interior offsets stay correct.
+  g.scale.setScalar(FOOD_TRUCK_SCALE);
   return g;
 }

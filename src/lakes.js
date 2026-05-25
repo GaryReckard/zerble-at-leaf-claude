@@ -432,3 +432,29 @@ export function chunkInLake(cxWorld, czWorld) {
   }
   return false;
 }
+
+// If (x, z) is inside any lake's footprint, return the projected point on
+// the shoreline (just outside the radius by `margin`). Otherwise null.
+// Used by moving entities (brass band, puppet parade) to keep their paths
+// from walking on water.
+import { Vector3 } from 'three';
+export function projectOutOfLake(x, z, margin = 2.5) {
+  for (const e of registry.entries.values()) {
+    if (e.kind !== 'lake' || !e.footprint) continue;
+    const dx = x - e.position.x;
+    const dz = z - e.position.z;
+    const d = Math.hypot(dx, dz);
+    if (d < e.footprint) {
+      // Push outward along the radial; if the point is exactly at the
+      // center pick an arbitrary axis so we don't divide by zero.
+      const inv = d > 0.01 ? 1 / d : 1;
+      const target = e.footprint + margin;
+      return new Vector3(
+        e.position.x + (d > 0.01 ? dx * inv : 1) * target,
+        0,
+        e.position.z + (d > 0.01 ? dz * inv : 0) * target,
+      );
+    }
+  }
+  return null;
+}

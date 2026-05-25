@@ -384,6 +384,7 @@ installDebug({
   zerble, crowd, bubbles, smiles, registry,
   puppets, band, kids, wooks,
   getRunning: () => running,
+  getTimeOfDay,
 });
 
 tick();

@@ -124,6 +124,23 @@ function buildPanel() {
   el.appendChild(text);
   state.textEl = text;
 
+  // ----- Keybindings cheat sheet -----
+  const helpBlock = document.createElement('div');
+  helpBlock.style.marginTop = '8px';
+  helpBlock.style.borderTop = '1px solid #2a4a5a';
+  helpBlock.style.paddingTop = '6px';
+  helpBlock.style.fontSize = '11px';
+  helpBlock.style.lineHeight = '1.5';
+  helpBlock.innerHTML = `
+    <div style="margin-bottom:4px;opacity:0.7">Controls</div>
+    <div><b>W A S D</b> drive · <b>Shift</b> boost · <b>Space</b> honk</div>
+    <div><b>← ↑ ↓ →</b> orbit/tilt camera</div>
+    <div><b>V</b> first-person / chase view</div>
+    <div><b>I</b> / <b>O</b> eye glow brighter / dimmer</div>
+    <div><b>\`</b> toggle this debug panel</div>
+  `;
+  el.appendChild(helpBlock);
+
   // ----- Time-of-day controls -----
   // A horizontal slider 0..1 maps to TimeOfDay.t. Three preset shortcut
   // buttons jump to common times.

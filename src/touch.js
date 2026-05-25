@@ -255,7 +255,7 @@ function onCanvasStart(e) {
   // Pick the first changedTouch — ignore if it landed on a control element.
   const t = e.changedTouches[0];
   const target = t.target;
-  if (target && (target.closest('#stick-base') || target.closest('#btn-honk') || target.closest('#btn-boost'))) {
+  if (target && (target.closest('#stick-base') || target.closest('#btn-honk') || target.closest('#btn-boost') || target.closest('#btn-cam'))) {
     return;
   }
   e.preventDefault();

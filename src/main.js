@@ -97,6 +97,18 @@ scene.add(wooks.group);
 // ---------- Camera ----------
 const chaseCam = new ChaseCamera(camera, zerble);
 
+// Touch + mouse cam toggle button — same as pressing V.
+const btnCam = document.getElementById('btn-cam');
+if (btnCam) {
+  const toggle = (e) => {
+    e.preventDefault();
+    chaseCam.toggleMode();
+    HUD.toast(chaseCam.mode === 'first' ? 'First-person view' : 'Chase view', 1500);
+  };
+  btnCam.addEventListener('click', toggle);
+  btnCam.addEventListener('touchstart', toggle, { passive: false });
+}
+
 // ---------- Honk ring ----------
 const honkRing = new THREE.Mesh(
   new THREE.RingGeometry(0.5, 0.55, 48),
@@ -176,6 +188,12 @@ function tickBody(dt) {
       honkAge = 0;
       crowd.applyHonk(zerble);
       Sound.playHonk();
+    }
+
+    // V toggles first-person view from Zerble's eyes.
+    if (Input.consumePressed('V')) {
+      chaseCam.toggleMode();
+      HUD.toast(chaseCam.mode === 'first' ? 'First-person view (V to exit)' : 'Chase view', 1500);
     }
 
     bubbles.update(dt, zerble, nightness);

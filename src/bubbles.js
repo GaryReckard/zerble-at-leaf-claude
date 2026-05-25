@@ -2,8 +2,8 @@
 
 import * as THREE from 'three';
 
-const MAX_BUBBLES = 120;
-const SPAWN_PER_SEC = 26;
+const MAX_BUBBLES = 200;
+const SPAWN_PER_SEC = 40;
 const GRAVITY = -0.45;
 const BUOYANCY = 1.0;
 const LIFETIME = 22;     // ~2.75x the original 8s — bubbles linger long enough to feel like a trail
@@ -103,7 +103,7 @@ export class Bubbles {
     _windT += dt;
     // Spawn rate scales with cart speed — at rest, slow ambient drip; moving, full stream.
     const speed = Math.abs(zerble.speed);
-    const rate = SPAWN_PER_SEC * (0.25 + Math.min(1, speed / 8) * 0.75);
+    const rate = SPAWN_PER_SEC * (0.55 + Math.min(1, speed / 8) * 0.45);
     this._spawnAcc += rate * dt;
 
     while (this._spawnAcc >= 1) {

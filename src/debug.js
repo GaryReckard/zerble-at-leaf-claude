@@ -442,17 +442,44 @@ function buildTripPanel() {
   }
   el.appendChild(presetsRow);
 
-  // Fire button
+  // Action buttons — FIRE TRIP / DYNAMIC TRIP / COME DOWN
+  const fireRow = document.createElement('div');
+  fireRow.style.cssText = 'display:flex;gap:4px;margin-bottom:6px;';
+
   const fireBtn = document.createElement('button');
   fireBtn.textContent = 'FIRE TRIP';
   Object.assign(fireBtn.style, {
-    width: '100%', font: 'inherit', padding: '4px 6px', cursor: 'pointer',
+    flex: '1', font: 'inherit', padding: '4px 6px', cursor: 'pointer',
     background: 'rgba(255,100,100,0.25)', color: '#fdd',
     border: '1px solid rgba(255,100,100,0.5)', borderRadius: '4px',
-    marginBottom: '6px',
   });
   fireBtn.addEventListener('click', () => Trip.trigger());
-  el.appendChild(fireBtn);
+  fireRow.appendChild(fireBtn);
+
+  const dynamicBtn = document.createElement('button');
+  dynamicBtn.textContent = 'DYNAMIC TRIP';
+  Object.assign(dynamicBtn.style, {
+    flex: '1', font: 'inherit', padding: '4px 6px', cursor: 'pointer',
+    background: 'rgba(200,100,255,0.25)', color: '#fdf',
+    border: '1px solid rgba(200,100,255,0.5)', borderRadius: '4px',
+  });
+  dynamicBtn.title = "Scripted per-effect timelines — this is what the wook does";
+  dynamicBtn.addEventListener('click', () => Trip.triggerDynamic());
+  fireRow.appendChild(dynamicBtn);
+
+  el.appendChild(fireRow);
+
+  const comeDownBtn = document.createElement('button');
+  comeDownBtn.textContent = 'COME DOWN';
+  Object.assign(comeDownBtn.style, {
+    width: '100%', font: 'inherit', padding: '4px 6px',
+    background: 'rgba(80,180,180,0.18)', color: '#bdf',
+    border: '1px solid rgba(80,180,180,0.4)', borderRadius: '4px',
+    marginBottom: '6px',
+  });
+  comeDownBtn.addEventListener('click', () => Trip.comeDown());
+  el.appendChild(comeDownBtn);
+  state.tripComeDownBtn = comeDownBtn;
 
   // ---- Timing sliders ----
   el.appendChild(divider());
@@ -485,7 +512,6 @@ function buildTripPanel() {
     { key: 'uvRipple',            label: 'UV ripple'           },
     { key: 'chromaticAberration', label: 'Chromatic aber.'     },
     { key: 'lensDistortion',      label: 'Lens distortion'     },
-    { key: 'kaleidoscope',        label: 'Kaleidoscope'        },
     { key: 'posterize',           label: 'Posterize'           },
     { key: 'vignettePulse',       label: 'Vignette pulse'      },
     { key: 'brightnessPulse',     label: 'Brightness pulse'    },
@@ -548,9 +574,31 @@ function updateTripPanel() {
   if (!Trip || !state.tripStateEl) return;
   const dist = Trip._nearestWookDist;
   const distStr = (dist !== undefined && dist < Infinity) ? dist.toFixed(1) + 'm' : '—';
+  const mode = Trip.dynamic ? 'DYNAMIC' : 'static ';
   state.tripStateEl.textContent =
-    `state: ${Trip.state.padEnd(11)} env: ${Trip._envelope.toFixed(2)}\n` +
+    `state: ${Trip.state.padEnd(11)} env: ${Trip._envelope.toFixed(2)}  ${mode}\n` +
     `wook: ${distStr}  prox-timer: ${Trip._proximityTimer.toFixed(1)}s`;
+
+  // Come Down button only active during fading_in / sustaining.
+  const cd = state.tripComeDownBtn;
+  if (cd) {
+    const canComeDown = Trip.state === 'fading_in' || Trip.state === 'sustaining';
+    cd.disabled = !canComeDown;
+    cd.style.cursor = canComeDown ? 'pointer' : 'not-allowed';
+    cd.style.opacity = canComeDown ? '1' : '0.4';
+  }
+
+  // While Dynamic mode is driving a trip, mirror the live values into the
+  // sliders so the user can SEE the scripted timeline animating.
+  if (Trip.dynamic && Trip.isActive() && Trip.live) {
+    for (const [key, s] of Object.entries(state.tripSliders)) {
+      if (key in Trip.live) {
+        const v = Trip.live[key];
+        s.input.value = v;
+        s.readout.textContent = v.toFixed(2);
+      }
+    }
+  }
 }
 
 function logToast(msg) {

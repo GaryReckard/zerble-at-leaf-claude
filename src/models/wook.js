@@ -95,30 +95,38 @@ export function buildWook(rng = Math.random) {
     wookGroup.add(tuft);
   }
 
-  // Thick dreadlocks — chunky multi-segment cylinders with knobby joints
+  // Thick dreadlocks — emerge from the back hemisphere of the head only
+  // (sides + back, never the face). Roots sit high on the scalp; segments
+  // droop down + slightly outward. Wook faces -z, so the back of the head is
+  // +z. We distribute ang across [0, π] which covers right side (ang=0) →
+  // back (ang=π/2) → left side (ang=π). The front wedge gets no dreads.
   const hairColor = 0x5a3a1a;
   const dreadMat = new THREE.MeshStandardMaterial({ color: hairColor, roughness: 1, flatShading: true });
   const dreadHighlightMat = new THREE.MeshStandardMaterial({
     color: 0x7a5630, roughness: 1, flatShading: true,
   });
-  const dreadCount = 10;
+  const dreadCount = 14;
   for (let i = 0; i < dreadCount; i++) {
-    const ang = (i / dreadCount) * TAU + (rng() - 0.5) * 0.25;
-    const back = Math.cos(ang) < 0;
-    const len = back ? 1.4 + rng() * 0.5 : 0.9 + rng() * 0.5;
+    // Map index across the back hemisphere [0, π], small jitter
+    const ang = (i / (dreadCount - 1)) * Math.PI + (rng() - 0.5) * 0.18;
+    // Sin(ang) is max at the back (π/2), zero at the sides — longer dreads
+    // hang down the back, shorter ones tuft out the sides.
+    const backness = Math.max(0, Math.sin(ang));
+    const len = 0.9 + backness * 0.7 + rng() * 0.3;
     const segments = 4 + Math.floor(rng() * 2);
     const segLen = len / segments;
 
-    const baseAng = ang;
+    // Base on the back of the scalp — radius 0.28 (just inside head r=0.30)
+    // and y=2.30 (upper hemisphere of head centered at y=2.15).
     const baseR = 0.28;
-    const baseX = Math.cos(baseAng) * baseR;
-    const baseZ = Math.sin(baseAng) * baseR;
-    const droopX = baseX * 0.15;
-    const droopZ = baseZ * 0.15;
+    const baseX = Math.cos(ang) * baseR;
+    const baseZ = Math.sin(ang) * baseR;
+    const droopX = baseX * 0.10;
+    const droopZ = baseZ * 0.10;
 
     let prevX = baseX;
     let prevZ = baseZ;
-    let yTop = 2.05;
+    let yTop = 2.30;
     for (let s = 0; s < segments; s++) {
       const sX = baseX + droopX * (s + 1);
       const sZ = baseZ + droopZ * (s + 1);

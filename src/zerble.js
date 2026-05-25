@@ -891,7 +891,9 @@ export class Zerble {
     let targetEyeLevel = this.eyeGlowLevel;
     if (Input.isDown('I')) targetEyeLevel = 1.0;
     else if (Input.isDown('O')) targetEyeLevel = 0.0;
-    const eyeStep = 0.65 * dt;
+    // Hold I/O for ~0.5s to traverse the full 0..1 range. Was 0.65/s
+    // (~1.5s full traversal) which felt sluggish to Gary.
+    const eyeStep = 2.0 * dt;
     if (this.eyeGlowLevel < targetEyeLevel) {
       this.eyeGlowLevel = Math.min(targetEyeLevel, this.eyeGlowLevel + eyeStep);
     } else if (this.eyeGlowLevel > targetEyeLevel) {

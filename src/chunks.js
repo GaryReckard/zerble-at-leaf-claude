@@ -19,6 +19,7 @@ import { registry } from './registry.js';
 import { hash2, mulberry32 } from './rng.js';
 import { Sound } from './sound.js';
 import { PERF } from './perf.js';
+import { chunkOverlapsLake } from './lakes.js';
 
 export const CHUNK_SIZE = 80;
 const LOAD_RADIUS = PERF.chunkLoadRadius;   // mobile: 1 (3x3), desktop: 2 (5x5)
@@ -158,27 +159,24 @@ function pickTheme(cx, cz) {
   const r = rng();
 
   if (dist <= 1.5) {
-    if (r < 0.32) return 'side_stage';
-    if (r < 0.50) return 'food_plaza';
-    if (r < 0.72) return 'vendor_row';
-    if (r < 0.84) return 'drum_circle';
-    if (r < 0.90) return 'lake';     // 6% near center — rare but possible
+    if (r < 0.35) return 'side_stage';
+    if (r < 0.55) return 'food_plaza';
+    if (r < 0.80) return 'vendor_row';
+    if (r < 0.92) return 'drum_circle';
     return 'grove';
   }
   if (dist <= 3.5) {
-    if (r < 0.18) return 'side_stage';
-    if (r < 0.32) return 'food_plaza';
-    if (r < 0.50) return 'vendor_row';
-    if (r < 0.62) return 'drum_circle';
-    if (r < 0.76) return 'lake';     // 14% mid ring
+    if (r < 0.20) return 'side_stage';
+    if (r < 0.35) return 'food_plaza';
+    if (r < 0.55) return 'vendor_row';
+    if (r < 0.70) return 'drum_circle';
     if (r < 0.90) return 'grove';
     return 'open_lawn';
   }
   // Outer rings — peaceful
   if (r < 0.10) return 'drum_circle';
-  if (r < 0.28) return 'vendor_row';
-  if (r < 0.45) return 'lake';       // 17% outer
-  if (r < 0.70) return 'grove';
+  if (r < 0.30) return 'vendor_row';
+  if (r < 0.65) return 'grove';
   return 'open_lawn';
 }
 
@@ -190,7 +188,6 @@ const THEME_PROPS = {
   drum_circle: { treeDensity: 0.4,  ambientCrowd: 12 },
   grove:       { treeDensity: 1.0,  ambientCrowd: 7 },
   open_lawn:   { treeDensity: 0.2,  ambientCrowd: 8 },
-  lake:        { treeDensity: 0.35, ambientCrowd: 5 },  // a few people lounging at the shore
 };
 
 const THEME_BUILDERS = {
@@ -201,7 +198,6 @@ const THEME_BUILDERS = {
   drum_circle: buildDrumCircle,
   grove: buildGrove,
   open_lawn: buildOpenLawn,
-  lake: buildLake,
 };
 
 // ---------- Path placement ----------
@@ -212,8 +208,9 @@ function placePaths(ctx) {
   // so they don't read as a perfect grid. Each chunk's wiggle is seeded by
   // (cx, cz) so it's deterministic + consistent on reload.
   //
-  // Lake-themed chunks skip paths entirely — the causeway IS the path.
-  if (ctx.theme === 'lake') return;
+  // Skip paths if any lake intersects this chunk — water has its own causeway
+  // and we don't want paths submerging into the lake.
+  if (chunkOverlapsLake(ctx.cxWorld, ctx.czWorld, CHUNK_SIZE / 2)) return;
 
   const pathColor = 0xb89570;
   const mat = new THREE.MeshStandardMaterial({
@@ -562,189 +559,6 @@ function buildOpenLawn(ctx) {
   }
 }
 
-// Big lake + island + grassy causeway + smaller lake + peninsula. Composite
-// landmark: the causeway is a strip of grass that cuts through the big lake
-// and bridges to the smaller lake. The cart can drive across the causeway
-// but bumps off the water edge (ring of sphere colliders). NPCs avoid the
-// lake interior via a single big footprint per lake body.
-function buildLake(ctx) {
-  const rng = ctx.rng;
-  const cx = ctx.cxWorld;
-  const cz = ctx.czWorld;
-
-  // Big lake, slightly south of chunk center.
-  const bigR = 22 + rng() * 4;
-  const bigCx = cx + (rng() - 0.5) * 6;
-  const bigCz = cz - 10 + (rng() - 0.5) * 6;
-
-  // Smaller lake to the north-east, just past the big lake.
-  const smallR = 9 + rng() * 3;
-  const smallCx = cx + 14 + (rng() - 0.5) * 4;
-  const smallCz = cz + 22 + (rng() - 0.5) * 4;
-
-  // Causeway: a grassy strip running N-S through the east edge of the big
-  // lake, continuing up to the small lake. Constant 6m wide.
-  const causewayHalfW = 3;
-  const causewayX = (smallCx + bigCx) * 0.5;
-
-  // Peninsula direction (small lake): finger pointing inward from the east shore.
-  const peninsulaAngle = Math.PI;            // points west into the small lake
-  const peninsulaLen = smallR * 0.65;
-
-  // ----- Water meshes -----
-  const waterMat = new THREE.MeshStandardMaterial({
-    color: 0x4d96d6,
-    emissive: 0x1a3550,
-    emissiveIntensity: 0.25,
-    roughness: 0.3,
-    metalness: 0.05,
-    transparent: true,
-    opacity: 0.85,
-    flatShading: true,
-    polygonOffset: true,
-    polygonOffsetFactor: -1,
-    polygonOffsetUnits: -1,
-    depthWrite: false,
-  });
-
-  const bigWater = new THREE.Mesh(new THREE.CircleGeometry(bigR, 40), waterMat);
-  bigWater.rotation.x = -Math.PI / 2;
-  bigWater.position.set(bigCx, 0.08, bigCz);
-  bigWater.receiveShadow = true;
-  ctx.group.add(bigWater);
-
-  const smallWater = new THREE.Mesh(new THREE.CircleGeometry(smallR, 28), waterMat);
-  smallWater.rotation.x = -Math.PI / 2;
-  smallWater.position.set(smallCx, 0.08, smallCz);
-  smallWater.receiveShadow = true;
-  ctx.group.add(smallWater);
-
-  const grassMat = new THREE.MeshStandardMaterial({
-    color: 0x82c277,
-    roughness: 0.95,
-    flatShading: true,
-  });
-
-  // ----- Island in big lake -----
-  const islandR = 3.5 + rng() * 1.5;
-  const islandX = bigCx + (rng() - 0.5) * 4;
-  const islandZ = bigCz + (rng() - 0.5) * 4;
-  const island = new THREE.Mesh(new THREE.CircleGeometry(islandR, 20), grassMat);
-  island.rotation.x = -Math.PI / 2;
-  island.position.set(islandX, 0.12, islandZ);
-  island.receiveShadow = true;
-  ctx.group.add(island);
-
-  // A tree on the island
-  const trunkMat = new THREE.MeshStandardMaterial({ color: 0x6a4a2a, roughness: 0.95, flatShading: true });
-  const leafMat = new THREE.MeshStandardMaterial({ color: 0x5fa55d, roughness: 0.95, flatShading: true });
-  const trunk = new THREE.Mesh(new THREE.CylinderGeometry(0.35, 0.5, 3.6, 8), trunkMat);
-  trunk.position.set(islandX, 1.8, islandZ);
-  trunk.castShadow = true;
-  ctx.group.add(trunk);
-  const leaf = new THREE.Mesh(new THREE.IcosahedronGeometry(1.6 + rng() * 0.4, 1), leafMat);
-  leaf.position.set(islandX, 3.9, islandZ);
-  leaf.castShadow = true;
-  ctx.group.add(leaf);
-
-  // ----- Causeway -----
-  const causeway = new THREE.Mesh(
-    new THREE.PlaneGeometry(causewayHalfW * 2, CHUNK_SIZE + 2),
-    grassMat,
-  );
-  causeway.rotation.x = -Math.PI / 2;
-  causeway.position.set(causewayX, 0.11, cz);
-  causeway.receiveShadow = true;
-  ctx.group.add(causeway);
-
-  // ----- Peninsula -----
-  const pCx = smallCx + Math.cos(peninsulaAngle) * peninsulaLen * 0.5;
-  const pCz = smallCz + Math.sin(peninsulaAngle) * peninsulaLen * 0.5;
-  const peninsula = new THREE.Mesh(
-    new THREE.PlaneGeometry(2.6, peninsulaLen),
-    grassMat,
-  );
-  peninsula.rotation.x = -Math.PI / 2;
-  peninsula.rotation.z = -peninsulaAngle + Math.PI / 2;
-  peninsula.position.set(pCx, 0.13, pCz);
-  ctx.group.add(peninsula);
-
-  // ----- NPC avoidance: one big footprint per water body (keeps trees +
-  //       wandering NPCs out of the water) -----
-  registry.add({
-    kind: 'lake',
-    position: new THREE.Vector3(bigCx, 0, bigCz),
-    footprint: bigR,
-    chunkKey: ctx.key,
-  });
-  registry.add({
-    kind: 'lake',
-    position: new THREE.Vector3(smallCx, 0, smallCz),
-    footprint: smallR,
-    chunkKey: ctx.key,
-  });
-
-  // ----- Edge colliders: ring of overlapping spheres around each shore,
-  //       gapped where the causeway crosses (and where the peninsula
-  //       attaches to the small lake). Cart bumps off them. -----
-  addLakeRingColliders(ctx, bigCx, bigCz, bigR, causewayX, causewayHalfW, null);
-  addLakeRingColliders(ctx, smallCx, smallCz, smallR, causewayX, causewayHalfW, peninsulaAngle);
-
-  // Island gets its own collider so the cart can bonk off it (e.g. if
-  // someone manages to splash across the water somehow).
-  registry.add({
-    kind: 'island',
-    position: new THREE.Vector3(islandX, 0.5, islandZ),
-    footprint: islandR,
-    collider: { radius: islandR + 0.4, damage: 3 },
-    chunkKey: ctx.key,
-  });
-
-  // Attractor: NPCs like hanging out at the shore.
-  registry.add({
-    kind: 'shore',
-    position: new THREE.Vector3(bigCx + bigR + 4, 0, bigCz),
-    footprint: 0,
-    attractor: { radius: 10, weight: 1.4 },
-    chunkKey: ctx.key,
-  });
-}
-
-// Place sphere colliders ringing the lake's shore. Skip a band of angles
-// where the causeway crosses (so the cart can drive through) and optionally
-// another band where the peninsula attaches (so we don't double-collide).
-function addLakeRingColliders(ctx, lcx, lcz, lakeR, causewayX, causewayHalfW, peninsulaAngle) {
-  const sphereR = 2.5;
-  const ringR = lakeR - sphereR * 0.4;     // slight inset so spheres sit at water edge
-  const circumference = 2 * Math.PI * ringR;
-  const step = sphereR * 1.4;
-  const n = Math.max(8, Math.ceil(circumference / step));
-
-  for (let i = 0; i < n; i++) {
-    const ang = (i / n) * Math.PI * 2;
-    const px = lcx + Math.cos(ang) * ringR;
-    const pz = lcz + Math.sin(ang) * ringR;
-    // Causeway gap: skip when the collider would sit inside the causeway strip.
-    if (Math.abs(px - causewayX) < causewayHalfW + sphereR * 0.6) continue;
-    // Peninsula attachment gap (small lake only): skip a small arc.
-    if (peninsulaAngle != null) {
-      let dAng = ang - peninsulaAngle;
-      while (dAng > Math.PI) dAng -= Math.PI * 2;
-      while (dAng < -Math.PI) dAng += Math.PI * 2;
-      if (Math.abs(dAng) < 0.35) continue;
-    }
-    registry.add({
-      kind: 'lake_edge',
-      position: new THREE.Vector3(px, 0.5, pz),
-      // footprint = 0 so NPCs don't try to dodge each individual edge sphere
-      // (the central `lake` footprint already handles avoidance).
-      footprint: 0,
-      // Gentle bump — water is more "stay out" than "ouch".
-      collider: { radius: sphereR, damage: 1 },
-      chunkKey: ctx.key,
-    });
-  }
-}
 
 // ---------- Reusable builders ----------
 
@@ -1208,39 +1022,86 @@ function leafBannerTexture(textColor, bgColor) {
 }
 
 function buildHammock(ctx, x, z) {
-  // Two posts + a colorful sling between them
+  // Curved cloth between two posts. Sling geometry is built directly as a
+  // BufferGeometry: a ribbon of triangles following a cosine sag so the
+  // hammock dips in the middle the way a real one would.
   const postMat = new THREE.MeshStandardMaterial({ color: 0x6a4a2a, roughness: 0.95, flatShading: true });
   const slingColor = [0xff6f9c, 0xffd28a, 0x6fcf6a, 0x66d9ff, 0xb285ff][Math.floor(ctx.rng() * 5)];
 
-  const post1 = new THREE.Mesh(new THREE.CylinderGeometry(0.12, 0.15, 1.6, 8), postMat);
-  post1.position.set(x - 1.6, 0.8, z);
-  post1.castShadow = true;
-  ctx.group.add(post1);
-  const post2 = post1.clone();
-  post2.position.x = x + 1.6;
-  ctx.group.add(post2);
+  const yaw = ctx.rng() * Math.PI * 2;
+  const cosY = Math.cos(yaw);
+  const sinY = Math.sin(yaw);
+  const halfLen = 2.0;     // post-to-post half-length
+  const restY = 1.5;        // sling height at the posts
+  const sagDepth = 0.55;    // how deep the middle sags
+  const slingW = 1.05;
+
+  // Two posts at ±halfLen along the rotated long axis
+  for (const s of [-1, 1]) {
+    const post = new THREE.Mesh(new THREE.CylinderGeometry(0.12, 0.15, 2.2, 8), postMat);
+    post.position.set(x + s * halfLen * cosY, 1.1, z + s * halfLen * sinY);
+    post.castShadow = true;
+    ctx.group.add(post);
+  }
+
+  // Curved sling
+  const segments = 16;
+  const verts = [];
+  const indices = [];
+  for (let i = 0; i <= segments; i++) {
+    const t = i / segments;
+    const u = (t - 0.5) * 2;     // -1 .. 1
+    const along = u * halfLen;
+    const sag = -Math.cos(u * Math.PI / 2) * sagDepth;
+    const py = restY + sag;
+    for (const side of [-1, 1]) {
+      const sideOff = side * slingW / 2;
+      // Apply yaw rotation around Y
+      const lx = along * cosY - sideOff * sinY;
+      const lz = along * sinY + sideOff * cosY;
+      verts.push(x + lx, py, z + lz);
+    }
+  }
+  for (let i = 0; i < segments; i++) {
+    const a = i * 2, b = i * 2 + 1, c = (i + 1) * 2, d = (i + 1) * 2 + 1;
+    indices.push(a, c, b);
+    indices.push(b, c, d);
+  }
+  const slingGeo = new THREE.BufferGeometry();
+  slingGeo.setAttribute('position', new THREE.Float32BufferAttribute(verts, 3));
+  slingGeo.setIndex(indices);
+  slingGeo.computeVertexNormals();
 
   const sling = new THREE.Mesh(
-    new THREE.PlaneGeometry(3.0, 0.9, 1, 4),
-    new THREE.MeshStandardMaterial({ color: slingColor, roughness: 0.95, side: THREE.DoubleSide, flatShading: true })
+    slingGeo,
+    new THREE.MeshStandardMaterial({
+      color: slingColor,
+      roughness: 0.95,
+      side: THREE.DoubleSide,
+      flatShading: true,
+    }),
   );
-  // Slight droop via direct vertex manipulation
-  const p = sling.geometry.attributes.position;
-  for (let i = 0; i < p.count; i++) {
-    const x0 = p.getX(i);
-    p.setZ(i, -Math.cos((x0 / 1.5) * (Math.PI / 2)) * 0.25);
-  }
-  sling.geometry.computeVertexNormals();
-  sling.rotation.x = -Math.PI / 2;
-  sling.position.set(x, 1.2, z);
+  sling.castShadow = true;
+  sling.receiveShadow = true;
   ctx.group.add(sling);
 
+  // Seat position = deepest dip + a little Y so the NPC's body sits in the
+  // sling rather than passing through it.
+  const seatPos = new THREE.Vector3(x, restY - sagDepth + 0.2, z);
+
+  // Registry entry includes a `hammock` sub-object that crowd.js consults to
+  // claim the hammock for a riding NPC.
   registry.add({
     kind: 'hammock',
     position: new THREE.Vector3(x, 0, z),
     footprint: 1.6,
     attractor: { radius: 3, weight: 0.6 },
     chunkKey: ctx.key,
+    hammock: {
+      seatPos,
+      yaw,
+      occupied: false,
+    },
   });
 }
 

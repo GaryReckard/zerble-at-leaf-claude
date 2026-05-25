@@ -24,12 +24,11 @@ export function chunkRng(cx, cz, salt = 0) {
   return mulberry32(hash2(cx + salt * 4096, cz - salt * 4096));
 }
 
-// Smooth-ish "noise" sampler using sin layers. Good enough for terrain heights.
-export function terrainHeight(x, z) {
-  return (
-    Math.sin(x * 0.012) * 0.6 +
-    Math.cos(z * 0.014) * 0.5 +
-    Math.sin((x + z) * 0.025) * 0.25 +
-    Math.cos(x * 0.045 + z * 0.04) * 0.18
-  );
+// Terrain is now intentionally flat. The previous sinusoidal hills (up to ~1.5m
+// peak-to-peak) clipped through paths, lakes, causeways, and other y≈0 decals,
+// and they translated with the player even after world-coord resampling. Visual
+// variety comes from chunk decorations (paths, water, props, lights) instead.
+// Kept the function signature for any callers that rely on it.
+export function terrainHeight(_x, _z) {
+  return 0;
 }

@@ -223,6 +223,11 @@ export class Crowd {
           npc.seatSlot.occupied = false;
           npc.seatSlot = null;
         }
+        // Release any hammock claim so it can be re-used.
+        if (npc.hammockEntry && npc.hammockEntry.hammock) {
+          npc.hammockEntry.hammock.occupied = false;
+          npc.hammockEntry = null;
+        }
         // Remove from any group it belonged to so dead idx's don't leak.
         if (npc.groupId) {
           const g = this.groups.get(npc.groupId);
@@ -298,6 +303,19 @@ export class Crowd {
       this._tickBoarding(dt, npc, zerble, ctx);
       return;
     }
+    if (npc.state === 'hammock_riding') {
+      this._tickHammockRiding(dt, npc);
+      return;
+    }
+    if (npc.state === 'walking_to_hammock') {
+      // If Zerble shows up nearby and the NPC is curious, abort the hammock plan.
+      if (dToZerble < SMILE_RANGE && npc.curiosity > 0.65) {
+        this._releaseHammock(npc);
+        npc.state = 'approaching';
+      } else if (this._tickWalkingToHammock(dt, npc)) {
+        return;
+      }
+    }
     if (npc.state === 'disembarking') {
       this._tickDisembarking(dt, npc);
       // fall through to normal walking logic
@@ -343,6 +361,16 @@ export class Crowd {
 
     switch (npc.state) {
       case 'idle': {
+        // Occasionally try to claim a nearby unoccupied hammock. Tired/sociable
+        // NPCs are slightly more likely to nap; skittish ones almost never.
+        if (
+          npc.skittish < 0.5 &&
+          npc.stateTimer < 5 &&
+          Math.random() < dt * 0.05
+        ) {
+          const claimed = this._tryClaimHammock(npc);
+          if (claimed) break;
+        }
         if (npc.stateTimer <= 0) {
           // Pick a new wander target: prefer an attractor, else random nearby spot.
           // Target a RING around the attractor (40-100% of its radius) so crowds
@@ -578,6 +606,10 @@ export class Crowd {
     if (npc.state === 'riding' && npc.seatY != null) {
       bodyY = npc.seatY - 0.05 + bobY;
       headY = npc.seatY + 0.7 + bobY;
+    } else if (npc.state === 'hammock_riding' && npc.hammockY != null) {
+      // Lounging in the hammock: body sits deep in the sling, head pokes up.
+      bodyY = npc.hammockY - 0.1 + bobY;
+      headY = npc.hammockY + 0.55 + bobY;
     } else {
       bodyY = 0.85 * npc.scale + bobY;
       headY = 1.65 * npc.scale + bobY;
@@ -724,6 +756,112 @@ export class Crowd {
       npc.state = 'idle';
       npc.stateTimer = 1 + Math.random() * 2;
     }
+  }
+
+  // ----- Hammock riding -----
+
+  _tryClaimHammock(npc) {
+    // Find the nearest unoccupied hammock within 30m.
+    const ids = registry.byKind.get('hammock');
+    if (!ids) return false;
+    let best = null;
+    let bestD2 = 30 * 30;
+    for (const id of ids) {
+      const e = registry.entries.get(id);
+      if (!e || !e.hammock || e.hammock.occupied) continue;
+      const dx = e.position.x - npc.pos.x;
+      const dz = e.position.z - npc.pos.z;
+      const d2 = dx * dx + dz * dz;
+      if (d2 < bestD2) { bestD2 = d2; best = e; }
+    }
+    if (!best) return false;
+    best.hammock.occupied = true;
+    npc.hammockEntry = best;
+    npc.target.copy(best.position);
+    npc.state = 'walking_to_hammock';
+    npc.stateTimer = 18;             // give up if can't reach in 18s
+    return true;
+  }
+
+  _tickWalkingToHammock(dt, npc) {
+    // Returns true if we handled the NPC fully this frame (skip rest of update).
+    if (!npc.hammockEntry) {
+      npc.state = 'idle';
+      npc.stateTimer = 1;
+      return true;
+    }
+    const target = npc.hammockEntry.hammock.seatPos;
+    const tdx = target.x - npc.pos.x;
+    const tdz = target.z - npc.pos.z;
+    const td = Math.hypot(tdx, tdz);
+    if (td < 0.7) {
+      // Arrived — climb in
+      npc.state = 'hammock_riding';
+      npc.rideTimer = 12 + Math.random() * 18;  // 12-30s of swinging
+      npc.hammockBob = 0;
+      return true;
+    }
+    if (npc.stateTimer <= 0) {
+      // Couldn't reach in time — release and go idle
+      this._releaseHammock(npc);
+      npc.state = 'idle';
+      npc.stateTimer = 1;
+      return true;
+    }
+    // Walk toward the hammock at jog speed
+    const inv = 1 / (td || 1);
+    npc.vel.x = THREE.MathUtils.lerp(npc.vel.x, tdx * inv * 1.6 * npc.energy, Math.min(1, dt * 5));
+    npc.vel.z = THREE.MathUtils.lerp(npc.vel.z, tdz * inv * 1.6 * npc.energy, Math.min(1, dt * 5));
+    npc.pos.x += npc.vel.x * dt;
+    npc.pos.z += npc.vel.z * dt;
+    // Face direction of motion
+    const targetYaw = Math.atan2(npc.vel.x, npc.vel.z);
+    const diff = wrapAngle(targetYaw - npc.yaw);
+    npc.yaw += diff * Math.min(1, dt * 6);
+    this._writeMatrices(npc);
+    return true;
+  }
+
+  _tickHammockRiding(dt, npc) {
+    if (!npc.hammockEntry) {
+      npc.state = 'idle';
+      npc.stateTimer = 1;
+      return;
+    }
+    npc.rideTimer -= dt;
+    npc.hammockBob += dt * 2.2;          // swing speed
+    const h = npc.hammockEntry.hammock;
+    const swingAmp = 0.18;
+    // Sway PERPENDICULAR to the hammock's long axis (i.e. side-to-side, not
+    // along its length) so it looks like the cloth is swinging.
+    const perpX = -Math.sin(h.yaw);
+    const perpZ = Math.cos(h.yaw);
+    const sway = Math.sin(npc.hammockBob) * swingAmp;
+    npc.pos.x = h.seatPos.x + perpX * sway;
+    npc.pos.z = h.seatPos.z + perpZ * sway;
+    npc.hammockY = h.seatPos.y + Math.sin(npc.hammockBob * 2) * 0.04;
+    // Face roughly along the hammock long axis (lounging direction)
+    npc.yaw = h.yaw + Math.PI / 2;
+    npc.vel.set(0, 0, 0);
+
+    if (npc.rideTimer <= 0) {
+      this._releaseHammock(npc);
+      npc.state = 'idle';
+      npc.stateTimer = 1 + Math.random() * 2;
+      // Step a bit out of the hammock so the next idle target makes sense
+      npc.pos.x += (Math.random() - 0.5) * 0.8;
+      npc.pos.z += (Math.random() - 0.5) * 0.8;
+      npc.hammockY = undefined;
+    }
+    this._writeMatrices(npc);
+  }
+
+  _releaseHammock(npc) {
+    if (npc.hammockEntry && npc.hammockEntry.hammock) {
+      npc.hammockEntry.hammock.occupied = false;
+    }
+    npc.hammockEntry = null;
+    npc.hammockY = undefined;
   }
 
   // Called from main.js when Zerble drives into an NPC. Knockback the victim,

@@ -283,12 +283,22 @@ export class Zerble {
       eye.add(iris);
 
       // Pupil — pushed in FRONT of the iris so it actually shows.
-      // Pupil at z=-0.7 r=0.3 → front face z=-1.00, well in front of iris (-0.85).
+      // Pupil at z=-0.78 r=0.3 → front face z=-1.08, comfortably in front of
+      // iris front face (-0.85). The look-around animation in update() now
+      // oscillates around this base position by ±0.05 — kept entirely on the
+      // viewer side of the iris so the pupil never disappears into it.
+      // polygonOffset is belt-and-suspenders for any remaining z-fight.
       const pupil = new THREE.Mesh(
         new THREE.SphereGeometry(0.3, 14, 12),
-        new THREE.MeshStandardMaterial({ color: 0x000000, roughness: 1 })
+        new THREE.MeshStandardMaterial({
+          color: 0x000000,
+          roughness: 1,
+          polygonOffset: true,
+          polygonOffsetFactor: -2,
+          polygonOffsetUnits: -2,
+        })
       );
-      pupil.position.z = -0.7;
+      pupil.position.z = -0.78;
       eye.add(pupil);
 
       // (highlight catch-light removed — was floating in front of the eye)
@@ -500,8 +510,14 @@ export class Zerble {
 
     this._mustacheLeds = [];
     const ledGeo = new THREE.SphereGeometry(0.07, 8, 6);
-    const fuzzGeo = new THREE.IcosahedronGeometry(0.13, 0);
-    const fuzzGeoSmall = new THREE.IcosahedronGeometry(0.09, 0);
+    // Hair strands: thin tapered cones. Two length variants for variety.
+    const strandGeoLong = new THREE.ConeGeometry(0.025, 0.42, 5, 1);
+    const strandGeoShort = new THREE.ConeGeometry(0.022, 0.28, 5, 1);
+    // ConeGeometry centers the cone at origin with base at -y/2 and tip at +y/2.
+    // Translate so the BASE sits at the origin and the tip is at +y * length —
+    // this lets us position the strand by its emergence point directly.
+    strandGeoLong.translate(0, 0.21, 0);
+    strandGeoShort.translate(0, 0.14, 0);
 
     // Position the whole mustache near the front of the cart, below the eyes.
     const baseY = 1.35;
@@ -534,26 +550,60 @@ export class Zerble {
       tube.castShadow = true;
       this.root.add(tube);
 
-      // ----- Fuzz tufts along the tube — more, chunkier, in 360° around the tube -----
-      const fuzzCount = 44;
-      for (let i = 0; i < fuzzCount; i++) {
-        const u = (i + 0.5) / fuzzCount;
+      // ----- Hair strands along the tube — thin tapered cones flowing outward + up -----
+      // Each strand emerges from a point on the tube surface, oriented mostly
+      // radially outward (perpendicular to the curve tangent), with a partial
+      // tilt toward the tangent direction so the hair "flows" along the
+      // handlebar curl. World-up bias adds the upward sweep the user wanted.
+      const _ref = new THREE.Vector3();
+      const _side = new THREE.Vector3();
+      const _normal = new THREE.Vector3();
+      const _radial = new THREE.Vector3();
+      const _dir = new THREE.Vector3();
+      const _yAxis = new THREE.Vector3(0, 1, 0);
+      const strandCount = 96;
+      for (let i = 0; i < strandCount; i++) {
+        const u = (i + 0.5) / strandCount;
         const p = curve.getPoint(u);
-        // Distribute fuzz balls AROUND the tube
-        const offAngle = (i * 2.39996) % (Math.PI * 2); // golden-angle distribution
-        const offR = 0.15 + Math.random() * 0.10;
-        const fuzz = new THREE.Mesh(
-          i % 3 === 0 ? fuzzGeoSmall : fuzzGeo,
-          i % 2 === 0 ? fuzzMatA : fuzzMatB
+        const tangent = curve.getTangent(u).normalize();
+
+        // Build a frame perpendicular to the tangent. Pick a reference vector
+        // not parallel to the tangent to avoid degenerate cross products.
+        _ref.set(0, 1, 0);
+        if (Math.abs(tangent.y) > 0.9) _ref.set(1, 0, 0);
+        _side.crossVectors(tangent, _ref).normalize();
+        _normal.crossVectors(_side, tangent).normalize();
+
+        // Random angle around the tube — golden-angle for even coverage.
+        const theta = (i * 2.39996) % (Math.PI * 2);
+        _radial.copy(_side).multiplyScalar(Math.cos(theta))
+               .addScaledVector(_normal, Math.sin(theta));
+
+        // Strand direction: 60% radial outward (away from tube) + 35% tangent
+        // (flow along the curve) + slight world-up bias for "up the handlebar".
+        _dir.copy(_radial).multiplyScalar(0.60)
+            .addScaledVector(tangent, 0.35)
+            .addScaledVector(_yAxis, 0.15);
+        // Small jitter so strands aren't perfectly regimented.
+        _dir.x += (Math.random() - 0.5) * 0.10;
+        _dir.y += (Math.random() - 0.5) * 0.10;
+        _dir.z += (Math.random() - 0.5) * 0.10;
+        _dir.normalize();
+
+        const useShort = i % 3 === 0;
+        const strand = new THREE.Mesh(
+          useShort ? strandGeoShort : strandGeoLong,
+          i % 2 === 0 ? fuzzMatA : fuzzMatB,
         );
-        fuzz.position.set(
-          p.x + Math.cos(offAngle) * offR * 0.7,
-          p.y + Math.sin(offAngle) * offR,
-          p.z + (Math.random() - 0.5) * 0.18
-        );
-        fuzz.rotation.set(Math.random() * 6.28, Math.random() * 6.28, Math.random() * 6.28);
-        fuzz.castShadow = true;
-        tube.add(fuzz);
+        // Cone's +y axis (post-translate, base at origin) → align with _dir.
+        strand.quaternion.setFromUnitVectors(_yAxis, _dir);
+        // Anchor strand base at the point on the curve, slightly recessed into
+        // the tube so the base isn't visible.
+        const tubeR = 0.22;
+        strand.position.copy(p)
+              .addScaledVector(_radial, tubeR * 0.7);
+        strand.castShadow = true;
+        tube.add(strand);
       }
 
       // ----- LEDs along the curve -----
@@ -646,10 +696,13 @@ export class Zerble {
     }
 
     // ----- Animate eyes (idle wobble + look ahead) -----
+    // Pupil base z = -0.78 keeps the pupil's front face clearly in front of
+    // the iris (front face at -0.85). The ±0.05 wobble stays well within
+    // that margin, so the pupil never recedes into the iris.
     const t = performance.now() * 0.001;
     for (const eye of this.eyes) {
       eye.root.position.y = eye.basePos.y + Math.sin(t * 1.5 + eye.basePos.x) * 0.05;
-      eye.pupil.position.z = -0.55 + Math.sin(t * 0.7) * 0.05;
+      eye.pupil.position.z = -0.78 + Math.sin(t * 0.7) * 0.05;
       eye.pupil.position.x = Math.sin(t * 0.4) * 0.06;
     }
 

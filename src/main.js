@@ -15,6 +15,7 @@ import { Zerble } from './zerble.js';
 import { Bubbles } from './bubbles.js';
 import { Smiles } from './smiles.js';
 import { Crowd } from './crowd.js';
+import { Lurleen } from './lurleen.js';
 import { ChaseCamera } from './camera.js';
 import { registry } from './registry.js';
 import { Sound } from './sound.js';
@@ -78,6 +79,10 @@ scene.add(crowd.group);
 
 // ---------- World (sky/lights/ground/mountains + chunk manager) ----------
 buildWorld(scene, crowd);
+
+// ---------- Lurleen (love interest, persistent across the world) ----------
+const lurleen = new Lurleen(scene);
+let lurleenMet = false;     // first-contact toast latch
 
 // ---------- Moving obstacles (global — not chunk-bound) ----------
 const puppets = new PuppetParade();
@@ -183,6 +188,11 @@ function tickBody(dt) {
     band.update(dt);
     kids.update(dt);
     wooks.update(dt);
+    lurleen.update(dt, zerble.position);
+    if (!lurleenMet && lurleen.state === 'aware') {
+      lurleenMet = true;
+      HUD.toast('You found Lurleen! 💗', 3500);
+    }
     updateStagePerformers(performance.now() * 0.001);
 
     // Procedural world expands around Zerble.
@@ -323,6 +333,7 @@ function toastForKind(kind) {
     case 'drum_circle': return 'You crashed the drum circle!';
     case 'lake_edge': return 'Splash! Carts don\'t float.';
     case 'island': return 'Tiny island, busy day.';
+    case 'lurleen': return 'Easy, lover — that\'s Lurleen.';
     default: return 'Ouch.';
   }
 }

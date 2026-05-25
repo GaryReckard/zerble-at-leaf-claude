@@ -4,6 +4,7 @@
 import * as THREE from 'three';
 import { buildMountains } from './mountains.js';
 import { ChunkManager } from './chunks.js';
+import { LakeManager } from './lakes.js';
 import { terrainHeight } from './rng.js';
 
 const SKY_TOP = 0x6fb6e8;
@@ -19,22 +20,31 @@ const GROUND_SIZE = 1400; // very large flat-ish plane
 const GROUND_SEG = 220;
 
 let chunkManager = null;
+let lakeManager = null;
 let groundMesh = null;
 let mountainsGroup = null;
 let skyMesh = null;
 let sun = null;
+let _scene = null;
 
 export function buildWorld(scene, crowd) {
+  _scene = scene;
   skyMesh = buildSky(scene);
   sun = buildLightsAndFog(scene);
   groundMesh = buildGround(scene);
   mountainsGroup = buildMountains(scene);
 
+  // Lakes must materialize BEFORE the initial chunk pass — they register
+  // footprints + colliders that chunks consult to avoid placing paths and
+  // props on top of water.
+  lakeManager = new LakeManager();
+  lakeManager.update(scene, new THREE.Vector3(0, 0, 0));
+
   chunkManager = new ChunkManager(scene, crowd);
   // Pre-load the chunks around the origin so the first frame looks alive.
   chunkManager.update(new THREE.Vector3(0, 0, 0));
 
-  return { chunkManager };
+  return { chunkManager, lakeManager };
 }
 
 // Track ground "world center" so we can re-sample terrain heights at world
@@ -47,6 +57,8 @@ let _groundLastResampleZ = NaN;
 const GROUND_RESAMPLE_THRESHOLD = 40; // re-derive heights when player moves > 40m
 
 export function updateWorld(playerPos) {
+  // Lakes update first (same reason as boot: chunks consult lake footprints).
+  if (lakeManager) lakeManager.update(_scene, playerPos);
   if (chunkManager) chunkManager.update(playerPos);
   // Keep the sky dome, ground plane and mountain ring centered on the player
   // so the world feels infinite — chunks at fixed world coords slide past,

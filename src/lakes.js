@@ -188,11 +188,13 @@ export function buildLake(scene, mcx, mcz, rng, opts = {}) {
   causeway.renderOrder = 1;
   group.add(causeway);
 
-  // 5% of large lakes get a tan sand beach tangent to the shore. Doubles as a
-  // people attractor — NPCs hang out at the beach. `opts.forceBeach` is used
+  // ~20% of large lakes get a tan sand beach tangent to the shore. Doubles as
+  // a people attractor — NPCs hang out at the beach. `opts.forceBeach` is used
   // by the sandbox to render a beach unconditionally for inspection.
+  // y=0.10 sits the sand JUST above the water surface (y=0.08) so the wet end
+  // peeks through and the dry end lays clearly on the grass.
   let beachSpec = null;
-  if (opts.forceBeach || (bigR > 60 && rng() < 0.05)) {
+  if (opts.forceBeach || rng() < 0.20) {
     const sandMat = new THREE.MeshStandardMaterial({
       color: 0xd9b878,
       roughness: 1.0,
@@ -204,10 +206,10 @@ export function buildLake(scene, mcx, mcz, rng, opts = {}) {
     const sandZ = bigCz + Math.sin(sandAngle) * (bigR * 0.9);
     const sandMesh = new THREE.Mesh(new THREE.CircleGeometry(sandRadius, 16), sandMat);
     sandMesh.rotation.x = -Math.PI / 2;
-    sandMesh.position.set(sandX, 0.02, sandZ);
+    sandMesh.position.set(sandX, 0.10, sandZ);
     sandMesh.castShadow = false;
     sandMesh.receiveShadow = true;
-    sandMesh.renderOrder = 1;
+    sandMesh.renderOrder = 2;        // above water (0) and grass island (1)
     group.add(sandMesh);
     beachSpec = { x: sandX, z: sandZ, radius: sandRadius };
   }

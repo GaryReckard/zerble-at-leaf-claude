@@ -381,8 +381,12 @@ import { mulberry32 } from './src/rng.js';
           body.rotation.x = Math.PI / 2;
           body.position.set(0, 0, -0.825);
           const supineGroup = new THREE.Group();
-          supineGroup.position.set(seatPos.x, seatPos.y + 0.26, seatPos.z);
-          supineGroup.rotation.y = yaw;
+          supineGroup.position.set(seatPos.x, seatPos.y + 0.16, seatPos.z);
+          // Hammock poles are at offsets (±cos(yaw), 0, ±sin(yaw)) so the long
+          // axis points in direction (cos(yaw), 0, sin(yaw)). A supine body
+          // with rotation.y = θ has its head extending in (sin(θ), 0, cos(θ))
+          // direction — so θ = π/2 − yaw aligns the spine with the poles.
+          supineGroup.rotation.y = Math.PI / 2 - yaw;
           supineGroup.add(body);
           const root = new THREE.Group();
           root.add(hammockGroup);

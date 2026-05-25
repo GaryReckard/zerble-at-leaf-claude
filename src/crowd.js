@@ -745,10 +745,11 @@ export class Crowd {
     if (npc.state === 'riding' && npc.seatY != null) {
       feetY = npc.seatY - 1.05 + bobY + bounceY;
     } else if (npc.state === 'hammock_riding' && npc.hammockY != null) {
-      // Supine: body lies horizontal with back on the seat cloth. After X=π/2
-      // the body's "up" direction (away from back) is +Y. Capsule torso is
-      // ~0.26 thick — lift matrix Y by 0.26 so the back rests on the sag.
-      feetY = npc.hammockY + 0.26 + bobY + bounceY;
+      // Supine: body lies horizontal with back pressed into the cloth. After
+      // X=π/2 the body's "up" direction (away from back) is +Y. The torso
+      // capsule is ~0.26 thick, but we want the back to SINK into the sag
+      // slightly — so lift by only 0.16, not the full half-thickness.
+      feetY = npc.hammockY + 0.16 + bobY + bounceY;
     } else {
       feetY = bobY + bounceY; // feet on the ground; npc.pos.y is always 0
     }
@@ -1009,10 +1010,12 @@ export class Crowd {
     npc.pos.x = h.seatPos.x + perpX * sway;
     npc.pos.z = h.seatPos.z + perpZ * sway;
     npc.hammockY = h.seatPos.y + Math.sin(npc.hammockBob * 2) * 0.04;
-    // Spine aligned with hammock long axis — _writeMatrices applies the supine
-    // rotation around this yaw, so head + feet land at the two ends of the
-    // hammock instead of poking through the side.
-    npc.yaw = h.yaw;
+    // Spine aligned with hammock long axis. Hammock poles are placed in
+    // direction (cos(h.yaw), 0, sin(h.yaw)). _writeMatrices applies the supine
+    // rotation: X=+π/2 (face up) then Y=npc.yaw. After both rotations the
+    // body's head ends up in direction (sin(npc.yaw), 0, cos(npc.yaw)). For
+    // that to equal (cos(h.yaw), 0, sin(h.yaw)) we need npc.yaw = π/2 − h.yaw.
+    npc.yaw = Math.PI / 2 - h.yaw;
     npc.vel.set(0, 0, 0);
 
     if (npc.rideTimer <= 0) {

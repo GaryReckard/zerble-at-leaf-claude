@@ -109,7 +109,7 @@ export class Zerble {
     // front seat-back (back-to-back). Riders straddle the cushion facing +Z.
     const backSeat = new THREE.Mesh(
       this._roundedBoxGeometry(2.2, 0.55, 1.0, 0.1),
-      mat(0xb56b3a, { roughness: 0.85 })
+      mat(0xd7c79a, { roughness: 0.9 })   // classic beige golf-cart back bench
     );
     backSeat.position.set(0, 1.45, 1.1);
     backSeat.castShadow = true;
@@ -117,7 +117,7 @@ export class Zerble {
 
     const backSeatBack = new THREE.Mesh(
       this._roundedBoxGeometry(2.2, 0.9, 0.22, 0.08),
-      mat(0xb56b3a, { roughness: 0.85 })
+      mat(0xd7c79a, { roughness: 0.9 })   // classic beige golf-cart back bench
     );
     backSeatBack.position.set(0, 1.9, 0.5);  // in front of the cushion (rear-facing)
     backSeatBack.castShadow = true;

@@ -107,8 +107,15 @@ export function buildTentStage(opts = {}) {
   }
 
   // ---- Stage at the back end of the tent ----
+  // The tent ridge sits at TENT_RIDGE_HEIGHT (11) with the wall at
+  // TENT_WALL_HEIGHT (5.5). Roof slopes linearly between them. The stage's
+  // outer truss bars sit at world Y = 9 * stageScale, X = ±7 * stageScale.
+  // The roof height at that X is 5.5 + 5.5 * (1 - 7*s/14) = 11 - 2.75*s.
+  // For the truss to clear the roof we need 9*s < 11 - 2.75*s → s < 0.94.
+  // Pick a comfortable 0.82 so the truss + the side stage lights are
+  // visibly under the canvas, not poking through.
   const stageBuild = buildStage({
-    isMain: false, leafTexture, rng,
+    isMain: false, leafTexture, rng, scale: 0.82,
   });
   // The stage's local +Z is its FRONT (banner side at -Z is the BACK). We
   // want the band facing +Z toward the open front of the tent. With NO

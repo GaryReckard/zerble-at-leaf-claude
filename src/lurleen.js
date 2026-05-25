@@ -162,9 +162,8 @@ export class Lurleen {
     // Chassis top sits at y=1.2 and is 2.0 wide × 3.0 deep. We tuck the bench
     // into the front half (z = -0.6..-1.3 area, between the two front posts).
     const seatMat = new THREE.MeshStandardMaterial({
-      // Muted purple/blue cushion — distinct from the chassis pink so the
-      // seat reads cleanly against the body.
-      color: 0x5b3a7a, roughness: 0.85, flatShading: true,
+      // Classic beige golf-cart cushion — matches the real reference cart.
+      color: 0xd7c79a, roughness: 0.9, flatShading: true,
     });
     const seatCushion = new THREE.Mesh(
       new THREE.BoxGeometry(1.7, 0.30, 0.85),

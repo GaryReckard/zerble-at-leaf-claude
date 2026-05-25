@@ -266,6 +266,8 @@
     let updateFn = null;
     const select = document.getElementById('entity');
     const info = document.getElementById('info');
+    // Expose for debugging / verification.
+    window.__sandbox = { scene, camera, get currentEntity() { return currentEntity; } };
 
     function clearEntity() {
       // Aggressive cleanup — remove every non-light, non-ground object so
@@ -312,9 +314,16 @@
           entityRoot = l.root;
           currentEntity = l;
           // Drive her with a "Zerble" position that's just out of sight so she
-          // wanders in place without entering aware/follow.
+          // wanders in place without entering aware/follow. Sandbox camera
+          // follows her root each frame so she doesn't disappear off-screen
+          // when her wander timer fires.
           const fakeZerbleFar = new THREE.Vector3(2000, 0, 2000);
-          updateFn = (dt) => l.update(dt, fakeZerbleFar);
+          updateFn = (dt) => {
+            l.update(dt, fakeZerbleFar);
+            cam.target.x = l.position.x;
+            cam.target.z = l.position.z;
+            applyCam();
+          };
           cam.target.set(0, 2.5, 0);
           cam.dist = 8;
           applyCam();

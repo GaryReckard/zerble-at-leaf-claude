@@ -18,10 +18,11 @@ import * as THREE from 'three';
 import { registry } from './registry.js';
 import { hash2, mulberry32 } from './rng.js';
 import { Sound } from './sound.js';
+import { PERF } from './perf.js';
 
 export const CHUNK_SIZE = 80;
-const LOAD_RADIUS = 2;   // 5x5 chunks loaded around the player
-const UNLOAD_RADIUS = 3; // hysteresis: only unload chunks beyond this distance
+const LOAD_RADIUS = PERF.chunkLoadRadius;   // mobile: 1 (3x3), desktop: 2 (5x5)
+const UNLOAD_RADIUS = PERF.chunkUnloadRadius; // hysteresis
 
 // Bands placed on stages — animated lightly each frame by the main loop.
 export const stagePerformers = [];

@@ -16,12 +16,20 @@
 html,
 body {
   width: 100%;
-  height: 100%;
+  /* iOS Safari collapses the URL bar mid-session — vh is wrong there. dvh
+     tracks the visible viewport. Fall back to vh on older browsers. */
+  height: 100vh;
+  height: 100dvh;
   overflow: hidden;
+  /* Kill pull-to-refresh + rubber-band overscroll on iOS/Android. */
+  overscroll-behavior: none;
   background: #1a1430;
   color: var(--paper);
   font-family: "Trebuchet MS", "Helvetica Neue", Helvetica, Arial, sans-serif;
   user-select: none;
+  -webkit-user-select: none;
+  -webkit-touch-callout: none;
+  -webkit-tap-highlight-color: transparent;
 }
 
 #game {
@@ -30,6 +38,8 @@ body {
   width: 100%;
   height: 100%;
   display: block;
+  /* All gestures on the canvas are ours — no scroll, pinch, or double-tap zoom. */
+  touch-action: none;
 }
 
 /* ---------- HUD ---------- */
@@ -43,8 +53,8 @@ body {
 
 #score-panel {
   position: absolute;
-  top: 22px;
-  left: 22px;
+  top: calc(22px + env(safe-area-inset-top, 0));
+  left: calc(22px + env(safe-area-inset-left, 0));
   background: rgba(28, 19, 48, 0.55);
   backdrop-filter: blur(8px);
   border: 1px solid rgba(255, 246, 230, 0.15);
@@ -88,7 +98,7 @@ body {
 
 #toast {
   position: absolute;
-  top: 80px;
+  top: calc(80px + env(safe-area-inset-top, 0));
   left: 50%;
   transform: translateX(-50%);
   background: rgba(28, 19, 48, 0.7);
@@ -234,4 +244,118 @@ kbd {
 .hidden {
   opacity: 0;
   visibility: hidden;
+}
+
+/* ---------- Touch controls ---------- */
+
+/* Touch overlay hidden by default; revealed when body.is-touch.game-started is set.
+   Children (#stick-base, .touch-btn) each apply safe-area insets themselves, so
+   the container intentionally has no padding — otherwise we'd double-count
+   env(safe-area-inset-*) on notched devices. */
+#touch-controls {
+  position: fixed;
+  inset: 0;
+  z-index: 15;
+  pointer-events: none;
+  display: none;
+}
+
+/* Only visible after the user hits Start — otherwise the stick + buttons would
+   ghost through the title-card's backdrop-filter and be tappable through it. */
+body.is-touch.game-started #touch-controls {
+  display: block;
+}
+
+/* Hide kbd-list on touch; hide touch-list on desktop. */
+.controls-touch {
+  display: none;
+}
+
+body.is-touch .controls-kbd {
+  display: none;
+}
+
+body.is-touch .controls-touch {
+  display: flex;
+}
+
+.tag-key {
+  display: inline-block;
+  background: rgba(255, 246, 230, 0.08);
+  border: 1px solid rgba(255, 246, 230, 0.2);
+  border-radius: 6px;
+  padding: 2px 8px;
+  margin-right: 4px;
+  font-size: 12px;
+  letter-spacing: 0.04em;
+  font-weight: 600;
+}
+
+#stick-base {
+  position: absolute;
+  left: calc(28px + env(safe-area-inset-left, 0));
+  bottom: calc(28px + env(safe-area-inset-bottom, 0));
+  width: 140px;
+  height: 140px;
+  border-radius: 50%;
+  background: rgba(28, 19, 48, 0.45);
+  border: 1px solid rgba(255, 246, 230, 0.18);
+  backdrop-filter: blur(6px);
+  box-shadow: var(--shadow);
+  pointer-events: auto;
+  touch-action: none;
+}
+
+#stick-knob {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  width: 64px;
+  height: 64px;
+  border-radius: 50%;
+  background: linear-gradient(135deg, rgba(255, 210, 138, 0.95), rgba(255, 111, 156, 0.95));
+  box-shadow: 0 4px 18px rgba(255, 111, 156, 0.45);
+  pointer-events: none;
+}
+
+.touch-btn {
+  position: absolute;
+  right: calc(28px + env(safe-area-inset-right, 0));
+  width: 88px;
+  height: 88px;
+  border-radius: 50%;
+  border: 1px solid rgba(255, 246, 230, 0.22);
+  background: rgba(28, 19, 48, 0.55);
+  backdrop-filter: blur(6px);
+  color: var(--paper);
+  font-family: inherit;
+  font-weight: 800;
+  font-size: 14px;
+  letter-spacing: 0.08em;
+  pointer-events: auto;
+  touch-action: none;
+  -webkit-tap-highlight-color: transparent;
+  user-select: none;
+  box-shadow: var(--shadow);
+  transition: transform 0.08s ease, background 0.12s ease, box-shadow 0.12s ease;
+}
+
+#btn-honk {
+  bottom: calc(28px + env(safe-area-inset-bottom, 0));
+  background: rgba(255, 111, 156, 0.55);
+  border-color: rgba(255, 111, 156, 0.6);
+}
+
+#btn-boost {
+  bottom: calc(132px + env(safe-area-inset-bottom, 0));
+  background: rgba(255, 210, 138, 0.45);
+  border-color: rgba(255, 210, 138, 0.6);
+  color: #1c1330;
+}
+
+.touch-btn.pressed {
+  transform: scale(0.92);
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.5);
+  filter: brightness(1.2);
 }

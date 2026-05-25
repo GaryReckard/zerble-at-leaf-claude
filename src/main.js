@@ -7,6 +7,7 @@ import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js'
 import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
 
 import { Input } from './input.js';
+import { Touch } from './touch.js';
 import { HUD } from './hud.js';
 import { buildWorld, updateWorld } from './world.js';
 import { updateStagePerformers } from './chunks.js';
@@ -23,6 +24,8 @@ import {
   KidGaggle,
   Wooks,
 } from './obstacles.js';
+import { installDebug, shouldRunFrame, isGod, npcsFrozen } from './debug.js';
+import { PERF } from './perf.js';
 
 const canvas = document.getElementById('game');
 
@@ -32,10 +35,10 @@ const renderer = new THREE.WebGLRenderer({
   antialias: true,
   powerPreference: 'high-performance',
 });
-renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+renderer.setPixelRatio(Math.min(window.devicePixelRatio, PERF.pixelRatioCap));
 renderer.setSize(window.innerWidth, window.innerHeight);
-renderer.shadowMap.enabled = true;
-renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+renderer.shadowMap.enabled = PERF.shadows;
+renderer.shadowMap.type = PERF.shadowType === 'soft' ? THREE.PCFSoftShadowMap : THREE.BasicShadowMap;
 renderer.toneMapping = THREE.ACESFilmicToneMapping;
 renderer.toneMappingExposure = 1.05;
 renderer.outputColorSpace = THREE.SRGBColorSpace;
@@ -49,8 +52,11 @@ const composer = new EffectComposer(renderer);
 composer.addPass(new RenderPass(scene, camera));
 const bloomPass = new UnrealBloomPass(
   new THREE.Vector2(window.innerWidth, window.innerHeight),
-  0.6, 0.85, 0.78
+  PERF.bloomStrength, PERF.bloomRadius, PERF.bloomThreshold
 );
+// On the low profile we keep bloom but pass-through if it ever needs to be killed:
+// set `bloomPass.enabled = false` to fall back to the plain render.
+if (!PERF.bloom) bloomPass.enabled = false;
 composer.addPass(bloomPass);
 composer.addPass(new OutputPass());
 
@@ -103,13 +109,45 @@ let score = 0;
 HUD.loadBest();
 let running = false;
 
+// Touch overlay (no-op on desktop; reveals thumbstick/buttons on touch devices).
+Touch.install();
+
+// iOS Safari still fires deprecated GestureEvents for pinch — those can zoom
+// the page even with user-scalable=no. Swallow them so the canvas stays
+// locked to 1.0 scale.
+['gesturestart', 'gesturechange', 'gestureend'].forEach((ev) => {
+  document.addEventListener(ev, (e) => e.preventDefault(), { passive: false });
+});
+// Block the iOS double-tap-to-zoom on the canvas + HUD.
+document.addEventListener('dblclick', (e) => e.preventDefault(), { passive: false });
+
 HUD.showTitle();
 HUD.onStart(() => {
   HUD.hideTitle();
   running = true;
+  // Sound.init() MUST run synchronously inside the tap handler on iOS — any
+  // await/setTimeout boundary loses the "user gesture" status and the
+  // AudioContext starts suspended (silent).
   Sound.init();
+  // Reveal the touch overlay only now (avoids ghost controls behind the
+  // title-card's backdrop-filter) and mark it as the active control surface
+  // for assistive tech.
+  document.body.classList.add('game-started');
+  const tc = document.getElementById('touch-controls');
+  if (tc) tc.setAttribute('aria-hidden', 'false');
   HUD.toast('Drive around — make people smile, dodge the parade.', 2800);
 });
+
+// iOS suspends the AudioContext on tab switch / device lock. Resume on return.
+document.addEventListener('visibilitychange', () => {
+  if (!document.hidden) Sound.resume();
+});
+window.addEventListener('pageshow', () => Sound.resume());
+// Belt-and-suspenders: any touch/click after we're running revives audio if
+// iOS dropped it for a reason we didn't see (route changes, headset unplug).
+function audioRecover() { if (running) Sound.resume(); }
+window.addEventListener('pointerdown', audioRecover);
+window.addEventListener('touchstart', audioRecover, { passive: true });
 
 // ---------- Game loop ----------
 const clock = new THREE.Clock();
@@ -117,7 +155,11 @@ const _camFwd = new THREE.Vector3();
 
 function tick() {
   const dt = Math.min(clock.getDelta(), 0.05);
+  if (shouldRunFrame(dt)) tickBody(dt);
+  scheduleNext();
+}
 
+function tickBody(dt) {
   if (running) {
     zerble.update(dt, Input);
     Sound.setEngineSpeed(zerble.speed);
@@ -130,7 +172,7 @@ function tick() {
     }
 
     bubbles.update(dt, zerble);
-    crowd.update(dt, zerble, bubbles);
+    if (!npcsFrozen()) crowd.update(dt, zerble, bubbles);
     smiles.update(dt, zerble, (n) => {
       score += n;
       HUD.setSmiles(score);
@@ -152,17 +194,22 @@ function tick() {
       // Build a per-frame collider list for nearby crowd NPCs so Zerble can actually
       // bump them. Skip riders + anyone more than 5m away (cheap broad-phase reject).
       const npcColliders = [];
-      const broadphaseR2 = 25;
+      const broadphaseR2 = 36; // 6m broadphase
       for (const n of crowd.npcs) {
-        if (n.state === 'riding') continue;
+        if (n.state === 'riding' || n.state === 'boarding') continue;
         const dx = n.pos.x - zerble.position.x;
         const dz = n.pos.z - zerble.position.z;
         if (dx * dx + dz * dz > broadphaseR2) continue;
+        // Already fleeing? They were trying to get out of the way — overlap-resolve
+        // silently. We do this by leaving damage at 0 and relying on the approach-
+        // threshold logic to either nudge or skip.
+        const alreadyFleeing = n.state === 'fleeing';
         npcColliders.push({
           position: { x: n.pos.x, y: 0.85, z: n.pos.z },
           radius: 0.45,
-          damage: 2,
+          damage: alreadyFleeing ? 0 : 1,
           kind: 'person',
+          npc: n,
         });
       }
       const allColliders = [
@@ -174,7 +221,7 @@ function tick() {
         ...npcColliders,
       ];
       const hit = resolveCollision(zerble, allColliders);
-      if (hit && hit.damaging) {
+      if (hit && hit.damaging && !isGod()) {
         score = Math.max(0, score - hit.damage);
         HUD.setSmiles(score);
         HUD.flashHit();
@@ -206,7 +253,14 @@ function tick() {
   );
 
   composer.render();
-  requestAnimationFrame(tick);
+}
+
+// RAF is throttled to ~0 fps when the tab is backgrounded (e.g. the Claude
+// Preview MCP runs the page document.hidden). Fall back to setTimeout in that
+// case so the game keeps ticking and the preview tools see real motion.
+function scheduleNext() {
+  if (document.hidden) setTimeout(tick, 16);
+  else requestAnimationFrame(tick);
 }
 
 // Threshold: Zerble must be closing on the obstacle at least this fast (m/s) for it
@@ -234,7 +288,12 @@ function resolveCollision(zerble, colliders) {
       // Damaging — Zerble is driving into it
       const pushDir = new THREE.Vector3(-tox * inv, 0, -toz * inv);
       zerble.applyHit(pushDir);
-      return { damaging: true, damage: c.damage, kind: c.kind };
+      // NPC-specific reaction: panic, knockback, infect neighbors.
+      if (c.kind === 'person' && c.npc) {
+        crowd.onZerbleHit(c.npc, tox * inv, toz * inv);
+      }
+      // If c.damage is 0 (e.g. fleeing NPC), treat as non-damaging.
+      return { damaging: c.damage > 0, damage: c.damage, kind: c.kind };
     }
 
     // Non-damaging contact: nudge Zerble out of overlap, kill any small approach speed.
@@ -266,15 +325,37 @@ function toastForKind(kind) {
   }
 }
 
-window.addEventListener('resize', () => {
-  const w = window.innerWidth;
-  const h = window.innerHeight;
+function handleResize() {
+  // visualViewport reports the *actual visible area* on iOS Safari, which
+  // shrinks/grows as the URL bar appears/disappears. Fall back to innerWidth.
+  const vv = window.visualViewport;
+  const w = Math.round((vv && vv.width) || window.innerWidth);
+  const h = Math.round((vv && vv.height) || window.innerHeight);
+  // Use default updateStyle=true so the canvas's inline width/height tracks
+  // the viewport. Mixing default-true at boot with false here used to leave
+  // the canvas displayed at boot dimensions after the URL bar collapsed.
   renderer.setSize(w, h);
   composer.setSize(w, h);
   camera.aspect = w / h;
   camera.updateProjectionMatrix();
   bloomPass.setSize(w, h);
+}
+window.addEventListener('resize', handleResize);
+window.addEventListener('orientationchange', () => {
+  // iOS often reports the wrong dimensions on the synchronous event; defer.
+  setTimeout(handleResize, 250);
 });
+if (window.visualViewport) {
+  window.visualViewport.addEventListener('resize', handleResize);
+}
 
 window.__game = { camera, zerble, scene, renderer, crowd, registry, chaseCam };
+
+installDebug({
+  scene, camera, renderer,
+  zerble, crowd, bubbles, smiles, registry,
+  puppets, band, kids, wooks,
+  getRunning: () => running,
+});
+
 tick();

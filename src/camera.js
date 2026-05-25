@@ -42,12 +42,18 @@ export class ChaseCamera {
   }
 
   update(dt, input) {
+    // Keyboard arrow keys: rate-based yaw/pitch.
     this.yawOffset += input.camYaw * YAW_RATE * dt;
-    this.pitchOffset = THREE.MathUtils.clamp(
-      this.pitchOffset + input.camPitch * PITCH_RATE * dt,
-      MIN_PITCH,
-      MAX_PITCH
-    );
+    let nextPitch = this.pitchOffset + input.camPitch * PITCH_RATE * dt;
+
+    // Touch drag: one-shot deltas in radians accumulated since last frame.
+    if (typeof input.consumeCamDeltas === 'function') {
+      const d = input.consumeCamDeltas();
+      this.yawOffset += d.yaw;
+      nextPitch += d.pitch;
+    }
+
+    this.pitchOffset = THREE.MathUtils.clamp(nextPitch, MIN_PITCH, MAX_PITCH);
 
     this._computeTargets();
 

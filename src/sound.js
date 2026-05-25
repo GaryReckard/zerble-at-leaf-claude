@@ -42,6 +42,22 @@ export const Sound = {
     initialized = true;
   },
 
+  // iOS Safari auto-suspends the AudioContext when the tab is hidden / the
+  // device is locked. Call this on visibilitychange (and on any other "we're
+  // back" signal) to resume. Safe no-op if init() hasn't run yet.
+  resume() {
+    if (!initialized || !ctx) return;
+    if (ctx.state === 'suspended') {
+      // Some iOS versions reject resume() outside a user gesture; the call is
+      // best-effort and harmless if it throws.
+      ctx.resume().catch(() => {});
+    }
+  },
+
+  isReady() {
+    return initialized;
+  },
+
   // ---- Spatial stage music ----
 
   attachStageMusic(x, y, z, seed) {

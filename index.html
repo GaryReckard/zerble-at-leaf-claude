@@ -2,16 +2,51 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, user-scalable=no" />
+  <meta name="mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <meta name="theme-color" content="#1a1430" />
   <title>Zerble at LEAF — A Bubble Adventure</title>
   <link rel="stylesheet" href="styles.css" />
-  <script type="importmap">
-    {
-      "imports": {
-        "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
-        "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/"
-      }
-    }
+  <script>
+    // Dev cache-buster: inject importmap + main script with a per-load query string.
+    // The Claude Preview proxy ignores Cache-Control headers from python http.server,
+    // so without unique URLs edits don't show up on reload. We only enable this
+    // on local/preview hostnames so production (and mobile-over-cellular) doesn't
+    // re-pull three.js every load.
+    (function () {
+      const h = location.hostname;
+      const isLocal =
+        h === 'localhost' ||
+        h === '127.0.0.1' ||
+        h === '0.0.0.0' ||
+        h.endsWith('.local') ||
+        /^10\./.test(h) ||
+        /^192\.168\./.test(h) ||
+        /^172\.(1[6-9]|2\d|3[0-1])\./.test(h) ||
+        h.includes('claude-preview') ||
+        h.includes('happycog');
+      const v = isLocal ? '?v=' + Date.now() : '';
+      const mods = ['main','world','zerble','bubbles','smiles','crowd','chunks',
+        'mountains','camera','input','touch','hud','sound','obstacles','registry','rng','debug','perf'];
+      const base = new URL('./src/', document.baseURI).href;
+      const imports = {
+        'three': 'https://unpkg.com/three@0.160.0/build/three.module.js',
+        'three/addons/': 'https://unpkg.com/three@0.160.0/examples/jsm/',
+      };
+      for (const m of mods) imports[base + m + '.js'] = base + m + '.js' + v;
+      const im = document.createElement('script');
+      im.type = 'importmap';
+      im.textContent = JSON.stringify({ imports });
+      document.head.appendChild(im);
+      window.addEventListener('DOMContentLoaded', () => {
+        const s = document.createElement('script');
+        s.type = 'module';
+        s.src = './src/main.js' + v;
+        document.body.appendChild(s);
+      });
+    })();
   </script>
 </head>
 <body>
@@ -34,16 +69,32 @@
     <div id="hit-flash"></div>
   </div>
 
+  <!-- Touch controls overlay — hidden by default; .is-touch on <body> reveals it. -->
+  <div id="touch-controls" aria-hidden="true">
+    <div id="stick-base">
+      <div id="stick-knob"></div>
+    </div>
+    <button id="btn-boost" class="touch-btn" aria-label="Boost">BOOST</button>
+    <button id="btn-honk" class="touch-btn" aria-label="Honk">HONK</button>
+  </div>
+
   <div id="title-card">
     <div class="card">
       <h1>Zerble at <span class="leaf">LEAF</span></h1>
       <p class="tag">Black Mountain, NC — bring the bubbles, collect the smiles</p>
 
-      <div class="controls">
+      <div class="controls controls-kbd">
         <div><kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> — drive Zerble</div>
         <div><kbd>&larr;</kbd><kbd>&uarr;</kbd><kbd>&darr;</kbd><kbd>&rarr;</kbd> — orbit/tilt camera</div>
         <div><kbd>Shift</kbd> — boost</div>
         <div><kbd>Space</kbd> — honk! (instant joy in a ring)</div>
+      </div>
+
+      <div class="controls controls-touch">
+        <div><span class="tag-key">Left thumbstick</span> — drive Zerble</div>
+        <div><span class="tag-key">Drag the world</span> — orbit/tilt camera</div>
+        <div><span class="tag-key">Boost</span> — hold for extra speed</div>
+        <div><span class="tag-key">Honk</span> — tap for instant joy in a ring</div>
       </div>
 
       <p class="hint">Glide near festival-goers so they see your glowing eyes and bubbles. Avoid the puppet parade, the brass band, food trucks, gaggles of kids, and the wooks.</p>
@@ -52,6 +103,5 @@
     </div>
   </div>
 
-  <script type="module" src="src/main.js"></script>
 </body>
 </html>

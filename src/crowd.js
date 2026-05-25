@@ -18,8 +18,9 @@
 
 import * as THREE from 'three';
 import { registry } from './registry.js';
+import { PERF } from './perf.js';
 
-const MAX_NPCS = 500;
+const MAX_NPCS = PERF.crowdMax;
 const NPC_ROW_SHIRT = [
   0xff6f9c, 0xffd28a, 0x6fcf6a, 0x66d9ff, 0xb285ff,
   0xff8a5b, 0xf2e8cf, 0x8ecae6, 0xffb703, 0xc77dff,
@@ -73,8 +74,8 @@ export class Crowd {
     this.bodyMesh = new THREE.InstancedMesh(bodyGeo, bodyMat, MAX_NPCS);
     this.headMesh = new THREE.InstancedMesh(headGeo, headMat, MAX_NPCS);
     this.bodyMesh.instanceColor = new THREE.InstancedBufferAttribute(new Float32Array(MAX_NPCS * 3), 3);
-    this.bodyMesh.castShadow = true;
-    this.headMesh.castShadow = true;
+    this.bodyMesh.castShadow = PERF.shadows;
+    this.headMesh.castShadow = PERF.shadows;
     this.bodyMesh.count = MAX_NPCS;
     this.headMesh.count = MAX_NPCS;
 
@@ -671,6 +672,29 @@ export class Crowd {
     if (td < ARRIVE_RADIUS || npc.stateTimer <= 0) {
       npc.state = 'idle';
       npc.stateTimer = 1 + Math.random() * 2;
+    }
+  }
+
+  // Called from main.js when Zerble drives into an NPC. Knockback the victim,
+  // put them into a fleeing state, and spook nearby NPCs (panic cascade).
+  onZerbleHit(victim, pushX, pushZ) {
+    victim.state = 'fleeing';
+    victim.stateTimer = 3;
+    victim.happiness = 0;
+    // Apply an instant positional knockback so the cart doesn't keep grinding
+    // through the same NPC frame after frame.
+    victim.pos.x += pushX * 0.6;
+    victim.pos.z += pushZ * 0.6;
+    // Panic cascade: nearby NPCs (within 6m) of any reasonable skittishness flee too
+    for (const other of this.npcs) {
+      if (other === victim || other.state === 'riding' || other.state === 'boarding') continue;
+      const dx = other.pos.x - victim.pos.x;
+      const dz = other.pos.z - victim.pos.z;
+      if (dx * dx + dz * dz > 36) continue;
+      // Bolder/calmer folks may shrug it off
+      if (other.skittish < 0.15 && Math.random() < 0.5) continue;
+      other.state = 'fleeing';
+      other.stateTimer = 2.5;
     }
   }
 

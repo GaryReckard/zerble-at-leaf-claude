@@ -52,7 +52,7 @@ const camera = new THREE.PerspectiveCamera(62, window.innerWidth / window.innerH
 const composer = new EffectComposer(renderer);
 composer.addPass(new RenderPass(scene, camera));
 const bloomPass = new UnrealBloomPass(
-  new THREE.Vector2(window.innerWidth, window.innerHeight),
+  new THREE.Vector2(window.innerWidth * 0.5, window.innerHeight * 0.5),
   PERF.bloomStrength, PERF.bloomRadius, PERF.bloomThreshold
 );
 // On the low profile we keep bloom but pass-through if it ever needs to be killed:
@@ -197,7 +197,7 @@ function tickBody(dt) {
     }
     const nowS = performance.now() * 0.001;
     updateStagePerformers(nowS);
-    updateStageLightShow(nowS, nightness);
+    updateStageLightShow(nowS, nightness, zerble.position);
 
     // Procedural world expands around Zerble.
     updateWorld(zerble.position, dt);
@@ -363,7 +363,7 @@ function handleResize() {
   composer.setSize(w, h);
   camera.aspect = w / h;
   camera.updateProjectionMatrix();
-  bloomPass.setSize(w, h);
+  bloomPass.setSize(w * 0.5, h * 0.5);
 }
 window.addEventListener('resize', handleResize);
 window.addEventListener('orientationchange', () => {

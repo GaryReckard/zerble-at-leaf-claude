@@ -10,6 +10,7 @@
 //   window.__debug.spawnNPC(n=20)        — force-spawn n watchers near Zerble
 
 import * as THREE from 'three';
+import { Sound } from './sound.js';
 
 const PANEL_ID = 'debug-panel';
 const COLLIDER_LAYER_NAME = '__debug_colliders';
@@ -167,6 +168,56 @@ function buildPanel() {
       if (tod) { tod.setT(t); slider.value = t; }
     });
   }
+
+  // ----- Audio volume controls -----
+  const audioBlock = document.createElement('div');
+  audioBlock.style.marginTop = '8px';
+  audioBlock.style.borderTop = '1px solid #2a4a5a';
+  audioBlock.style.paddingTop = '6px';
+
+  const masterVol = Sound.isReady() ? Sound.getMasterVolume() : 0.55;
+  const musicVol  = Sound.isReady() ? Sound.getMusicVolume()  : 1.6;
+  const sfxVol    = Sound.isReady() ? Sound.getSfxVolume()    : 1.0;
+
+  audioBlock.innerHTML = `
+    <div style="margin-bottom:4px;opacity:0.7">Audio</div>
+    <div style="display:flex;align-items:center;gap:6px;margin-bottom:4px">
+      <span style="width:48px;opacity:0.8">Master</span>
+      <input id="dbg-vol-master" type="range" min="0" max="2" step="0.01" value="${masterVol.toFixed(2)}"
+        style="flex:1;accent-color:#ffe066;cursor:pointer" />
+      <span id="dbg-vol-master-readout" style="width:32px;text-align:right">${masterVol.toFixed(2)}</span>
+    </div>
+    <div style="display:flex;align-items:center;gap:6px;margin-bottom:4px">
+      <span style="width:48px;opacity:0.8">Music</span>
+      <input id="dbg-vol-music" type="range" min="0" max="2" step="0.01" value="${musicVol.toFixed(2)}"
+        style="flex:1;accent-color:#ffe066;cursor:pointer" />
+      <span id="dbg-vol-music-readout" style="width:32px;text-align:right">${musicVol.toFixed(2)}</span>
+    </div>
+    <div style="display:flex;align-items:center;gap:6px">
+      <span style="width:48px;opacity:0.8">SFX</span>
+      <input id="dbg-vol-sfx" type="range" min="0" max="2" step="0.01" value="${sfxVol.toFixed(2)}"
+        style="flex:1;accent-color:#ffe066;cursor:pointer" />
+      <span id="dbg-vol-sfx-readout" style="width:32px;text-align:right">${sfxVol.toFixed(2)}</span>
+    </div>
+  `;
+  el.appendChild(audioBlock);
+
+  // Wire audio sliders
+  audioBlock.querySelector('#dbg-vol-master').addEventListener('input', (e) => {
+    const v = parseFloat(e.target.value);
+    Sound.setMasterVolume(v);
+    audioBlock.querySelector('#dbg-vol-master-readout').textContent = v.toFixed(2);
+  });
+  audioBlock.querySelector('#dbg-vol-music').addEventListener('input', (e) => {
+    const v = parseFloat(e.target.value);
+    Sound.setMusicVolume(v);
+    audioBlock.querySelector('#dbg-vol-music-readout').textContent = v.toFixed(2);
+  });
+  audioBlock.querySelector('#dbg-vol-sfx').addEventListener('input', (e) => {
+    const v = parseFloat(e.target.value);
+    Sound.setSfxVolume(v);
+    audioBlock.querySelector('#dbg-vol-sfx-readout').textContent = v.toFixed(2);
+  });
 
   state.panelEl = el;
 }

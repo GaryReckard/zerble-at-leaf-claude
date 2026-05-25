@@ -37,10 +37,10 @@ export class Bubbles {
       iridescenceIOR: 1.3,
       sheen: 0.4,
       sheenColor: new THREE.Color(0xff9ad1),
-      // Subtle emissive — gets cranked at night to make bubbles catch the
-      // disco/festival lights instead of disappearing into the dark.
-      emissive: 0xffffff,
-      emissiveIntensity: 0.0,
+      // No emissive — bubbles stay transparent. At night the iridescence/sheen
+      // ramps up in update() to give a glint effect instead of white blobs.
+      emissive: 0x000000,
+      emissiveIntensity: 0,
     });
     this._material = mat;
 
@@ -94,9 +94,11 @@ export class Bubbles {
   // the festival glow instead of going invisible.
   update(dt, zerble, nightness = 0) {
     if (this._material) {
-      // Day → 0; night → 0.35. Subtle but enough that bubbles catch the
-      // disco/headlight spotlights against a dark sky.
-      this._material.emissiveIntensity = nightness * 0.35;
+      // At night ramp up iridescence/sheen for glint instead of white-emissive blobs.
+      this._material.iridescence = THREE.MathUtils.lerp(0.2, 0.85, nightness);
+      this._material.iridescenceIOR = THREE.MathUtils.lerp(1.3, 1.7, nightness);
+      this._material.sheen = THREE.MathUtils.lerp(0.0, 0.6, nightness);
+      this._material.sheenColor.setHex(0xffffff);
     }
     _windT += dt;
     // Spawn rate scales with cart speed — at rest, slow ambient drip; moving, full stream.

@@ -169,10 +169,10 @@ function buildLightsAndFog(scene) {
   const sun = new THREE.DirectionalLight(SUN_COLOR, 1.35);
   sun.position.set(80, 130, 60);
   sun.castShadow = true;
-  sun.shadow.mapSize.set(2048, 2048);
+  sun.shadow.mapSize.set(1024, 1024);
   sun.shadow.camera.near = 1;
-  sun.shadow.camera.far = 400;
-  const shadowD = 160;
+  sun.shadow.camera.far = 200;
+  const shadowD = 100;
   sun.shadow.camera.left = -shadowD;
   sun.shadow.camera.right = shadowD;
   sun.shadow.camera.top = shadowD;

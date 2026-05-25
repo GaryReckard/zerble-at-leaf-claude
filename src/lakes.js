@@ -71,7 +71,7 @@ export class LakeManager {
   }
 }
 
-function buildLake(scene, mcx, mcz, rng) {
+export function buildLake(scene, mcx, mcz, rng, opts = {}) {
   const cellOriginX = mcx * LAKE_CELL;
   const cellOriginZ = mcz * LAKE_CELL;
 
@@ -188,6 +188,30 @@ function buildLake(scene, mcx, mcz, rng) {
   causeway.renderOrder = 1;
   group.add(causeway);
 
+  // 5% of large lakes get a tan sand beach tangent to the shore. Doubles as a
+  // people attractor — NPCs hang out at the beach. `opts.forceBeach` is used
+  // by the sandbox to render a beach unconditionally for inspection.
+  let beachSpec = null;
+  if (opts.forceBeach || (bigR > 60 && rng() < 0.05)) {
+    const sandMat = new THREE.MeshStandardMaterial({
+      color: 0xd9b878,
+      roughness: 1.0,
+      flatShading: true,
+    });
+    const sandRadius = bigR * 0.35;
+    const sandAngle = rng() * Math.PI * 2;
+    const sandX = bigCx + Math.cos(sandAngle) * (bigR * 0.9);
+    const sandZ = bigCz + Math.sin(sandAngle) * (bigR * 0.9);
+    const sandMesh = new THREE.Mesh(new THREE.CircleGeometry(sandRadius, 16), sandMat);
+    sandMesh.rotation.x = -Math.PI / 2;
+    sandMesh.position.set(sandX, 0.02, sandZ);
+    sandMesh.castShadow = false;
+    sandMesh.receiveShadow = true;
+    sandMesh.renderOrder = 1;
+    group.add(sandMesh);
+    beachSpec = { x: sandX, z: sandZ, radius: sandRadius };
+  }
+
   // ---- Peninsula in small lake: a finger jutting into the small lake from
   // the OPPOSITE side of where the causeway enters. ----
   const peninsulaAngle = causewayAngle + Math.PI;  // 180° from causeway entry
@@ -223,13 +247,29 @@ function buildLake(scene, mcx, mcz, rng) {
   addLakeRingColliders(registryIds, bigCx, bigCz, bigR, causewayAngle, causewayHalfW, null);
   addLakeRingColliders(registryIds, smallCx, smallCz, smallR, causewayAngle + Math.PI, causewayHalfW, peninsulaAngle);
 
-  // Island as a soft bump
+  // Island: footprint for NPC avoidance but NO collider — Zerble can drive across.
   registryIds.push(registry.add({
     kind: 'island',
     position: new THREE.Vector3(islandX, 0.5, islandZ),
     footprint: islandR,
-    collider: { radius: islandR + 0.4, damage: 3 },
   }));
+  // The tree on the island KEEPS its collider — driving into it still hurts.
+  registryIds.push(registry.add({
+    kind: 'lake_tree',
+    position: new THREE.Vector3(islandX, 0, islandZ),
+    footprint: 0.8,
+    collider: { radius: 0.9, damage: 2 },
+  }));
+
+  // Beach attractor: NPCs hang out on the sandy beach when one exists.
+  if (beachSpec) {
+    registryIds.push(registry.add({
+      kind: 'beach',
+      position: new THREE.Vector3(beachSpec.x, 0, beachSpec.z),
+      footprint: 0,
+      attractor: { radius: beachSpec.radius * 0.9, weight: 2.4 },
+    }));
+  }
 
   // Shore attractors: NPCs like hanging out at the shoreline. Sample 3-4 points
   // around the big lake's perimeter and one on the peninsula tip.

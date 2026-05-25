@@ -20,27 +20,30 @@ export function buildParasolMarshal() {
   g.add(body);
 
   // Tall band leader's hat — taller drum-major-style topper.
+  // Parented to body so it bobs with the marching animation (caller bobs body).
+  // Head center is at body-local y=1.65; hat sits on top.
   const hatColor = 0x1a1a3a;
   const hatMat = new THREE.MeshStandardMaterial({ color: hatColor, roughness: 0.7 });
   const hat = new THREE.Mesh(
     new THREE.CylinderGeometry(0.32, 0.32, 0.55, 14), hatMat,
   );
   hat.position.set(0, 2.18, 0);
-  g.add(hat);
+  body.add(hat);
   const brim = new THREE.Mesh(
     new THREE.CylinderGeometry(0.42, 0.42, 0.05, 14), hatMat,
   );
   brim.position.set(0, 1.93, 0);
-  g.add(brim);
+  body.add(brim);
   // Gold band on the hat
   const hatBand = new THREE.Mesh(
     new THREE.CylinderGeometry(0.325, 0.325, 0.08, 14),
     new THREE.MeshStandardMaterial({ color: 0xe8b042, roughness: 0.3, metalness: 0.9 }),
   );
   hatBand.position.set(0, 1.97, 0);
-  g.add(hatBand);
+  body.add(hatBand);
 
-  // Parasol pole — runs up from the right hand to ~3.5m
+  // Parasol pole — held in the right hand, runs up to ~3.5m. Parented to body
+  // so it travels with the marshal's hand as the body bobs.
   const poleMat = new THREE.MeshStandardMaterial({
     color: 0x6a4a2a, roughness: 0.95,
   });
@@ -48,12 +51,13 @@ export function buildParasolMarshal() {
     new THREE.CylinderGeometry(0.04, 0.04, 2.6, 8), poleMat,
   );
   pole.position.set(0.3, 2.0, -0.2);
-  g.add(pole);
+  body.add(pole);
 
   // Parasol group — canopy + ribbons. Spins around its Y axis.
+  // Parented to body so it bobs naturally with the marshal.
   const parasol = new THREE.Group();
   parasol.position.set(0.3, 3.3, -0.2);
-  g.add(parasol);
+  body.add(parasol);
 
   // Canopy — flattened cone with vertical color bands. Approximate radial
   // bands by stacking thin pie slices, but the cheap version that reads

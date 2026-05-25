@@ -72,7 +72,7 @@ export function buildPuppet(seed = 0) {
       const stream = new THREE.Mesh(
         cone,
         new THREE.MeshStandardMaterial({
-          color: streamerColors[(seed * 3 + k) | 0 % streamerColors.length],
+          color: streamerColors[((seed * 3 + k) | 0) % streamerColors.length],
           roughness: 0.8,
           flatShading: true,
         }),
@@ -167,7 +167,7 @@ export function buildSimpleNPC(shirtHex, skinHex, opts = {}) {
       new THREE.BoxGeometry(0.16, 0.07, 0.24),
       new THREE.MeshStandardMaterial({ color: 0x111, roughness: 0.8 }),
     );
-    shoe.position.set(lx, 0.03, 0.04);
+    shoe.position.set(lx, 0.03, -0.06);
     g.add(shoe);
   }
 
@@ -188,7 +188,9 @@ export function buildSimpleNPC(shirtHex, skinHex, opts = {}) {
     let upperZ = 0;
     let lowerZ = 0;
     if (armPose === 'instrument') {
-      armGroup.rotation.x = -0.6;      // arm pivots forward
+      // Positive X rotation swings the arm forward (toward -Z, where the face looks).
+      // Negative was a bug — it pushed arms behind the body.
+      armGroup.rotation.x = 0.6;
       lowerZ = -0.10;
     }
     armGroup.rotation.z = sx * 0.05;

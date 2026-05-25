@@ -4,7 +4,7 @@
 import * as THREE from 'three';
 import { buildSimpleNPC } from './puppet.js';
 
-export function buildBandMember(instrument) {
+export function buildBandMember(instrument, seed = 0) {
   const g = new THREE.Group();
   // Marching uniform shirt + black trousers. Arms pose forward to grip
   // the instrument; the drummer keeps relaxed arms (sticks live on the
@@ -17,18 +17,46 @@ export function buildBandMember(instrument) {
   );
   g.add(body);
 
-  const hat = new THREE.Mesh(
-    new THREE.CylinderGeometry(0.32, 0.32, 0.35, 12),
-    new THREE.MeshStandardMaterial({ color: 0x121212, roughness: 0.8 })
-  );
-  hat.position.set(0, 2.05, 0);
-  g.add(hat);
-  const brim = new THREE.Mesh(
-    new THREE.CylinderGeometry(0.45, 0.45, 0.05, 12),
-    new THREE.MeshStandardMaterial({ color: 0x121212, roughness: 0.8 })
-  );
-  brim.position.set(0, 1.9, 0);
-  g.add(brim);
+  // Per-member hat variation — deterministic from seed.
+  // Hat is parented to `body` so it bobs with marching animation.
+  // Head center is at y=1.65 within body; hat sits just above at y=2.05.
+  const hatRoll = ((seed * 2654435761) >>> 0) / 0x100000000; // simple hash → [0,1)
+  if (hatRoll < 0.34) {
+    // NO HAT — ~34% of band members go bare-headed.
+  } else if (hatRoll < 0.67) {
+    // TOP HAT — narrow crown + tight brim, fixed proportions.
+    const hatMat = new THREE.MeshStandardMaterial({ color: 0x121212, roughness: 0.8 });
+    const hat = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.13, 0.13, 0.35, 12),
+      hatMat,
+    );
+    hat.position.set(0, 2.05, 0);
+    body.add(hat);
+    const brim = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.30, 0.30, 0.05, 12),
+      hatMat,
+    );
+    brim.position.set(0, 1.90, 0);
+    body.add(brim);
+  } else {
+    // BASEBALL CAP — short cylinder + thin forward brim.
+    const capColors = [0x2a3a5a, 0x6a2a2a, 0x2a6a3a];
+    const capHex = capColors[((seed * 1234567891) >>> 0) % capColors.length];
+    const capMat = new THREE.MeshStandardMaterial({ color: capHex, roughness: 0.85 });
+    const cap = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.16, 0.16, 0.10, 12),
+      capMat,
+    );
+    cap.position.set(0, 1.77, 0);
+    body.add(cap);
+    // Brim sticking forward (local -Z = forward for the NPC).
+    const capBrim = new THREE.Mesh(
+      new THREE.BoxGeometry(0.28, 0.03, 0.16),
+      capMat,
+    );
+    capBrim.position.set(0, 1.72, -0.20);
+    body.add(capBrim);
+  }
 
   const brass = new THREE.MeshStandardMaterial({
     color: 0xe8b042,

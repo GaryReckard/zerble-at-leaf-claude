@@ -44,7 +44,7 @@ export class Zerble {
     // Eye-glow brightness scalar (0..1). Default 0.75 per the spec. Held
     // I-key ramps it toward 1, held O ramps it toward 0. Eased so the full
     // range takes a touch under 2s.
-    this.eyeGlowLevel = 0.75;
+    this.eyeGlowLevel = 0.5;
 
     // For bubbles & smile attraction: a stable world point on Zerble.
     this.nozzleWorld = new THREE.Vector3();
@@ -282,31 +282,29 @@ export class Zerble {
         opacity: 0.85,
         side: THREE.DoubleSide,
       });
-      // SphereGeometry(r, w, h, phiStart, phiLength, thetaStart, thetaLength)
-      // — phi here is azimuth (rotation around Y). The eye looks down -Z;
-      // a hemisphere covering -Z is phiStart = π/2, phiLength = π.
+      // SphereGeometry phi mapping in three.js: phi=0 → -X, π/2 → +Z, π → +X, 3π/2 → -Z.
+      // The eye looks down -Z; a hemisphere covering -Z is phiStart = π, phiLength = π
+      // (covers +X → -Z → -X, the FRONT half).
       const sclera = new THREE.Mesh(
-        new THREE.SphereGeometry(0.7, 24, 16, Math.PI / 2, Math.PI),
+        new THREE.SphereGeometry(0.7, 24, 16, Math.PI, Math.PI),
         scleraMat,
       );
       sclera.castShadow = false;
       eye.add(sclera);
       this._eyeGlowMats.push(scleraMat);
 
-      // Opaque black back cap so the cab interior stays dark (drivers'
-      // POV). Slightly larger radius so it visually fully occludes the
-      // hemisphere's open back rim.
+      // Back cap covers the +Z (rear) half so the cab interior stays dark.
+      // phiStart=0, phiLength=π covers -X → +Z → +X.
       const backCapMat = new THREE.MeshStandardMaterial({
-        color: 0x0a0a0a, roughness: 0.9, side: THREE.DoubleSide,
+        color: 0x2a2a2a, roughness: 0.9, side: THREE.DoubleSide,
       });
       const backCap = new THREE.Mesh(
-        new THREE.SphereGeometry(0.71, 24, 16, -Math.PI / 2, Math.PI),
+        new THREE.SphereGeometry(0.71, 24, 16, 0, Math.PI),
         backCapMat,
       );
       eye.add(backCap);
 
-      // Iris — also translucent + glowing per Gary's feedback. Front-half
-      // hemisphere so the back of the cap stays unlit.
+      // Iris — front-facing hemisphere matching the sclera (covers -Z front).
       const irisMat = new THREE.MeshStandardMaterial({
         color: COLOR_IRIS,
         emissive: COLOR_IRIS,
@@ -317,7 +315,7 @@ export class Zerble {
         side: THREE.DoubleSide,
       });
       const iris = new THREE.Mesh(
-        new THREE.SphereGeometry(0.4, 18, 12, Math.PI / 2, Math.PI),
+        new THREE.SphereGeometry(0.4, 18, 12, Math.PI, Math.PI),
         irisMat,
       );
       iris.position.z = -0.45;
@@ -420,12 +418,12 @@ export class Zerble {
     // chase) and a SpotLight pointed in the same direction throws actual
     // illumination at night.
     const discoGroup = new THREE.Group();
-    // Match the previous ring's world spot: behind the nozzle at z=2.7,
-    // y=3.0 (top of the bubble machine).
-    discoGroup.position.set(0, 3.0, 2.7);
-    // Pitch 45° down/back: rotate around X so the hemisphere's open face
-    // points away from the cart and downward.
-    discoGroup.rotation.x = Math.PI / 4;
+    // Tucked just under the bubble machine (bm bottom ≈ y=2.775).
+    // z=1.95 matches the bubble machine's z so it mounts cleanly beneath it.
+    discoGroup.position.set(0, 2.7, 1.95);
+    // 135° around X: hemisphere open face points DOWN+back so the SpotLight
+    // (target at local +Y=5) throws light onto the ground behind the cart.
+    discoGroup.rotation.x = (3 * Math.PI) / 4;
     this.root.add(discoGroup);
 
     // Small black housing cup
@@ -545,39 +543,67 @@ export class Zerble {
     head.castShadow = true;
     driver.add(head);
 
-    // Trucker cap
-    const cap = new THREE.Mesh(
-      new THREE.CylinderGeometry(0.3, 0.3, 0.2, 12),
-      new THREE.MeshStandardMaterial({ color: 0x3a4f6a, roughness: 0.8, flatShading: true })
-    );
-    cap.position.y = 1.0;
-    driver.add(cap);
-    const brim = new THREE.Mesh(
-      new THREE.CylinderGeometry(0.38, 0.38, 0.04, 12),
-      new THREE.MeshStandardMaterial({ color: 0x3a4f6a, roughness: 0.8, flatShading: true })
-    );
-    brim.position.set(0, 0.9, -0.18);
-    driver.add(brim);
+    // (No hat — driver goes hatless)
 
-    // Beard — chunky cluster of icospheres hanging from the chin
+    // Beard — dense cluster of icospheres, wide arc under chin hanging well below the head
     const beardMatA = new THREE.MeshStandardMaterial({ color: 0x4a352a, roughness: 1, flatShading: true });
     const beardMatB = new THREE.MeshStandardMaterial({ color: 0x5d4435, roughness: 1, flatShading: true });
-    const beardClusters = 14;
+    const beardMatC = new THREE.MeshStandardMaterial({ color: 0x2e1e14, roughness: 1, flatShading: true }); // dark accent
+    const beardClusters = 40;
     for (let i = 0; i < beardClusters; i++) {
-      const ang = (i / beardClusters) * Math.PI * 1.2 + Math.PI * 0.4;
-      const r = 0.22 + Math.random() * 0.04;
-      const dy = -0.05 - Math.random() * 0.15;
+      // Arc spans from one cheek across the chin to the other (~220°), centered facing -Z
+      const ang = (i / beardClusters) * Math.PI * 1.22 + Math.PI * 0.39;
+      const r = 0.20 + Math.random() * 0.08;
+      // dy range: -0.05 near the chin line down to -0.45 for the hanging beard
+      const dy = -0.05 - Math.random() * 0.40;
+      const radius = 0.10 + Math.random() * 0.05;
+      const matIdx = i % 5;
+      const mat = matIdx === 4 ? beardMatC : (i % 2 === 0 ? beardMatA : beardMatB);
       const tuft = new THREE.Mesh(
-        new THREE.IcosahedronGeometry(0.09 + Math.random() * 0.04, 0),
-        i % 2 === 0 ? beardMatA : beardMatB
+        new THREE.IcosahedronGeometry(radius, 0),
+        mat
       );
       tuft.position.set(
-        Math.cos(ang) * r * 0.6,
-        0.6 + dy,
-        Math.sin(ang) * r * 0.6 - 0.05
+        Math.cos(ang) * r * 0.75,
+        0.62 + dy,
+        Math.sin(ang) * r * 0.75 - 0.06
       );
-      tuft.rotation.set(Math.random(), Math.random(), Math.random());
+      tuft.rotation.set(Math.random() * Math.PI, Math.random() * Math.PI, Math.random() * Math.PI);
       driver.add(tuft);
+    }
+
+    // Handlebar mustache — two mirrored CatmullRom tubes, brown, curling up at tips
+    // Sits just under the nose (head center at y=0.75), in front of the face (-Z side).
+    const driverMustacheMat = new THREE.MeshStandardMaterial({ color: 0x4a352a, roughness: 0.95, flatShading: true });
+    for (const side of [-1, 1]) {
+      const pts = [
+        new THREE.Vector3(side * 0.03, 0.68, -0.27),   // near center under nose
+        new THREE.Vector3(side * 0.12, 0.67, -0.28),
+        new THREE.Vector3(side * 0.22, 0.65, -0.26),
+        new THREE.Vector3(side * 0.28, 0.63, -0.24),   // widest point
+        new THREE.Vector3(side * 0.30, 0.66, -0.23),   // starts curling up
+        new THREE.Vector3(side * 0.28, 0.70, -0.23),   // tip curled up
+      ];
+      const mCurve = new THREE.CatmullRomCurve3(pts);
+      const mTube = new THREE.Mesh(
+        new THREE.TubeGeometry(mCurve, 20, 0.04, 7, false),
+        driverMustacheMat
+      );
+      mTube.castShadow = true;
+      driver.add(mTube);
+    }
+
+    // Blue eyes — sclera + iris on the front face of the head
+    // Head is at y=0.75; eyes sit slightly above center, pushed forward (-Z)
+    const eyeSclMat = new THREE.MeshStandardMaterial({ color: 0xf0f0f0, roughness: 0.5, flatShading: true });
+    const eyeIrisMat = new THREE.MeshStandardMaterial({ color: 0x2a6fb8, roughness: 0.4, flatShading: true });
+    for (const ex of [-0.10, 0.10]) {
+      const sclera = new THREE.Mesh(new THREE.SphereGeometry(0.045, 8, 6), eyeSclMat);
+      sclera.position.set(ex, 0.78, -0.22);
+      driver.add(sclera);
+      const iris = new THREE.Mesh(new THREE.SphereGeometry(0.025, 7, 5), eyeIrisMat);
+      iris.position.set(ex, 0.78, -0.25);
+      driver.add(iris);
     }
 
     // Hands on a steering wheel (just suggested)
@@ -672,15 +698,15 @@ export class Zerble {
       // ----- Hair strands along the tube — thin cones flowing ALONG the tube -----
       // Previous version was too spikey (60% radial outward). Now the strands
       // mostly follow the tangent direction (75%), with only a small radial
-      // component (20%) and slight up-bias (5%). Density doubled to 192 per
-      // side so the mustache reads as dense hair rather than sparse spikes.
+      // component (20%) and slight up-bias (5%). 96 per side (halved from 192)
+      // — still reads as dense hair, better perf.
       const _ref = new THREE.Vector3();
       const _side = new THREE.Vector3();
       const _normal = new THREE.Vector3();
       const _radial = new THREE.Vector3();
       const _dir = new THREE.Vector3();
       const _yAxis = new THREE.Vector3(0, 1, 0);
-      const strandCount = 192;
+      const strandCount = 96;
       for (let i = 0; i < strandCount; i++) {
         const u = (i + 0.5) / strandCount;
         const p = curve.getPoint(u);
@@ -883,12 +909,15 @@ export class Zerble {
     if (this._headlightMat) {
       this._headlightMat.emissiveIntensity = 1.2 + nightness * 3.8;
     }
-    // ----- Eyes — dimmer than before, scaled by the user's I/O level -----
-    // Day baseline: 0.35 * level. Night peak: (0.35 + 0.35) * level = 0.70.
-    // Below that the eyes are visibly glowing without blooming out the cab.
+    // ----- Eyes — dramatic I/O range so key presses are visibly impactful -----
+    // eyeBase: always-on minimum so the eyes read even at level=0.
+    // eyeGlowLevel boost: at level=1 the eyes are MUCH brighter (full bloom).
+    // At level=0 only eyeBase remains — dim but visible.
     if (this._eyeGlowMats) {
-      const eyeBase = 0.35 + nightness * 0.35;
-      const intensity = eyeBase * this.eyeGlowLevel;
+      // Always-on minimum so eyes read even at level=0. At level=1 eyes are
+      // dramatically brighter but stay below blown-out bloom range.
+      const eyeBase = 0.10 + nightness * 0.15;
+      const intensity = eyeBase + this.eyeGlowLevel * (0.45 + nightness * 0.55);
       for (const m of this._eyeGlowMats) {
         m.emissiveIntensity = intensity;
       }

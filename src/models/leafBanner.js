@@ -19,10 +19,10 @@ function makeOne(textColor, bgColor) {
   cx.strokeRect(8, 8, c.width - 16, c.height - 16);
 
   cx.fillStyle = textColor;
-  cx.font = 'bold 200px "Trebuchet MS", "Helvetica Neue", Helvetica, Arial, sans-serif';
+  cx.font = 'bold 140px "Trebuchet MS", "Helvetica Neue", Helvetica, Arial, sans-serif';
   cx.textAlign = 'center';
   cx.textBaseline = 'middle';
-  cx.fillText('LEAF', c.width / 2, c.height / 2 + 8);
+  cx.fillText('FESTIVAL', c.width / 2, c.height / 2 + 8);
 
   const tex = new THREE.CanvasTexture(c);
   tex.colorSpace = THREE.SRGBColorSpace;

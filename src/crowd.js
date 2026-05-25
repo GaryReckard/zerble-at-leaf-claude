@@ -115,6 +115,13 @@ export class Crowd {
     this._mat4 = new THREE.Matrix4();
     this._tmpV = new THREE.Vector3();
     this._tmpV2 = new THREE.Vector3();
+    this._tmpQuat = new THREE.Quaternion();
+    this._tmpEuler = new THREE.Euler();
+    this._tmpDanceMat = new THREE.Matrix4();
+
+    // High-water mark: highest slot index ever written. count is set to
+    // _maxIdx + 1 each frame so three.js skips unwritten slots above it.
+    this._maxIdx = -1;
   }
 
   // Called by chunk generator.
@@ -183,6 +190,9 @@ export class Crowd {
     };
 
     this.npcs.push(npc);
+
+    // Track the highest-ever slot index so we can narrow draw count each frame.
+    if (idx > this._maxIdx) this._maxIdx = idx;
 
     // Color
     const c = new THREE.Color(shirt);
@@ -282,6 +292,15 @@ export class Crowd {
 
     this.bodyMesh.instanceMatrix.needsUpdate = true;
     this.headMesh.instanceMatrix.needsUpdate = true;
+    // Narrow draw count to the highest slot ever written + 1. Slots above
+    // _maxIdx are untouched (zero matrix from init) and never drawn. Slots
+    // below that mark that have been despawned are still in range but carry a
+    // zero-scale matrix so the GPU skips them at near-zero cost.
+    const drawCount = this._maxIdx + 1;
+    if (drawCount < MAX_NPCS) {
+      this.bodyMesh.count = drawCount;
+      this.headMesh.count = drawCount;
+    }
   }
 
   _updateNpc(dt, npc, zerble, bubblePositions, cosCone, ctx) {
@@ -596,7 +615,8 @@ export class Crowd {
 
   _writeMatrices(npc) {
     const m = this._mat4;
-    const quat = new THREE.Quaternion().setFromEuler(new THREE.Euler(0, npc.yaw, 0));
+    // Reuse scratch Quaternion/Euler — avoids ~30k allocations/sec at 500 NPCs × 60fps.
+    const quat = this._tmpQuat.setFromEuler(this._tmpEuler.set(0, npc.yaw, 0));
     const bobY = Math.sin(npc.bob) * 0.04;
     const danceTilt = npc.dance > 0.6 && (npc.state === 'idle' || npc.state === 'watching' || npc.state === 'riding')
       ? Math.sin(npc.bob * 2) * 0.05 * (npc.dance - 0.5)
@@ -625,8 +645,9 @@ export class Crowd {
     scaleV.set(npc.scale, npc.scale, npc.scale);
     m.compose(posV, quat, scaleV);
     if (danceTilt) {
-      const t = new THREE.Matrix4().makeRotationZ(danceTilt);
-      m.multiply(t);
+      // Reuse scratch Matrix4 — avoids per-NPC allocation for dancing crowd.
+      this._tmpDanceMat.makeRotationZ(danceTilt);
+      m.multiply(this._tmpDanceMat);
     }
     this.bodyMesh.setMatrixAt(npc.idx, m);
 

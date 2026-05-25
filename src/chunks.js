@@ -63,11 +63,19 @@ export function updateStagePerformers(t) {
 // baseline emissive. At night they pulse and cycle through a club-like
 // rainbow palette and the audience-facing SpotLight beams sweep across
 // the crowd. `t` is seconds since start, `nightness` 0..1 from the
-// time-of-day system.
+// time-of-day system, `zerblePos` is THREE.Vector3 used to pool the
+// closest beams (only MAX_ACTIVE_STAGE_LIGHTS SpotLights are lit per frame).
+const MAX_ACTIVE_STAGE_LIGHTS = 6;
 const _showColors = [0xff3380, 0xffae33, 0xffe066, 0x66ff88, 0x33d9ff, 0xc080ff];
 const _tmpC1 = new THREE.Color();
 const _tmpC2 = new THREE.Color();
-export function updateStageLightShow(t, nightness) {
+// Scratch vector to avoid per-frame allocation when computing distances.
+const _tmpVec = new THREE.Vector3();
+// Scratch buffers for the beam-distance sort — lazily resized, reused every frame.
+let _beamDistances = new Float32Array(64);
+let _beamIndices = Array.from({ length: 64 }, (_, i) => i);
+let _beamScratchCap = 64;
+export function updateStageLightShow(t, nightness, zerblePos) {
   // ---- Lens colors / pulse ----
   for (let i = 0; i < stageLightLenses.length; i++) {
     const entry = stageLightLenses[i];
@@ -96,6 +104,13 @@ export function updateStageLightShow(t, nightness) {
   // Beams swing left/right + forward/back in lissajous patterns so each
   // stage paints a moving rainbow across the crowd. Three beams per stage
   // chase different patterns so they don't lockstep.
+  //
+  // Performance pool: rank all loaded beams by their stage's distance to
+  // Zerble and only enable the closest MAX_ACTIVE_STAGE_LIGHTS. Beams
+  // outside the pool get intensity = 0 so the GPU skips their fragment
+  // work entirely. Animation state (target position, color) still advances
+  // every frame for all beams so there's no visual pop when a stage enters
+  // or leaves the active pool.
   const PATTERNS = [
     // {ax: amplitudeX, az: amplitudeZ, rateX, rateZ, phaseZ}
     { ax: 6, az: 3, rateX: 0.9, rateZ: 1.3, phaseZ: 0.0 },     // wide sweep
@@ -103,11 +118,47 @@ export function updateStageLightShow(t, nightness) {
     { ax: 5, az: 4, rateX: 0.6, rateZ: 1.1, phaseZ: 2.4 },     // diagonal
   ];
   const beamOn = THREE.MathUtils.smoothstep(nightness, 0.15, 0.7);
-  for (let i = 0; i < stageBeamRefs.length; i++) {
+  const totalBeams = stageBeamRefs.length;
+
+  // Build a sorted distance list only when we have more beams than the pool
+  // size AND we have a valid zerblePos to compare against. When beam count is
+  // within the pool cap, every beam is active — no sorting needed.
+  let activeSet = null; // null means "all beams are active"
+  if (zerblePos && totalBeams > MAX_ACTIVE_STAGE_LIGHTS) {
+    // Compute squared distance for each beam (cheap; avoids sqrt).
+    // Group by stage world position so three beams from the same stage share
+    // one distance lookup (each ref carries stageWorldPos).
+    // Grow scratch buffers only when beam count exceeds current capacity.
+    if (totalBeams > _beamScratchCap) {
+      _beamDistances = new Float32Array(totalBeams);
+      _beamIndices = Array.from({ length: totalBeams }, (_, i) => i);
+      _beamScratchCap = totalBeams;
+    }
+    for (let i = 0; i < totalBeams; i++) {
+      const ref = stageBeamRefs[i];
+      if (ref.stageWorldPos) {
+        _tmpVec.copy(ref.stageWorldPos).sub(zerblePos);
+        _beamDistances[i] = _tmpVec.x * _tmpVec.x + _tmpVec.z * _tmpVec.z;
+      } else {
+        // No world position stored — treat as closest so it's never culled.
+        _beamDistances[i] = 0;
+      }
+      _beamIndices[i] = i; // reset before sort (reused buffer)
+    }
+    // Sort indices by distance ascending (in-place on reused array).
+    _beamIndices.length = totalBeams;
+    _beamIndices.sort((a, b) => _beamDistances[a] - _beamDistances[b]);
+    // The active set is the closest MAX_ACTIVE_STAGE_LIGHTS beam indices.
+    activeSet = new Set(_beamIndices.slice(0, MAX_ACTIVE_STAGE_LIGHTS));
+  }
+
+  for (let i = 0; i < totalBeams; i++) {
     const ref = stageBeamRefs[i];
     const pattern = PATTERNS[i % PATTERNS.length];
     const phase = t + ref.phaseOffset;
-    // Sweep target X/Z around the baseline (in stage-local space).
+
+    // Always advance animation state so beams are in-phase when they re-enter
+    // the active pool — avoids a visible jump in sweep position / color.
     ref.target.position.x = ref.baseTargetX
       + Math.sin(phase * pattern.rateX) * pattern.ax * ref.scale;
     ref.target.position.z = ref.baseTargetZ
@@ -119,9 +170,15 @@ export function updateStageLightShow(t, nightness) {
     _tmpC1.setHex(_showColors[colorIdx]);
     _tmpC2.setHex(_showColors[nextIdx]);
     ref.beam.color.copy(_tmpC1.lerp(_tmpC2, blend));
-    // Intensity pulses + ramps with nightness.
-    const pulse = 0.55 + 0.45 * Math.sin(phase * 2.2);
-    ref.beam.intensity = beamOn * pulse * 9.0;
+
+    // Intensity: full animation for active pool; zero for culled beams.
+    const inPool = activeSet === null || activeSet.has(i);
+    if (inPool) {
+      const pulse = 0.55 + 0.45 * Math.sin(phase * 2.2);
+      ref.beam.intensity = beamOn * pulse * 9.0;
+    } else {
+      ref.beam.intensity = 0;
+    }
   }
 }
 
@@ -501,10 +558,12 @@ function buildTentStageTheme(ctx) {
       lens, chunkKey: ctx.key, baseColor: lens.material.color.getHex(),
     });
   }
-  // ...and its audience-facing beams.
+  // ...and its audience-facing beams. The tent stage's world position is the
+  // chunk center (tent.group.position is set to cxWorld/czWorld above).
   if (tent.stageBeams) {
+    const tentWorldPos = new THREE.Vector3(ctx.cxWorld, 0, ctx.czWorld);
     for (const b of tent.stageBeams) {
-      stageBeamRefs.push({ ...b, chunkKey: ctx.key, scale: tent.stageScale || 1.0 });
+      stageBeamRefs.push({ ...b, chunkKey: ctx.key, scale: tent.stageScale || 1.0, stageWorldPos: tentWorldPos });
     }
   }
 
@@ -791,9 +850,11 @@ function buildStage(ctx, x, z, isMain) {
   for (const lens of stage.stageLights) {
     stageLightLenses.push({ lens, chunkKey: ctx.key, baseColor: lens.material.color.getHex() });
   }
-  // Track audience-facing spotlight beams.
+  // Track audience-facing spotlight beams. Store the stage's world position
+  // so the spotlight pool can rank beams by distance to Zerble each frame.
+  const stageWorldPos = new THREE.Vector3(x, 0, z);
   for (const b of stage.stageBeams) {
-    stageBeamRefs.push({ ...b, chunkKey: ctx.key, scale });
+    stageBeamRefs.push({ ...b, chunkKey: ctx.key, scale, stageWorldPos });
   }
 
   // ----- Colliders: spheres INSCRIBED in the deck rectangle -----

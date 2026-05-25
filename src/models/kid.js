@@ -51,7 +51,7 @@ export function buildKid(rng = Math.random) {
       new THREE.BoxGeometry(0.10, 0.05, 0.16),
       new THREE.MeshStandardMaterial({ color: 0x111, roughness: 0.8 }),
     );
-    shoe.position.set(lx, 0.025, 0.025);
+    shoe.position.set(lx, 0.025, -0.04);
     body.add(shoe);
   }
 

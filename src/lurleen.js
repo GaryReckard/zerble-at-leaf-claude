@@ -423,6 +423,9 @@ export class Lurleen {
   // back, left, right), each laying strands along its edge.
 
   _buildHair() {
+    // Reduce hair strand count for perf. Set HAIR_DENSITY = 1.0 to restore full density.
+    const HAIR_DENSITY = 0.55;
+
     // Per Gary's reference photo + feedback: hair is gathered into FOUR
     // bunches at the roof corners (like hair ties / pigtails) and hangs
     // straight down from there. No perimeter fringe.
@@ -457,7 +460,7 @@ export class Lurleen {
     const tieDropY = 0.55;     // how far below the roof the tie sits
     const arcEndOffset = 0.06; // small offset so the strand visually lands inside the tie
 
-    // Sample 22 points per edge — gives a dense fringe without being a
+    // Sample points per edge — gives a dense fringe without being a
     // performance hog. Halfway between two adjacent points on an edge, the
     // strand picks whichever corner is closer (the boundary is the edge
     // midpoint, which we deliberately don't sample exactly).
@@ -477,7 +480,7 @@ export class Lurleen {
     ];
 
     for (const edge of edges) {
-      const stranesPerEdge = 22;
+      const stranesPerEdge = Math.round(22 * HAIR_DENSITY);
       for (let i = 0; i < stranesPerEdge; i++) {
         // Offset i slightly so we don't sample exactly at the corner (the
         // corner bunch covers that already).
@@ -535,7 +538,7 @@ export class Lurleen {
       this.root.add(tie);
 
       // Bunch of straight-down strands BELOW the tie — the ponytail tail.
-      const strandsPerBunch = 70;
+      const strandsPerBunch = Math.round(70 * HAIR_DENSITY);
       for (let i = 0; i < strandsPerBunch; i++) {
         // Cluster radius ~0.14 around the tie's center
         const a = Math.random() * Math.PI * 2;

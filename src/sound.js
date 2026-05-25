@@ -15,6 +15,7 @@ import { mulberry32 } from './rng.js';
 let ctx = null;
 let masterGain = null;
 let musicBus = null;     // shared bus for stage music sources (so we can balance vs. SFX)
+let sfxBus = null;       // shared bus for all SFX (engine, collisions, honks, bumps)
 let engineNodes = null;
 let initialized = false;
 
@@ -44,7 +45,21 @@ export const Sound = {
     musicBus.gain.value = 1.6; // bump: stage bands should carry across the festival
     musicBus.connect(masterGain);
 
-    engineNodes = createEngine(ctx, masterGain);
+    sfxBus = ctx.createGain();
+    sfxBus.gain.value = 1.0;
+    sfxBus.connect(masterGain);
+
+    // Restore persisted volume levels (zerble.vol.*)
+    try {
+      const sm = localStorage.getItem('zerble.vol.master');
+      const sc = localStorage.getItem('zerble.vol.music');
+      const ss = localStorage.getItem('zerble.vol.sfx');
+      if (sm !== null) masterGain.gain.value = parseFloat(sm);
+      if (sc !== null) musicBus.gain.value = parseFloat(sc);
+      if (ss !== null) sfxBus.gain.value = parseFloat(ss);
+    } catch (e) { /* localStorage unavailable */ }
+
+    engineNodes = createEngine(ctx, sfxBus);
     initialized = true;
 
     // Drain any stage music attachments that were queued during world boot.
@@ -141,18 +156,34 @@ export const Sound = {
 
   playCollision(kind) {
     if (!ctx) return;
-    (COLLISION_SOUNDS[kind] || COLLISION_SOUNDS.default)(ctx, masterGain);
+    (COLLISION_SOUNDS[kind] || COLLISION_SOUNDS.default)(ctx, sfxBus);
   },
 
   playHonk() {
     if (!ctx) return;
-    playHonk(ctx, masterGain);
+    playHonk(ctx, sfxBus);
   },
 
   // Optional: lower-volume bump when Zerble brushes something without damage.
   playSoftBump() {
     if (!ctx) return;
-    thump(ctx, masterGain, 110, 0.12, 0.18);
+    thump(ctx, sfxBus, 110, 0.12, 0.18);
+  },
+
+  // ---- Volume controls ----
+  setMasterVolume(v) { if (masterGain) masterGain.gain.value = v; this._saveVolumes(); },
+  setMusicVolume(v)  { if (musicBus)   musicBus.gain.value   = v; this._saveVolumes(); },
+  setSfxVolume(v)    { if (sfxBus)     sfxBus.gain.value     = v; this._saveVolumes(); },
+  getMasterVolume()  { return masterGain ? masterGain.gain.value : 0.55; },
+  getMusicVolume()   { return musicBus   ? musicBus.gain.value   : 1.6; },
+  getSfxVolume()     { return sfxBus     ? sfxBus.gain.value     : 1.0; },
+
+  _saveVolumes() {
+    try {
+      localStorage.setItem('zerble.vol.master', String(masterGain ? masterGain.gain.value : 0.55));
+      localStorage.setItem('zerble.vol.music',  String(musicBus   ? musicBus.gain.value   : 1.6));
+      localStorage.setItem('zerble.vol.sfx',    String(sfxBus     ? sfxBus.gain.value     : 1.0));
+    } catch (e) { /* localStorage unavailable */ }
   },
 };
 

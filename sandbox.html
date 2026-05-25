@@ -41,7 +41,7 @@
       const isLocal = h === 'localhost' || h === '127.0.0.1' || h === '0.0.0.0' ||
         h.endsWith('.local') || /^10\./.test(h) || /^192\.168\./.test(h);
       const v = isLocal ? '?v=' + Date.now() : '';
-      const mods = ['zerble','lurleen','bubbles','smiles','registry','rng','perf','sound','chunks','crowd','lakes'];
+      const mods = ['zerble','lurleen','bubbles','smiles','registry','rng','perf','sound','chunks','crowd','lakes','debug','timeOfDay'];
       const models = ['canoe','hammock','tent','tentStage','foodTruck','tree','heart','stage','performer',
         'entranceArch','leafBanner','puppet','bandMember','parasolMarshal','kid','wook'];
       const base = new URL('./src/', document.baseURI).href;
@@ -80,7 +80,9 @@
         <option value="stage_side">Side stage (with band)</option>
         <option value="tent_stage">Tent stage (big white tent)</option>
         <option value="canoe">Canoe</option>
-        <option value="lake">Lake (mini)</option>
+        <option value="lake">Lake (mini disc)</option>
+        <option value="big_lake">Lake (big + small + causeway + island)</option>
+        <option value="lake_with_beach">Lake (big + sand beach)</option>
       </optgroup>
       <optgroup label="People">
         <option value="puppet">Puppet (parade)</option>
@@ -116,10 +118,13 @@
 
   <script type="module">
     import * as THREE from 'three';
+    import { installDebug } from './src/debug.js';
+    import { TimeOfDay } from './src/timeOfDay.js';
     import { Zerble } from './src/zerble.js';
     import { Lurleen, createHeartGeometry } from './src/lurleen.js';
     import { buildHammockStandalone } from './src/chunks.js';
-    import { _buildCanoeMeshForSandbox } from './src/lakes.js';
+    import { _buildCanoeMeshForSandbox, buildLake } from './src/lakes.js';
+import { mulberry32 } from './src/rng.js';
     import { buildTent } from './src/models/tent.js';
     import { buildFoodTruck } from './src/models/foodTruck.js';
     import { buildTree } from './src/models/tree.js';
@@ -162,7 +167,13 @@
     sun.shadow.camera.top = 20;
     sun.shadow.camera.bottom = -20;
     scene.add(sun);
-    scene.add(new THREE.AmbientLight(0xffffff, 0.25));
+    const ambient = new THREE.AmbientLight(0xffffff, 0.25);
+    scene.add(ambient);
+
+    // Time-of-day controller — drives sun/hemi/ambient/fog just like main.js.
+    // No sky shader in the sandbox, so sky is null (TimeOfDay tolerates it).
+    const tod = new TimeOfDay(scene, { startT: 0.15 });
+    tod.attach({ sky: null, sun, hemi, ambient });
 
     // Ground reference (flat grass disc) — toggle with L
     const groundGroup = new THREE.Group();
@@ -400,6 +411,37 @@
           entityRoot = water;
           cam.target.set(0, 0, 0);
           cam.dist = 18;
+          applyCam();
+          break;
+        }
+        case 'big_lake': {
+          // Full lake build (big + small + causeway + island + tree). Uses a
+          // deterministic seed so reload gives the same shape.
+          const lakeGroup = new THREE.Group();
+          buildLake(lakeGroup, 1, 1, mulberry32(0xC0FFEE));
+          // The lake builds with absolute coordinates within a macrocell —
+          // recenter the lake group on the sandbox origin so it's visible.
+          const box = new THREE.Box3().setFromObject(lakeGroup);
+          const center = box.getCenter(new THREE.Vector3());
+          lakeGroup.position.set(-center.x, 0, -center.z);
+          scene.add(lakeGroup);
+          entityRoot = lakeGroup;
+          cam.target.set(0, 0, 0);
+          cam.dist = 220;
+          applyCam();
+          break;
+        }
+        case 'lake_with_beach': {
+          // Lake with forceBeach=true so the 5% beach is guaranteed.
+          const lakeGroup = new THREE.Group();
+          buildLake(lakeGroup, 2, 2, mulberry32(0xBEACE5), { forceBeach: true });
+          const box = new THREE.Box3().setFromObject(lakeGroup);
+          const center = box.getCenter(new THREE.Vector3());
+          lakeGroup.position.set(-center.x, 0, -center.z);
+          scene.add(lakeGroup);
+          entityRoot = lakeGroup;
+          cam.target.set(0, 0, 0);
+          cam.dist = 220;
           applyCam();
           break;
         }
@@ -643,11 +685,44 @@
       setTimeout(() => info.textContent = `Loaded: ${select.value}`, 1200);
     });
 
+    // Debug panel — backtick toggles it. Wire only the hooks debug.js actually
+    // needs. The full game hooks (zerble, crowd, registry, etc.) don't exist in
+    // the sandbox, so we pass safe stubs so updatePanel() doesn't throw.
+    const _noop = () => {};
+    const _stubVec3 = new THREE.Vector3();
+    installDebug({
+      scene,
+      camera,
+      renderer,
+      // Stub out game-world objects so the text readout degrades gracefully
+      // instead of crashing. The panel still shows FPS, ToD, and audio sliders.
+      zerble: {
+        position: _stubVec3,
+        heading: 0,
+        speed: 0,
+        radius: 0,
+      },
+      crowd: { npcs: [] },
+      registry: {
+        entries: new Map(),
+        colliders: () => [],
+      },
+      bubbles: null,
+      smiles: null,
+      puppets: { colliders: [] },
+      band:    { colliders: [] },
+      kids:    { colliders: [] },
+      wooks:   { colliders: [] },
+      getRunning: () => true,
+      getTimeOfDay: () => tod,
+    });
+
     // Render loop
     const clock = new THREE.Clock();
     function tick() {
       requestAnimationFrame(tick);
       const dt = Math.min(clock.getDelta(), 0.05);
+      tod.update(dt);
       if (updateFn) updateFn(dt);
       renderer.render(scene, camera);
     }

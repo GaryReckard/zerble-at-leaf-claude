@@ -29,7 +29,7 @@
         h.includes('happycog');
       const v = isLocal ? '?v=' + Date.now() : '';
       const mods = ['main','world','zerble','bubbles','smiles','crowd','chunks',
-        'mountains','camera','input','touch','hud','sound','obstacles','registry','rng','debug','perf','lakes','lurleen'];
+        'mountains','camera','input','touch','hud','sound','obstacles','registry','rng','debug','perf','lakes','lurleen','trip'];
       const models = ['canoe','hammock','tent','tentStage','foodTruck','tree','heart','stage','performer',
         'entranceArch','leafBanner','puppet','bandMember','parasolMarshal','kid','wook'];
       const base = new URL('./src/', document.baseURI).href;
@@ -95,6 +95,7 @@
         <div><kbd>V</kbd> — toggle first-person / chase view</div>
         <div><kbd>I</kbd> / <kbd>O</kbd> — eye glow brighter / dimmer</div>
         <div><kbd>`</kbd> — open the debug panel (time of day, audio, more)</div>
+        <div><kbd>T</kbd> — open the trip/psychedelic debug panel</div>
       </div>
 
       <div class="controls controls-touch">

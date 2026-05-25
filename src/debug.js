@@ -13,6 +13,7 @@ import * as THREE from 'three';
 import { Sound } from './sound.js';
 
 const PANEL_ID = 'debug-panel';
+const TRIP_PANEL_ID = 'trip-panel';
 const COLLIDER_LAYER_NAME = '__debug_colliders';
 
 const state = {
@@ -26,13 +27,19 @@ const state = {
   rafSamples: [],
   lastSample: 0,
   hooks: null,
+  // Trip panel
+  tripVisible: false,
+  tripPanelEl: null,
+  tripStateEl: null,
+  tripSliders: {},
 };
 
 export function installDebug(hooks) {
   // hooks: { scene, camera, renderer, zerble, crowd, bubbles, smiles, registry,
-  //          puppets, band, kids, wooks, chunkManagerRef, getRunning }
+  //          puppets, band, kids, wooks, chunkManagerRef, getRunning, Trip }
   state.hooks = hooks;
   buildPanel();
+  buildTripPanel();
   bindKeys();
   window.__debug = api();
   // first paint
@@ -44,6 +51,7 @@ export function installDebug(hooks) {
 export function shouldRunFrame(dt) {
   sampleFPS(dt);
   if (state.visible) updatePanel(dt);
+  if (state.tripVisible) updateTripPanel();
   if (state.showColliders) refreshColliderViz();
   if (!state.paused) return true;
   if (state.pendingSteps > 0) { state.pendingSteps--; return true; }
@@ -138,6 +146,7 @@ function buildPanel() {
     <div><b>V</b> first-person / chase view</div>
     <div><b>I</b> / <b>O</b> eye glow brighter / dimmer</div>
     <div><b>\`</b> toggle this debug panel</div>
+    <div><b>T</b> toggle trip/psychedelic debug panel</div>
   `;
   el.appendChild(helpBlock);
 
@@ -245,6 +254,11 @@ function bindKeys() {
       e.preventDefault();
       window.__debug.toggle();
     }
+    // T key: toggle Trip debug panel (works any time, not just when debug is open)
+    if (e.code === 'KeyT' && !e.target.matches('input, textarea, select')) {
+      e.preventDefault();
+      toggleTripPanel();
+    }
     // Only-when-visible shortcuts (so they don't fight gameplay keys)
     if (!state.visible) return;
     if (e.code === 'KeyP') window.__debug.pause(!state.paused);
@@ -253,6 +267,14 @@ function bindKeys() {
     if (e.code === 'KeyG') window.__debug.god(!state.god);
     if (e.code === 'KeyF') window.__debug.freezeNPCs(!state.freezeNPCs);
   });
+}
+
+function toggleTripPanel() {
+  state.tripVisible = !state.tripVisible;
+  if (state.tripPanelEl) {
+    state.tripPanelEl.style.display = state.tripVisible ? 'block' : 'none';
+  }
+  if (state.tripVisible) updateTripPanel();
 }
 
 function sampleFPS(dt) {
@@ -352,6 +374,183 @@ function addColliderRing(parent, x, z, r, color) {
   m.rotation.x = -Math.PI / 2;
   m.position.set(x, 0.05, z);
   parent.add(m);
+}
+
+// ---- Trip panel ----
+
+function buildTripPanel() {
+  const Trip = state.hooks.Trip;
+  if (!Trip) return;
+
+  const el = document.createElement('div');
+  el.id = TRIP_PANEL_ID;
+  Object.assign(el.style, {
+    position: 'fixed',
+    bottom: '8px',
+    left: '8px',
+    zIndex: '999',
+    font: '11px/1.4 ui-monospace, Menlo, monospace',
+    color: '#dff',
+    background: 'rgba(8, 18, 28, 0.88)',
+    padding: '8px 10px',
+    borderRadius: '6px',
+    border: '1px solid #2a4a5a',
+    maxWidth: '300px',
+    pointerEvents: 'auto',
+    display: 'none',
+    userSelect: 'none',
+  });
+
+  // Title
+  const title = document.createElement('div');
+  title.textContent = 'T  Trip (psychedelic)';
+  title.style.cssText = 'opacity:0.7;margin-bottom:6px;';
+  el.appendChild(title);
+
+  // State readout
+  const stateEl = document.createElement('pre');
+  stateEl.style.cssText = 'margin:0 0 6px;white-space:pre;';
+  stateEl.textContent = 'state: idle | env: 0.00 | wook: — m';
+  el.appendChild(stateEl);
+  state.tripStateEl = stateEl;
+
+  // Divider helper
+  const divider = () => {
+    const d = document.createElement('div');
+    d.style.cssText = 'border-top:1px solid #2a4a5a;margin:6px 0;';
+    return d;
+  };
+
+  // Presets row
+  el.appendChild(divider());
+  const presetsRow = document.createElement('div');
+  presetsRow.style.cssText = 'display:flex;gap:4px;margin-bottom:6px;';
+  for (const [label, name] of [['Microdose', 'microdose'], ['Standard', 'standard'], ['Full trip', 'full']]) {
+    const btn = document.createElement('button');
+    btn.textContent = label;
+    Object.assign(btn.style, {
+      flex: '1', font: 'inherit', padding: '3px 4px', cursor: 'pointer',
+      background: 'rgba(255,224,102,0.15)', color: 'inherit',
+      border: '1px solid rgba(255,224,102,0.4)', borderRadius: '4px',
+    });
+    btn.addEventListener('click', () => {
+      Trip.setPreset(name);
+      // Sync sliders to new config values
+      syncSlidersFromConfig();
+    });
+    presetsRow.appendChild(btn);
+  }
+  el.appendChild(presetsRow);
+
+  // Fire button
+  const fireBtn = document.createElement('button');
+  fireBtn.textContent = 'FIRE TRIP';
+  Object.assign(fireBtn.style, {
+    width: '100%', font: 'inherit', padding: '4px 6px', cursor: 'pointer',
+    background: 'rgba(255,100,100,0.25)', color: '#fdd',
+    border: '1px solid rgba(255,100,100,0.5)', borderRadius: '4px',
+    marginBottom: '6px',
+  });
+  fireBtn.addEventListener('click', () => Trip.trigger());
+  el.appendChild(fireBtn);
+
+  // ---- Timing sliders ----
+  el.appendChild(divider());
+  const timingLabel = document.createElement('div');
+  timingLabel.textContent = 'Timing';
+  timingLabel.style.cssText = 'opacity:0.7;margin-bottom:4px;';
+  el.appendChild(timingLabel);
+
+  const timingDefs = [
+    { key: 'duration',           label: 'Duration (s)',       min: 5,   max: 120, step: 1   },
+    { key: 'fadeIn',             label: 'Fade in (s)',        min: 0,   max: 5,   step: 0.1 },
+    { key: 'fadeOut',            label: 'Fade out (s)',       min: 0,   max: 10,  step: 0.1 },
+    { key: 'proximityThreshold', label: 'Proximity (m)',      min: 1,   max: 10,  step: 0.1 },
+    { key: 'restDuration',       label: 'Rest needed (s)',    min: 1,   max: 15,  step: 0.5 },
+  ];
+  for (const def of timingDefs) {
+    el.appendChild(buildSliderRow(def.label, def.key, def.min, def.max, def.step, Trip, 'timing'));
+  }
+
+  // ---- Effect sliders ----
+  el.appendChild(divider());
+  const fxLabel = document.createElement('div');
+  fxLabel.textContent = 'Effects';
+  fxLabel.style.cssText = 'opacity:0.7;margin-bottom:4px;';
+  el.appendChild(fxLabel);
+
+  const effectDefs = [
+    { key: 'hueShift',            label: 'Hue shift'           },
+    { key: 'saturation',          label: 'Saturation'          },
+    { key: 'uvRipple',            label: 'UV ripple'           },
+    { key: 'chromaticAberration', label: 'Chromatic aber.'     },
+    { key: 'lensDistortion',      label: 'Lens distortion'     },
+    { key: 'kaleidoscope',        label: 'Kaleidoscope'        },
+    { key: 'posterize',           label: 'Posterize'           },
+    { key: 'vignettePulse',       label: 'Vignette pulse'      },
+    { key: 'brightnessPulse',     label: 'Brightness pulse'    },
+  ];
+  for (const def of effectDefs) {
+    el.appendChild(buildSliderRow(def.label, def.key, 0, 1, 0.01, Trip, 'effect'));
+  }
+
+  document.body.appendChild(el);
+  state.tripPanelEl = el;
+
+  function syncSlidersFromConfig() {
+    for (const [key, s] of Object.entries(state.tripSliders)) {
+      if (key in Trip.config) {
+        s.input.value = Trip.config[key];
+        s.readout.textContent = Trip.config[key].toFixed(2);
+      }
+    }
+  }
+}
+
+function buildSliderRow(label, key, min, max, step, Trip, group) {
+  const row = document.createElement('div');
+  row.style.cssText = 'display:flex;align-items:center;gap:6px;margin-bottom:3px;';
+
+  const lbl = document.createElement('span');
+  lbl.textContent = label;
+  lbl.style.cssText = 'flex:0 0 120px;opacity:0.85;overflow:hidden;white-space:nowrap;text-overflow:ellipsis;';
+  row.appendChild(lbl);
+
+  const target = group === 'effect' ? Trip.config : Trip;
+  const currentVal = target[key] !== undefined ? target[key] : 0;
+
+  const input = document.createElement('input');
+  input.type = 'range';
+  input.min = min;
+  input.max = max;
+  input.step = step;
+  input.value = currentVal;
+  input.style.cssText = 'flex:1;accent-color:#ffe066;cursor:pointer;';
+  row.appendChild(input);
+
+  const readout = document.createElement('span');
+  readout.textContent = Number(currentVal).toFixed(step < 0.1 ? 2 : 1);
+  readout.style.cssText = 'width:36px;text-align:right;';
+  row.appendChild(readout);
+
+  input.addEventListener('input', () => {
+    const v = parseFloat(input.value);
+    target[key] = v;
+    readout.textContent = v.toFixed(step < 0.1 ? 2 : 1);
+  });
+
+  state.tripSliders[key] = { input, readout };
+  return row;
+}
+
+function updateTripPanel() {
+  const Trip = state.hooks && state.hooks.Trip;
+  if (!Trip || !state.tripStateEl) return;
+  const dist = Trip._nearestWookDist;
+  const distStr = (dist !== undefined && dist < Infinity) ? dist.toFixed(1) + 'm' : '—';
+  state.tripStateEl.textContent =
+    `state: ${Trip.state.padEnd(11)} env: ${Trip._envelope.toFixed(2)}\n` +
+    `wook: ${distStr}  prox-timer: ${Trip._proximityTimer.toFixed(1)}s`;
 }
 
 function logToast(msg) {

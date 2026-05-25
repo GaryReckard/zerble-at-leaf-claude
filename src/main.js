@@ -27,6 +27,7 @@ import {
 } from './obstacles.js';
 import { installDebug, shouldRunFrame, isGod, npcsFrozen } from './debug.js';
 import { PERF } from './perf.js';
+import { Trip } from './trip.js';
 
 const canvas = document.getElementById('game');
 
@@ -59,6 +60,9 @@ const bloomPass = new UnrealBloomPass(
 // set `bloomPass.enabled = false` to fall back to the plain render.
 if (!PERF.bloom) bloomPass.enabled = false;
 composer.addPass(bloomPass);
+// Trip ShaderPass sits between bloom and output. At intensity=0 it's a no-op.
+Trip.init();
+composer.addPass(Trip.pass);
 composer.addPass(new OutputPass());
 
 // ---------- Zerble + Smiles + Bubbles ----------
@@ -208,6 +212,9 @@ function tickBody(dt) {
     band.update(dt);
     kids.update(dt, bubbles, zerble);
     wooks.update(dt);
+    // Collect wook world positions for proximity detection
+    const _wookPositions = wooks.wooks.map(w => w.position);
+    Trip.update(dt, zerble.position, Math.abs(zerble.speed), _wookPositions);
     lurleen.update(dt, zerble.position);
     if (!lurleenMet && lurleen.state === 'aware') {
       lurleenMet = true;
@@ -394,7 +401,7 @@ if (window.visualViewport) {
 
 window.__game = {
   camera, zerble, scene, renderer, crowd, registry, chaseCam, lurleen,
-  getTimeOfDay,
+  getTimeOfDay, Trip,
 };
 
 installDebug({
@@ -403,6 +410,7 @@ installDebug({
   puppets, band, kids, wooks,
   getRunning: () => running,
   getTimeOfDay,
+  Trip,
 });
 
 tick();

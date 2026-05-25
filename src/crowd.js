@@ -17,7 +17,10 @@
 //     away (avoids parking-near-crowd farming) AND a small time cooldown.
 
 import * as THREE from 'three';
-import { BufferGeometryUtils } from 'three/addons/utils/BufferGeometryUtils.js';
+// BufferGeometryUtils has no default-namespace export — it's a flat ES module.
+// `import * as` collects all named exports under one identifier so we can keep
+// the `BufferGeometryUtils.mergeGeometries(...)` call style.
+import * as BufferGeometryUtils from 'three/addons/utils/BufferGeometryUtils.js';
 import { registry } from './registry.js';
 import { PERF } from './perf.js';
 import { CHUNK_SIZE } from './chunks.js';

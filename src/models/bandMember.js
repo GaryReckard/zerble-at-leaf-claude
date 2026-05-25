@@ -6,10 +6,14 @@ import { buildSimpleNPC } from './puppet.js';
 
 export function buildBandMember(instrument, seed = 0) {
   const g = new THREE.Group();
-  // Marching uniform shirt + black trousers. Arms pose forward to grip
-  // the instrument; the drummer keeps relaxed arms (sticks live on the
-  // drum).
-  const armPose = instrument === 'drum' ? 'rest' : 'instrument';
+  // Marching uniform shirt + black trousers. Arms pose depends on the
+  // instrument: drummer hangs relaxed (sticks live on the drum), trumpet
+  // folds arms up so hands meet at the mouth, everything else uses the
+  // generic "instrument" forward-grip pose.
+  let armPose;
+  if (instrument === 'drum') armPose = 'rest';
+  else if (instrument === 'trumpet') armPose = 'trumpet';
+  else armPose = 'instrument';
   const body = buildSimpleNPC(
     instrument === 'drum' ? 0x6a2a2a : 0xc77dff,
     0xe6c098,
@@ -66,13 +70,23 @@ export function buildBandMember(instrument, seed = 0) {
   });
 
   if (instrument === 'tuba') {
-    const ring = new THREE.Mesh(new THREE.TorusGeometry(0.55, 0.18, 10, 16), brass);
-    ring.position.set(0, 1.4, -0.5);
-    g.add(ring);
-    const bell = new THREE.Mesh(new THREE.ConeGeometry(0.55, 0.7, 14, 1, true), brass);
-    bell.position.set(0, 2.0, -0.5);
-    bell.rotation.x = Math.PI;
-    g.add(bell);
+    // Sousaphone style: big coiled tubing wraps the player's body, bell over
+    // the left shoulder opening up + slightly forward. Parented to body so it
+    // bobs with the marching anim.
+    // Tubing — torus rotated 90° around Y so the ring hole faces sideways, then
+    // tilted ~90° around X so the ring's plane is vertical alongside the body.
+    const ring = new THREE.Mesh(new THREE.TorusGeometry(0.45, 0.13, 8, 14), brass);
+    ring.rotation.y = Math.PI / 2;
+    ring.rotation.x = Math.PI / 2;
+    ring.position.set(-0.05, 1.20, 0.10);
+    body.add(ring);
+    // Bell — upside-down cone (open end up), tilted slightly outward to the
+    // left so it reads as "over the shoulder" rather than "balanced on head".
+    const bell = new THREE.Mesh(new THREE.ConeGeometry(0.42, 0.60, 14, 1, true), brass);
+    bell.position.set(-0.32, 2.05, -0.10);
+    bell.rotation.x = Math.PI;          // flip apex-down so wide end faces up
+    bell.rotation.z = -0.30;            // tilt outward over the left shoulder
+    body.add(bell);
   } else if (instrument === 'drum') {
     const drum = new THREE.Mesh(
       new THREE.CylinderGeometry(0.7, 0.7, 0.6, 16),
@@ -119,15 +133,19 @@ export function buildBandMember(instrument, seed = 0) {
     bell.position.set(1.05, 1.45, -0.45);
     g.add(bell);
   } else {
-    // trumpet (default)
+    // Trumpet (default) — straight horn pointing out of the player's mouth,
+    // bell flaring forward away from the face. Parented to body so it bobs
+    // with the marching anim. Mouth is at body-local ~(0, 1.55, -0.20); the
+    // tube extends from there along -Z (forward).
     const tube = new THREE.Mesh(new THREE.CylinderGeometry(0.07, 0.07, 0.85, 8), brass);
-    tube.rotation.z = Math.PI / 2;
-    tube.position.set(0, 1.5, -0.45);
-    g.add(tube);
+    tube.rotation.x = Math.PI / 2;       // long axis along Z (forward/back)
+    tube.position.set(0, 1.55, -0.625);  // mouth at z=-0.20, tube center at -0.20 - 0.85/2
+    body.add(tube);
+    // Bell — apex meets the tube end, wide open base faces -Z (forward).
     const bell = new THREE.Mesh(new THREE.ConeGeometry(0.18, 0.35, 12, 1, true), brass);
-    bell.rotation.z = Math.PI / 2;
-    bell.position.set(0.5, 1.5, -0.45);
-    g.add(bell);
+    bell.rotation.x = -Math.PI / 2;      // base toward -Z (forward, away from face)
+    bell.position.set(0, 1.55, -1.225);  // tube ends at z=-1.05, bell center at -1.05 - 0.35/2
+    body.add(bell);
   }
 
   return g;

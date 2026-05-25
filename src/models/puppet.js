@@ -181,8 +181,10 @@ export function buildSimpleNPC(shirtHex, skinHex, opts = {}) {
   g.add(torso);
 
   // ----- Arms — two-segment with a real elbow pivot so the forearm stays
-  // attached when the shoulder rotates. 'rest' hangs straight, 'instrument'
-  // bends shoulder + elbow forward to grip a horn / drum / pole.
+  // attached when the shoulder rotates. Poses:
+  //   'rest'       — straight down
+  //   'instrument' — shoulder forward, elbow bent (holding a horn / pole)
+  //   'trumpet'    — arms folded up so hands land near the mouth (trumpet to lips)
   for (const sx of [-1, 1]) {
     const shoulder = new THREE.Group();
     shoulder.position.set(sx * 0.30, 1.20, 0);
@@ -198,6 +200,10 @@ export function buildSimpleNPC(shirtHex, skinHex, opts = {}) {
     if (armPose === 'instrument') {
       shoulder.rotation.x = 0.6;     // shoulder forward
       elbow.rotation.x = 0.5;        // forearm bends further forward
+    } else if (armPose === 'trumpet') {
+      shoulder.rotation.x = 0.6;     // shoulder forward + up
+      shoulder.rotation.z = sx * 0.5;// arms swing inward toward mouth
+      elbow.rotation.x = 1.6;        // sharp elbow bend brings hands to face
     }
     shoulder.add(elbow);
     const lower = new THREE.Mesh(

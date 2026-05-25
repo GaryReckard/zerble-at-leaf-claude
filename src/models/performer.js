@@ -30,7 +30,8 @@ export function buildPerformer(instrument, rng = Math.random) {
       new THREE.BoxGeometry(0.16, 0.07, 0.24),
       new THREE.MeshStandardMaterial({ color: 0x111, roughness: 0.8 }),
     );
-    shoe.position.set(lx, 0.035, 0.04);
+    // -z = forward (eyes look at -z). Shoe sticks out in front of the leg.
+    shoe.position.set(lx, 0.035, -0.06);
     g.add(shoe);
   }
 
@@ -42,24 +43,32 @@ export function buildPerformer(instrument, rng = Math.random) {
   body.castShadow = true;
   g.add(body);
 
-  // Arms — angled forward to hold the instrument.
+  // Arms — two-segment with a real elbow pivot so the forearm stays attached
+  // when the shoulder rotates. Shoulder bends forward (+x), forearm bends a
+  // bit more so the hands meet roughly in front of the chest.
   for (const sx of [-1, 1]) {
-    const armGroup = new THREE.Group();
-    armGroup.position.set(sx * 0.30, 1.30, 0);
-    armGroup.rotation.x = -0.5;     // forward bend
-    armGroup.rotation.z = sx * 0.05;
+    const shoulder = new THREE.Group();
+    shoulder.position.set(sx * 0.30, 1.30, 0);
+    shoulder.rotation.x = 0.5;        // +x rotation swings the arm toward -z (forward)
+    shoulder.rotation.z = sx * 0.05;
+    // Upper arm hangs from shoulder; capsule center is half its length below.
     const upper = new THREE.Mesh(
       new THREE.CapsuleGeometry(0.08, 0.30, 4, 6), shirtMat,
     );
     upper.position.y = -0.18;
-    armGroup.add(upper);
+    shoulder.add(upper);
+    // Elbow pivot at the bottom of the upper arm.
+    const elbow = new THREE.Group();
+    elbow.position.y = -0.36;
+    elbow.rotation.x = 0.5;           // forearm bends further forward at the elbow
+    shoulder.add(elbow);
     const lower = new THREE.Mesh(
       new THREE.CapsuleGeometry(0.07, 0.30, 4, 6), skinMat,
     );
-    lower.position.set(0, -0.50, -0.10);
-    armGroup.add(lower);
-    armGroup.castShadow = true;
-    g.add(armGroup);
+    lower.position.y = -0.18;         // hangs below the elbow pivot, attached
+    elbow.add(lower);
+    shoulder.castShadow = true;
+    g.add(shoulder);
   }
 
   const head = new THREE.Mesh(

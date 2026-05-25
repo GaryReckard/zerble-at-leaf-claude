@@ -180,32 +180,33 @@ export function buildSimpleNPC(shirtHex, skinHex, opts = {}) {
   torso.castShadow = true;
   g.add(torso);
 
-  // ----- Arms — two upper (sleeve) + lower (skin) segments per side -----
+  // ----- Arms — two-segment with a real elbow pivot so the forearm stays
+  // attached when the shoulder rotates. 'rest' hangs straight, 'instrument'
+  // bends shoulder + elbow forward to grip a horn / drum / pole.
   for (const sx of [-1, 1]) {
-    const armGroup = new THREE.Group();
-    armGroup.position.set(sx * 0.30, 1.20, 0);
-    // Pose: 'rest' = hanging straight, 'instrument' = bent forward to grip
-    let upperZ = 0;
-    let lowerZ = 0;
-    if (armPose === 'instrument') {
-      // Positive X rotation swings the arm forward (toward -Z, where the face looks).
-      // Negative was a bug — it pushed arms behind the body.
-      armGroup.rotation.x = 0.6;
-      lowerZ = -0.10;
-    }
-    armGroup.rotation.z = sx * 0.05;
+    const shoulder = new THREE.Group();
+    shoulder.position.set(sx * 0.30, 1.20, 0);
+    shoulder.rotation.z = sx * 0.05;
     const upper = new THREE.Mesh(
       new THREE.CapsuleGeometry(0.08, 0.30, 4, 6), shirtMat,
     );
-    upper.position.set(0, -0.18, upperZ);
-    armGroup.add(upper);
+    upper.position.y = -0.18;
+    shoulder.add(upper);
+    // Elbow pivot at the bottom of the upper arm.
+    const elbow = new THREE.Group();
+    elbow.position.y = -0.36;
+    if (armPose === 'instrument') {
+      shoulder.rotation.x = 0.6;     // shoulder forward
+      elbow.rotation.x = 0.5;        // forearm bends further forward
+    }
+    shoulder.add(elbow);
     const lower = new THREE.Mesh(
       new THREE.CapsuleGeometry(0.07, 0.28, 4, 6), skinMat,
     );
-    lower.position.set(0, -0.50, lowerZ);
-    armGroup.add(lower);
-    armGroup.castShadow = true;
-    g.add(armGroup);
+    lower.position.y = -0.18;        // hangs below the elbow pivot
+    elbow.add(lower);
+    shoulder.castShadow = true;
+    g.add(shoulder);
   }
 
   // ----- Head -----

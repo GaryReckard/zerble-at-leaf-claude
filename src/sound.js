@@ -450,59 +450,81 @@ function playHonk(ctx, dest) {
   else playBicycleBell(ctx, dest);
 }
 
-// Squeeze-bulb / "ooga" clown horn: reedy rubber-bulb tone with a high-
-// passed noise "click" transient at the moment of squeeze, then a sawtooth +
-// triangle pair through a soft-distortion WaveShaper to give it the
-// nasal/reedy character of a real rubber bulb (not a fart).
+// Squeeze-bulb / "ooga" clown horn — TWO sounds in sequence:
+//   1) HONK (squeeze): one steady low tone with a sharp click transient up
+//      front. Lasts ~0.22s. Frequency does NOT slide — a real rubber bulb
+//      makes a steady note while you squeeze it.
+//   2) INHALE (release): a quieter, shorter, HIGHER tone as air rushes back
+//      into the bulb. Pitched a perfect fifth (1.5×) above the honk.
 function playClownBulb(ctx, dest) {
   const t = ctx.currentTime;
 
-  // ---- 1) Click transient: ~5ms high-passed white-noise burst ---------
-  const clickDur = 0.005;
-  const sampleCount = Math.max(1, Math.floor(ctx.sampleRate * (clickDur + 0.02)));
-  const clickBuf = ctx.createBuffer(1, sampleCount, ctx.sampleRate);
-  const ch = clickBuf.getChannelData(0);
-  for (let i = 0; i < sampleCount; i++) ch[i] = Math.random() * 2 - 1;
-  const clickSrc = ctx.createBufferSource();
-  clickSrc.buffer = clickBuf;
-  const clickHpf = ctx.createBiquadFilter();
-  clickHpf.type = 'highpass';
-  clickHpf.frequency.value = 2200;
-  clickHpf.Q.value = 0.8;
-  const clickEnv = ctx.createGain();
-  clickEnv.gain.setValueAtTime(0.0001, t);
-  clickEnv.gain.exponentialRampToValueAtTime(0.45, t + 0.001);
-  clickEnv.gain.exponentialRampToValueAtTime(0.0001, t + clickDur);
-  clickSrc.connect(clickHpf).connect(clickEnv).connect(dest);
-  clickSrc.start(t);
-  clickSrc.stop(t + clickDur + 0.01);
+  // Tone frequencies (steady — no glide).
+  const HONK_SAW = 260, HONK_TRI = 130;
+  const INHALE_SAW = HONK_SAW * 1.5, INHALE_TRI = HONK_TRI * 1.5;  // a 5th above
 
-  // ---- 2) Body of the honk: tri + saw through a reedy WaveShaper -------
-  // The triangle (replaces the previous square) gives a softer, more
-  // rubbery fundamental than a square wave's hard edge.
+  // Phase timings.
+  const HONK_DUR    = 0.22;   // squeeze hold
+  const GAP         = 0.05;   // tiny silence between squeeze and release
+  const INHALE_DUR  = 0.16;   // shorter, breathier
+  const TOTAL       = HONK_DUR + GAP + INHALE_DUR + 0.05;
+
+  // ---- 1) Squeeze CLICK: ~5ms high-passed white-noise burst at t=0 ------
+  function emitClick(at, gain, hpfHz) {
+    const dur = 0.005;
+    const n = Math.max(1, Math.floor(ctx.sampleRate * (dur + 0.02)));
+    const buf = ctx.createBuffer(1, n, ctx.sampleRate);
+    const ch = buf.getChannelData(0);
+    for (let i = 0; i < n; i++) ch[i] = Math.random() * 2 - 1;
+    const src = ctx.createBufferSource();
+    src.buffer = buf;
+    const hpf = ctx.createBiquadFilter();
+    hpf.type = 'highpass';
+    hpf.frequency.value = hpfHz;
+    hpf.Q.value = 0.8;
+    const env = ctx.createGain();
+    env.gain.setValueAtTime(0.0001, at);
+    env.gain.exponentialRampToValueAtTime(gain, at + 0.001);
+    env.gain.exponentialRampToValueAtTime(0.0001, at + dur);
+    src.connect(hpf).connect(env).connect(dest);
+    src.start(at);
+    src.stop(at + dur + 0.01);
+  }
+  emitClick(t, 0.45, 2200);                          // sharp squeeze click
+  emitClick(t + HONK_DUR + GAP, 0.18, 3000);         // softer intake "puff"
+
+  // ---- 2) Body — saw + tri through reed WaveShaper, two phases ---------
+  // Single envelope handles both honk and inhale with a gap in the middle.
   const env = ctx.createGain();
   env.gain.setValueAtTime(0.0001, t);
-  env.gain.exponentialRampToValueAtTime(0.32, t + 0.04);
-  env.gain.exponentialRampToValueAtTime(0.30, t + 0.32);
-  env.gain.exponentialRampToValueAtTime(0.0001, t + 0.42);
+  // HONK: ramp up, sustain, drop to silence at the gap.
+  env.gain.exponentialRampToValueAtTime(0.32, t + 0.025);
+  env.gain.setValueAtTime(0.32, t + HONK_DUR - 0.015);
+  env.gain.exponentialRampToValueAtTime(0.0001, t + HONK_DUR);
+  // INHALE: ramp up at lower peak, hold, fade.
+  const tInhaleStart = t + HONK_DUR + GAP;
+  env.gain.exponentialRampToValueAtTime(0.20, tInhaleStart + 0.02);
+  env.gain.setValueAtTime(0.20, tInhaleStart + INHALE_DUR - 0.04);
+  env.gain.exponentialRampToValueAtTime(0.0001, tInhaleStart + INHALE_DUR);
   env.connect(dest);
 
   const sawOsc = ctx.createOscillator();
   sawOsc.type = 'sawtooth';
-  sawOsc.frequency.setValueAtTime(380, t);
-  sawOsc.frequency.exponentialRampToValueAtTime(260, t + 0.30);
+  sawOsc.frequency.setValueAtTime(HONK_SAW, t);
+  sawOsc.frequency.setValueAtTime(INHALE_SAW, tInhaleStart);
+
   const triOsc = ctx.createOscillator();
   triOsc.type = 'triangle';
-  triOsc.frequency.setValueAtTime(190, t);
-  triOsc.frequency.exponentialRampToValueAtTime(130, t + 0.30);
+  triOsc.frequency.setValueAtTime(HONK_TRI, t);
+  triOsc.frequency.setValueAtTime(INHALE_TRI, tInhaleStart);
 
-  // Bandpass to give it a "horn body" formant.
+  // Bandpass — "horn body" formant.
   const bpf = ctx.createBiquadFilter();
   bpf.type = 'bandpass';
   bpf.frequency.value = 750;
   bpf.Q.value = 1.2;
 
-  // Soft-saturation WaveShaper — adds odd harmonics for the reedy bite.
+  // Soft-saturation reed shaper.
   const shaper = ctx.createWaveShaper();
   shaper.curve = makeReedCurve(2.4, 1024);
   shaper.oversample = '2x';
@@ -514,8 +536,8 @@ function playClownBulb(ctx, dest) {
 
   sawOsc.start();
   triOsc.start();
-  sawOsc.stop(t + 0.45);
-  triOsc.stop(t + 0.45);
+  sawOsc.stop(t + TOTAL);
+  triOsc.stop(t + TOTAL);
 }
 
 // Subtle distortion curve — a softer cousin of the engine's tanh curve,
@@ -531,19 +553,30 @@ function makeReedCurve(drive, samples) {
   return c;
 }
 
-// Bicycle bell: FM-synthesised metallic ring with a sharp "strike" transient.
-// The modulator runs at a NON-integer multiple of the carrier (~√2) so the
-// resulting partials are inharmonic — the secret to a real bell's clang
-// instead of a musical tone. A high-pass filter pulls out the muddy lows,
-// and a very short high-amplitude gain envelope creates the strike impact
-// before the long ringing release.
+// Bicycle bell — a real bell's thumb-lever bounces against the dome multiple
+// times in rapid succession, so we render each "brrring" as 6 closely-spaced
+// strikes (~30Hz strike rate) whose ring tails overlap into a rolling buzz
+// instead of a clean single ding. Two brrrings = classic double-trill.
 function playBicycleBell(ctx, dest) {
-  ringOnce(ctx, dest, ctx.currentTime, 2400, /*strikeGain=*/0.6, /*releaseGain=*/0.22);
-  // Classic double-ring — quieter second strike ~180ms later.
-  setTimeout(() => {
-    if (!ctx || ctx.state === 'closed') return;
-    ringOnce(ctx, dest, ctx.currentTime, 2400, 0.45, 0.16);
-  }, 180);
+  const t0 = ctx.currentTime;
+  brrring(ctx, dest, t0,         /*loud=*/0.55);
+  brrring(ctx, dest, t0 + 0.32,  /*loud=*/0.42);  // quieter second trill
+}
+
+// One "brrring": 6 inharmonic FM strikes, ~32ms apart (~31Hz strike rate),
+// each strike progressively softer so the trill rolls off rather than
+// sustaining as a wall of clang.
+function brrring(ctx, dest, tStart, loud) {
+  const STRIKES = 6;
+  const SPACING = 0.032;        // 32ms between strikes → ~31Hz buzz
+  for (let i = 0; i < STRIKES; i++) {
+    // Each subsequent strike is a bit quieter (the lever loses energy with
+    // each bounce). Last few strikes have short release so the brrring doesn't
+    // smear into the next trill.
+    const tap = i === 0 ? loud : loud * (1 - i * 0.13);
+    const release = 0.10 - i * 0.012;  // first strikes ring longer
+    ringOnce(ctx, dest, tStart + i * SPACING, 2400, tap, Math.max(0.04, release));
+  }
 }
 
 function ringOnce(ctx, dest, t, carrierHz, strikeGain, releaseGain) {

@@ -181,6 +181,11 @@ export class Crowd {
     this._tmpDanceMat = new THREE.Matrix4();
     this._tmpScale = new THREE.Vector3();
     this._mouthMat = new THREE.Matrix4();
+    // Supine-pose scratch (used by hammock_riding NPCs to compose the supine
+    // rotation: X=+π/2 to face up, then Y=yaw to align spine with hammock).
+    this._supineQuatX = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(1, 0, 0), Math.PI / 2);
+    this._supineQuatY = new THREE.Quaternion();
+    this._axisY = new THREE.Vector3(0, 1, 0);
 
     // High-water mark: highest slot index ever written. count is set to
     // _maxIdx + 1 each frame so three.js skips unwritten slots above it.
@@ -703,7 +708,16 @@ export class Crowd {
   _writeMatrices(npc) {
     const m = this._mat4;
     // Reuse scratch Quaternion/Euler — avoids ~30k allocations/sec at 500 NPCs × 60fps.
-    const quat = this._tmpQuat.setFromEuler(this._tmpEuler.set(0, npc.yaw, 0));
+    // hammock_riding NPCs need a supine rotation (X=+π/2 face up, then Y=yaw); all
+    // others just rotate around Y by yaw. Build the right quat per branch.
+    let quat;
+    if (npc.state === 'hammock_riding') {
+      // Compose Y * X — applies X first (supine), then Y (align with hammock yaw)
+      this._supineQuatY.setFromAxisAngle(this._axisY, npc.yaw);
+      quat = this._tmpQuat.multiplyQuaternions(this._supineQuatY, this._supineQuatX);
+    } else {
+      quat = this._tmpQuat.setFromEuler(this._tmpEuler.set(0, npc.yaw, 0));
+    }
     const bobY = Math.sin(npc.bob) * 0.04;
     const danceTilt = npc.dance > 0.6 && (npc.state === 'idle' || npc.state === 'watching' || npc.state === 'riding')
       ? Math.sin(npc.bob * 2) * 0.05 * (npc.dance - 0.5)
@@ -731,7 +745,10 @@ export class Crowd {
     if (npc.state === 'riding' && npc.seatY != null) {
       feetY = npc.seatY - 1.05 + bobY + bounceY;
     } else if (npc.state === 'hammock_riding' && npc.hammockY != null) {
-      feetY = npc.hammockY - 1.1 + bobY + bounceY;
+      // Supine: body lies horizontal with back on the seat cloth. After X=π/2
+      // the body's "up" direction (away from back) is +Y. Capsule torso is
+      // ~0.26 thick — lift matrix Y by 0.26 so the back rests on the sag.
+      feetY = npc.hammockY + 0.26 + bobY + bounceY;
     } else {
       feetY = bobY + bounceY; // feet on the ground; npc.pos.y is always 0
     }
@@ -742,7 +759,17 @@ export class Crowd {
     const posV = this._tmpV;
     const scaleV = this._tmpV2;
 
-    posV.set(npc.pos.x, feetY, npc.pos.z);
+    if (npc.state === 'hammock_riding') {
+      // Supine body extends in (sin(yaw), 0, cos(yaw)) direction from the matrix
+      // origin (which is at feet after rotation). Shift matrix back by 0.825 in
+      // the head direction so the body CENTER lands at npc.pos (hammock seat
+      // + sway). Otherwise the body anchors feet-at-seat and head 1.65m out.
+      const hx = Math.sin(npc.yaw);
+      const hz = Math.cos(npc.yaw);
+      posV.set(npc.pos.x - hx * 0.825, feetY, npc.pos.z - hz * 0.825);
+    } else {
+      posV.set(npc.pos.x, feetY, npc.pos.z);
+    }
     scaleV.set(npc.scale, npc.scale, npc.scale);
     m.compose(posV, quat, scaleV);
     if (danceTilt) {
@@ -982,8 +1009,10 @@ export class Crowd {
     npc.pos.x = h.seatPos.x + perpX * sway;
     npc.pos.z = h.seatPos.z + perpZ * sway;
     npc.hammockY = h.seatPos.y + Math.sin(npc.hammockBob * 2) * 0.04;
-    // Face roughly along the hammock long axis (lounging direction)
-    npc.yaw = h.yaw + Math.PI / 2;
+    // Spine aligned with hammock long axis — _writeMatrices applies the supine
+    // rotation around this yaw, so head + feet land at the two ends of the
+    // hammock instead of poking through the side.
+    npc.yaw = h.yaw;
     npc.vel.set(0, 0, 0);
 
     if (npc.rideTimer <= 0) {

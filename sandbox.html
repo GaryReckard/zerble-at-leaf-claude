@@ -370,26 +370,27 @@ import { mulberry32 } from './src/rng.js';
           break;
         }
         case 'hammock_with_npc': {
-          // Build a hammock at origin and drop a lounging NPC at the seat. This
-          // exercises the same buildHammock() the chunks use, so if the npc's
-          // y/yaw look wrong here they'll look wrong in-game too.
+          // Build a hammock at origin and drop a SUPINE NPC at the seat — back
+          // on the cloth, head + feet along the hammock long axis, face up.
+          // Composition: a "supineGroup" sits at the seat and rotates by `yaw`;
+          // inside it, the body has rotation.x = π/2 (face up, head extending
+          // in +Z) and is offset by -0.825 in z so the body's CENTER lands at
+          // the supineGroup origin (= seat).
           const { group: hammockGroup, seatPos, yaw } = buildHammockRaw(0, 0, Math.random);
-          // Build a body, sit it at the seat, recline it slightly so it doesn't
-          // look like the NPC is standing inside the hammock.
           const body = buildSimpleNPC(0x6fcf6a, 0xe6c098);
-          // crowd.js renders riding NPCs with feet at "seatY - 1.05" so the
-          // capsule torso (baked at body-local y=1.0) sits at seatY - 0.05.
-          // Mirror that here so this preview matches game appearance.
-          body.position.set(seatPos.x, seatPos.y - 1.05, seatPos.z);
-          body.rotation.y = yaw + Math.PI / 2;  // align spine with hammock rope axis
-          body.rotation.x = -0.15;              // lean back into the sag
+          body.rotation.x = Math.PI / 2;
+          body.position.set(0, 0, -0.825);
+          const supineGroup = new THREE.Group();
+          supineGroup.position.set(seatPos.x, seatPos.y + 0.26, seatPos.z);
+          supineGroup.rotation.y = yaw;
+          supineGroup.add(body);
           const root = new THREE.Group();
           root.add(hammockGroup);
-          root.add(body);
+          root.add(supineGroup);
           scene.add(root);
           entityRoot = root;
           cam.target.set(0, seatPos.y, 0);
-          cam.dist = 6;
+          cam.dist = 7;
           applyCam();
           break;
         }

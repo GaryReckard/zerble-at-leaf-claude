@@ -37,6 +37,31 @@ export function buildWook(rng = Math.random) {
     wookGroup.add(splotch);
   }
 
+  // Arms — relaxed/swaying with palms turned slightly outward
+  const skinMat = new THREE.MeshStandardMaterial({
+    color: 0xe6c098, roughness: 0.9, flatShading: true,
+  });
+  for (const sx of [-1, 1]) {
+    const armGroup = new THREE.Group();
+    armGroup.position.set(sx * 0.40, 1.55, 0);
+    armGroup.rotation.z = sx * 0.10;
+    const upper = new THREE.Mesh(
+      new THREE.CapsuleGeometry(0.10, 0.36, 4, 6),
+      new THREE.MeshStandardMaterial({
+        color: body.material.color, roughness: 0.95, flatShading: true,
+      }),
+    );
+    upper.position.y = -0.22;
+    armGroup.add(upper);
+    const lower = new THREE.Mesh(
+      new THREE.CapsuleGeometry(0.09, 0.32, 4, 6), skinMat,
+    );
+    lower.position.y = -0.60;
+    armGroup.add(lower);
+    armGroup.castShadow = true;
+    wookGroup.add(armGroup);
+  }
+
   // Head
   const head = new THREE.Mesh(
     new THREE.IcosahedronGeometry(0.3, 1),
@@ -45,6 +70,30 @@ export function buildWook(rng = Math.random) {
   head.position.y = 2.15;
   head.castShadow = true;
   wookGroup.add(head);
+  // Sunglasses — wooks always wear shades
+  const shades = new THREE.Mesh(
+    new THREE.BoxGeometry(0.32, 0.08, 0.04),
+    new THREE.MeshStandardMaterial({
+      color: 0x111, roughness: 0.3, metalness: 0.4,
+    }),
+  );
+  shades.position.set(0, 2.17, -0.27);
+  wookGroup.add(shades);
+  // Tiny beard tufts
+  const beardMat = new THREE.MeshStandardMaterial({
+    color: 0x5a3a1a, roughness: 1.0, flatShading: true,
+  });
+  for (let i = 0; i < 4; i++) {
+    const tuft = new THREE.Mesh(
+      new THREE.IcosahedronGeometry(0.045 + rng() * 0.02, 0), beardMat,
+    );
+    tuft.position.set(
+      (rng() - 0.5) * 0.14,
+      2.00 + rng() * 0.04,
+      -0.25 + rng() * 0.04,
+    );
+    wookGroup.add(tuft);
+  }
 
   // Thick dreadlocks — chunky multi-segment cylinders with knobby joints
   const hairColor = 0x5a3a1a;

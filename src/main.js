@@ -178,7 +178,7 @@ function tickBody(dt) {
       Sound.playHonk();
     }
 
-    bubbles.update(dt, zerble);
+    bubbles.update(dt, zerble, nightness);
     if (!npcsFrozen()) crowd.update(dt, zerble, bubbles);
     smiles.update(dt, zerble, (n) => {
       score += n;

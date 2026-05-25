@@ -43,6 +43,12 @@ const stageMusic = [];
 // "light show" pulse + color. Each entry: { lens: Mesh, chunkKey, baseColor }.
 export const stageLightLenses = [];
 
+// Stage spotlight beams projecting INTO the audience. Each entry mirrors
+// stageBeams from models/stage.js plus a chunkKey for unload tracking and
+// scale so the sweep amplitude reads correctly on differently-sized stages.
+// { beam, target, baseTargetX, baseTargetZ, phaseOffset, scale, chunkKey }
+export const stageBeamRefs = [];
+
 export function updateStagePerformers(t) {
   for (let i = 0; i < stagePerformers.length; i++) {
     const p = stagePerformers[i];
@@ -55,21 +61,19 @@ export function updateStagePerformers(t) {
 
 // Stage-light show: during the day the lenses just sit there with their
 // baseline emissive. At night they pulse and cycle through a club-like
-// rainbow palette. `t` is seconds since start, `nightness` 0..1 from the
+// rainbow palette and the audience-facing SpotLight beams sweep across
+// the crowd. `t` is seconds since start, `nightness` 0..1 from the
 // time-of-day system.
 const _showColors = [0xff3380, 0xffae33, 0xffe066, 0x66ff88, 0x33d9ff, 0xc080ff];
 const _tmpC1 = new THREE.Color();
 const _tmpC2 = new THREE.Color();
 export function updateStageLightShow(t, nightness) {
-  if (stageLightLenses.length === 0) return;
+  // ---- Lens colors / pulse ----
   for (let i = 0; i < stageLightLenses.length; i++) {
     const entry = stageLightLenses[i];
     const mat = entry.lens.material;
-    // Daytime: gentle pulse around the baseline (2.5).
-    // Nighttime: shift hue and pulse hard.
     if (nightness < 0.05) {
       mat.emissiveIntensity = 2.4 + Math.sin(t * 1.5 + i) * 0.2;
-      // Fade color back toward baseline
       const base = _tmpC1.setHex(entry.baseColor);
       mat.color.lerp(base, 0.05);
       mat.emissive.lerp(base, 0.05);
@@ -83,10 +87,41 @@ export function updateStageLightShow(t, nightness) {
       const c = _tmpC1.lerp(_tmpC2, blend);
       mat.color.copy(c);
       mat.emissive.copy(c);
-      // Strong pulsing peaks at night.
       const pulse = 0.5 + 0.5 * Math.sin(phase);
       mat.emissiveIntensity = 2.0 + pulse * 5.0 * nightness;
     }
+  }
+
+  // ---- Audience-facing SpotLight beams ----
+  // Beams swing left/right + forward/back in lissajous patterns so each
+  // stage paints a moving rainbow across the crowd. Three beams per stage
+  // chase different patterns so they don't lockstep.
+  const PATTERNS = [
+    // {ax: amplitudeX, az: amplitudeZ, rateX, rateZ, phaseZ}
+    { ax: 6, az: 3, rateX: 0.9, rateZ: 1.3, phaseZ: 0.0 },     // wide sweep
+    { ax: 2, az: 5, rateX: 1.4, rateZ: 0.7, phaseZ: 1.5 },     // depth pump
+    { ax: 5, az: 4, rateX: 0.6, rateZ: 1.1, phaseZ: 2.4 },     // diagonal
+  ];
+  const beamOn = THREE.MathUtils.smoothstep(nightness, 0.15, 0.7);
+  for (let i = 0; i < stageBeamRefs.length; i++) {
+    const ref = stageBeamRefs[i];
+    const pattern = PATTERNS[i % PATTERNS.length];
+    const phase = t + ref.phaseOffset;
+    // Sweep target X/Z around the baseline (in stage-local space).
+    ref.target.position.x = ref.baseTargetX
+      + Math.sin(phase * pattern.rateX) * pattern.ax * ref.scale;
+    ref.target.position.z = ref.baseTargetZ
+      + Math.sin(phase * pattern.rateZ + pattern.phaseZ) * pattern.az * ref.scale;
+    // Color chase — shifts through the palette out of phase with the lens.
+    const colorIdx = Math.floor((t * 0.35 + i * 1.3) % _showColors.length);
+    const nextIdx = (colorIdx + 1) % _showColors.length;
+    const blend = (t * 0.35 + i * 1.3) % 1;
+    _tmpC1.setHex(_showColors[colorIdx]);
+    _tmpC2.setHex(_showColors[nextIdx]);
+    ref.beam.color.copy(_tmpC1.lerp(_tmpC2, blend));
+    // Intensity pulses + ramps with nightness.
+    const pulse = 0.55 + 0.45 * Math.sin(phase * 2.2);
+    ref.beam.intensity = beamOn * pulse * 9.0;
   }
 }
 
@@ -157,6 +192,9 @@ export class ChunkManager {
     }
     for (let i = stageLightLenses.length - 1; i >= 0; i--) {
       if (stageLightLenses[i].chunkKey === key) stageLightLenses.splice(i, 1);
+    }
+    for (let i = stageBeamRefs.length - 1; i >= 0; i--) {
+      if (stageBeamRefs[i].chunkKey === key) stageBeamRefs.splice(i, 1);
     }
 
     this.loaded.delete(key);
@@ -463,6 +501,12 @@ function buildTentStageTheme(ctx) {
       lens, chunkKey: ctx.key, baseColor: lens.material.color.getHex(),
     });
   }
+  // ...and its audience-facing beams.
+  if (tent.stageBeams) {
+    for (const b of tent.stageBeams) {
+      stageBeamRefs.push({ ...b, chunkKey: ctx.key, scale: tent.stageScale || 1.0 });
+    }
+  }
 
   // Helper: rotate a local (lx, lz) into world coordinates given the yaw.
   const cosY = Math.cos(yaw);
@@ -746,6 +790,10 @@ function buildStage(ctx, x, z, isMain) {
   // Track lens meshes for the day-night light show
   for (const lens of stage.stageLights) {
     stageLightLenses.push({ lens, chunkKey: ctx.key, baseColor: lens.material.color.getHex() });
+  }
+  // Track audience-facing spotlight beams.
+  for (const b of stage.stageBeams) {
+    stageBeamRefs.push({ ...b, chunkKey: ctx.key, scale });
   }
 
   // ----- Colliders: spheres INSCRIBED in the deck rectangle -----

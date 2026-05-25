@@ -99,12 +99,18 @@ export function buildStage(opts = {}) {
     }
   }
 
-  // Stage lights (lenses). Emissive only — actual point/spot lights are added
-  // by the day-night system at night.
+  // Stage lights — emissive lens mesh + SpotLight aimed into the audience.
+  // The day-night system ramps SpotLight intensity with nightness and
+  // animates each beam's target so the beams sweep across the crowd in
+  // colorful patterns at night.
   const stageLights = [];
-  for (const lx of [-w * 0.3, 0, w * 0.3]) {
+  const stageBeams = [];
+  const PALETTE = [0xff3380, 0xff8a3b, 0xffe066, 0x6fcf6a, 0x33d9ff, 0xc080ff];
+  for (let i = 0; i < 3; i++) {
+    const lxArr = [-w * 0.32, 0, w * 0.32];
+    const lx = lxArr[i];
     const colorHex = isMain
-      ? [0xff6f9c, 0xffd28a, 0xb285ff][Math.floor(rng() * 3)]
+      ? PALETTE[Math.floor(rng() * PALETTE.length)]
       : 0xffd28a;
     const lampLens = new THREE.Mesh(
       new THREE.ConeGeometry(0.4 * scale, 0.6 * scale, 12, 1, true),
@@ -117,10 +123,31 @@ export function buildStage(opts = {}) {
         opacity: 0.85,
       })
     );
-    lampLens.position.set(lx, trussH - 0.7 * scale, 0);
+    const lensY = trussH - 0.7 * scale;
+    lampLens.position.set(lx, lensY, 0);
     lampLens.rotation.x = Math.PI;
     g.add(lampLens);
     stageLights.push(lampLens);
+
+    // SpotLight directly behind the lens, aimed into the audience
+    // (+Z, downward). Target sits a few meters in front + below.
+    const beam = new THREE.SpotLight(
+      colorHex,
+      0,                // intensity — animated by updateStageLightShow
+      24 * scale,       // throw distance
+      Math.PI / 7,      // ~25° cone half-angle (narrowish so beams read)
+      0.45,             // penumbra
+      1.0,              // decay
+    );
+    beam.position.set(lx, lensY - 0.1, 0);
+    const target = new THREE.Object3D();
+    // Default target: 8m forward (+Z) of the stage, on the ground.
+    target.position.set(lx, 0, 10 * scale);
+    g.add(target);
+    beam.target = target;
+    g.add(beam);
+
+    stageBeams.push({ beam, target, baseTargetX: lx, baseTargetZ: 10 * scale, phaseOffset: i * 1.7 });
   }
 
   return {
@@ -131,6 +158,7 @@ export function buildStage(opts = {}) {
     scale,
     frontZ: d / 2,           // local Z of the deck front edge (audience side)
     stageLights,
+    stageBeams,
   };
 }
 

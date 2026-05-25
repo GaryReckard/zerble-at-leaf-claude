@@ -6,9 +6,14 @@ import { buildSimpleNPC } from './puppet.js';
 
 export function buildBandMember(instrument) {
   const g = new THREE.Group();
+  // Marching uniform shirt + black trousers. Arms pose forward to grip
+  // the instrument; the drummer keeps relaxed arms (sticks live on the
+  // drum).
+  const armPose = instrument === 'drum' ? 'rest' : 'instrument';
   const body = buildSimpleNPC(
     instrument === 'drum' ? 0x6a2a2a : 0xc77dff,
-    0xe6c098
+    0xe6c098,
+    { armPose, pantsHex: 0x1a1a2a },
   );
   g.add(body);
 

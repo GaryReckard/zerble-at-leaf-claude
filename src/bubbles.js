@@ -37,7 +37,12 @@ export class Bubbles {
       iridescenceIOR: 1.3,
       sheen: 0.4,
       sheenColor: new THREE.Color(0xff9ad1),
+      // Subtle emissive — gets cranked at night to make bubbles catch the
+      // disco/festival lights instead of disappearing into the dark.
+      emissive: 0xffffff,
+      emissiveIntensity: 0.0,
     });
+    this._material = mat;
 
     this.mesh = new THREE.InstancedMesh(geo, mat, MAX_BUBBLES);
     this.mesh.castShadow = false;
@@ -84,7 +89,15 @@ export class Bubbles {
     this._tmpScale = new THREE.Vector3();
   }
 
-  update(dt, zerble) {
+  // dt: frame delta. zerble: cart for spawn pose. nightness: 0..1 from the
+  // time-of-day system — bubbles emit more light at night so they pick up
+  // the festival glow instead of going invisible.
+  update(dt, zerble, nightness = 0) {
+    if (this._material) {
+      // Day → 0; night → 0.35. Subtle but enough that bubbles catch the
+      // disco/headlight spotlights against a dark sky.
+      this._material.emissiveIntensity = nightness * 0.35;
+    }
     _windT += dt;
     // Spawn rate scales with cart speed — at rest, slow ambient drip; moving, full stream.
     const speed = Math.abs(zerble.speed);

@@ -8,22 +8,73 @@ const SHIRT_COLORS = [0xff6f9c, 0xffd28a, 0xb285ff, 0x66d9ff, 0x6fcf6a, 0xff8a5b
 export function buildPerformer(instrument, rng = Math.random) {
   const g = new THREE.Group();
   const shirt = SHIRT_COLORS[Math.floor(rng() * SHIRT_COLORS.length)];
+  const shirtMat = new THREE.MeshStandardMaterial({
+    color: shirt, roughness: 0.85, flatShading: true,
+  });
+  const skinMat = new THREE.MeshStandardMaterial({
+    color: 0xe6c098, roughness: 0.9, flatShading: true,
+  });
+  const pantsMat = new THREE.MeshStandardMaterial({
+    color: 0x1a1a2a, roughness: 0.92, flatShading: true,
+  });
 
+  // Legs — performers stand on stage in pants.
+  for (const lx of [-0.12, 0.12]) {
+    const leg = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.10, 0.10, 0.70, 8), pantsMat,
+    );
+    leg.position.set(lx, 0.35, 0);
+    leg.castShadow = true;
+    g.add(leg);
+    const shoe = new THREE.Mesh(
+      new THREE.BoxGeometry(0.16, 0.07, 0.24),
+      new THREE.MeshStandardMaterial({ color: 0x111, roughness: 0.8 }),
+    );
+    shoe.position.set(lx, 0.035, 0.04);
+    g.add(shoe);
+  }
+
+  // Torso.
   const body = new THREE.Mesh(
-    new THREE.CapsuleGeometry(0.34, 1.1, 4, 8),
-    new THREE.MeshStandardMaterial({ color: shirt, roughness: 0.85, flatShading: true })
+    new THREE.CapsuleGeometry(0.28, 0.55, 4, 8), shirtMat,
   );
-  body.position.y = 0.9;
+  body.position.y = 1.10;
   body.castShadow = true;
   g.add(body);
 
+  // Arms — angled forward to hold the instrument.
+  for (const sx of [-1, 1]) {
+    const armGroup = new THREE.Group();
+    armGroup.position.set(sx * 0.30, 1.30, 0);
+    armGroup.rotation.x = -0.5;     // forward bend
+    armGroup.rotation.z = sx * 0.05;
+    const upper = new THREE.Mesh(
+      new THREE.CapsuleGeometry(0.08, 0.30, 4, 6), shirtMat,
+    );
+    upper.position.y = -0.18;
+    armGroup.add(upper);
+    const lower = new THREE.Mesh(
+      new THREE.CapsuleGeometry(0.07, 0.30, 4, 6), skinMat,
+    );
+    lower.position.set(0, -0.50, -0.10);
+    armGroup.add(lower);
+    armGroup.castShadow = true;
+    g.add(armGroup);
+  }
+
   const head = new THREE.Mesh(
-    new THREE.IcosahedronGeometry(0.3, 1),
-    new THREE.MeshStandardMaterial({ color: 0xe6c098, roughness: 0.9, flatShading: true })
+    new THREE.IcosahedronGeometry(0.28, 1), skinMat,
   );
-  head.position.y = 1.75;
+  head.position.y = 1.80;
   head.castShadow = true;
   g.add(head);
+  // Eyes
+  const eyeMat = new THREE.MeshStandardMaterial({ color: 0x111, roughness: 0.8 });
+  for (const ex of [-0.09, 0.09]) {
+    const eye = new THREE.Mesh(new THREE.SphereGeometry(0.03, 6, 6), eyeMat);
+    eye.position.set(ex, 1.83, -0.24);
+    g.add(eye);
+  }
 
   const brass = new THREE.MeshStandardMaterial({
     color: 0xe8b042, roughness: 0.4, metalness: 0.85, flatShading: true,

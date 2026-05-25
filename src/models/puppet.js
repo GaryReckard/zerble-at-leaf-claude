@@ -135,23 +135,92 @@ export function buildPuppet(seed = 0) {
   return g;
 }
 
-// Compact NPC builder used inside other models (puppet handler, band members).
-// Exported so chunks/obstacles can compose larger entities.
-export function buildSimpleNPC(shirtHex, skinHex) {
+// Compact NPC builder used inside other models (puppet handler, band
+// members, parasol marshal). Now includes legs + arms so the silhouette
+// reads as a person instead of a capsule pill. Optional opts.armPose lets
+// the band member tilt arms to grip an instrument.
+export function buildSimpleNPC(shirtHex, skinHex, opts = {}) {
+  const { armPose = 'rest', pantsHex = 0x223a5c } = opts;
   const g = new THREE.Group();
-  const body = new THREE.Mesh(
-    new THREE.CapsuleGeometry(0.32, 1.0, 4, 8),
-    new THREE.MeshStandardMaterial({ color: shirtHex, roughness: 0.9, flatShading: true })
+
+  const shirtMat = new THREE.MeshStandardMaterial({
+    color: shirtHex, roughness: 0.9, flatShading: true,
+  });
+  const skinMat = new THREE.MeshStandardMaterial({
+    color: skinHex, roughness: 0.9, flatShading: true,
+  });
+  const pantsMat = new THREE.MeshStandardMaterial({
+    color: pantsHex, roughness: 0.92, flatShading: true,
+  });
+
+  // ----- Legs -----
+  for (const lx of [-0.12, 0.12]) {
+    const leg = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.10, 0.10, 0.65, 8),
+      pantsMat,
+    );
+    leg.position.set(lx, 0.32, 0);
+    leg.castShadow = true;
+    g.add(leg);
+    // Shoes
+    const shoe = new THREE.Mesh(
+      new THREE.BoxGeometry(0.16, 0.07, 0.24),
+      new THREE.MeshStandardMaterial({ color: 0x111, roughness: 0.8 }),
+    );
+    shoe.position.set(lx, 0.03, 0.04);
+    g.add(shoe);
+  }
+
+  // ----- Torso -----
+  const torso = new THREE.Mesh(
+    new THREE.CapsuleGeometry(0.26, 0.55, 4, 8),
+    shirtMat,
   );
-  body.position.y = 0.85;
-  body.castShadow = true;
-  g.add(body);
+  torso.position.y = 1.0;
+  torso.castShadow = true;
+  g.add(torso);
+
+  // ----- Arms — two upper (sleeve) + lower (skin) segments per side -----
+  for (const sx of [-1, 1]) {
+    const armGroup = new THREE.Group();
+    armGroup.position.set(sx * 0.30, 1.20, 0);
+    // Pose: 'rest' = hanging straight, 'instrument' = bent forward to grip
+    let upperZ = 0;
+    let lowerZ = 0;
+    if (armPose === 'instrument') {
+      armGroup.rotation.x = -0.6;      // arm pivots forward
+      lowerZ = -0.10;
+    }
+    armGroup.rotation.z = sx * 0.05;
+    const upper = new THREE.Mesh(
+      new THREE.CapsuleGeometry(0.08, 0.30, 4, 6), shirtMat,
+    );
+    upper.position.set(0, -0.18, upperZ);
+    armGroup.add(upper);
+    const lower = new THREE.Mesh(
+      new THREE.CapsuleGeometry(0.07, 0.28, 4, 6), skinMat,
+    );
+    lower.position.set(0, -0.50, lowerZ);
+    armGroup.add(lower);
+    armGroup.castShadow = true;
+    g.add(armGroup);
+  }
+
+  // ----- Head -----
   const head = new THREE.Mesh(
-    new THREE.IcosahedronGeometry(0.28, 1),
-    new THREE.MeshStandardMaterial({ color: skinHex, roughness: 0.9, flatShading: true })
+    new THREE.IcosahedronGeometry(0.26, 1), skinMat,
   );
   head.position.y = 1.65;
   head.castShadow = true;
   g.add(head);
+
+  // ----- Face dots — two eyes facing local -Z (forward) -----
+  const eyeMat = new THREE.MeshStandardMaterial({ color: 0x111, roughness: 0.8 });
+  for (const ex of [-0.08, 0.08]) {
+    const eye = new THREE.Mesh(new THREE.SphereGeometry(0.028, 6, 6), eyeMat);
+    eye.position.set(ex, 1.68, -0.22);
+    g.add(eye);
+  }
+
   return g;
 }

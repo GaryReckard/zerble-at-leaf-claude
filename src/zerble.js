@@ -1,6 +1,7 @@
 // Zerble: the anthropomorphic golf cart. Geometry + arcade physics.
 
 import * as THREE from 'three';
+import { Input } from './input.js';
 
 // --- Driving feel knobs ---
 const ACCEL = 18;          // m/s^2 throttle
@@ -24,6 +25,9 @@ const COLOR_IRIS = 0x1e9bff;
 
 const LED_HUES = [0xff5577, 0xffaa33, 0xffe066, 0x66ff88, 0x66d9ff, 0xc080ff];
 
+// Reusable color object for disco light updates — avoids per-frame churn.
+const _tmpDiscoColor = new THREE.Color();
+
 export class Zerble {
   constructor() {
     this.root = new THREE.Group();
@@ -36,6 +40,11 @@ export class Zerble {
     this.radius = 1.9;
     this.invulnLeft = 0;
     this.honkCooldown = 0;
+
+    // Eye-glow brightness scalar (0..1). Default 0.75 per the spec. Held
+    // I-key ramps it toward 1, held O ramps it toward 0. Eased so the full
+    // range takes a touch under 2s.
+    this.eyeGlowLevel = 0.75;
 
     // For bubbles & smile attraction: a stable world point on Zerble.
     this.nozzleWorld = new THREE.Vector3();
@@ -251,45 +260,72 @@ export class Zerble {
 
     // ----- Eyes — big globes with VISIBLE black pupils in front of blue irises -----
     this.eyes = [];
-    // Collect sclera materials so the day/night system can boost emissive at night.
+    // Collect glowing materials so the day/night + i/o-key brightness
+    // controls can crank them at runtime.
     this._eyeGlowMats = [];
     for (const ex of [-0.78, 0.78]) {
       const eye = new THREE.Group();
       eye.position.set(ex, 2.15, -1.95);
 
-      // Sclera — slightly smaller than before
+      // ----- Sclera — front hemisphere only -----
+      // The driver sits BEHIND the eyes; a full glowing sphere lights up
+      // the cab from inside (Gary "can't see the road"). Make the sclera
+      // a front-facing hemisphere and cap the back with an opaque black
+      // dome so the cab stays dark.
       const scleraMat = new THREE.MeshStandardMaterial({
         color: 0xffffff,
         emissive: COLOR_EYE_GLOW,
         emissiveIntensity: 0.5,
         roughness: 0.25,
-        flatShading: false,
+        // Translucent — the eye reads as a glowing dome, not a plastic ball.
+        transparent: true,
+        opacity: 0.85,
+        side: THREE.DoubleSide,
       });
+      // SphereGeometry(r, w, h, phiStart, phiLength, thetaStart, thetaLength)
+      // — phi here is azimuth (rotation around Y). The eye looks down -Z;
+      // a hemisphere covering -Z is phiStart = π/2, phiLength = π.
       const sclera = new THREE.Mesh(
-        new THREE.IcosahedronGeometry(0.7, 2),
+        new THREE.SphereGeometry(0.7, 24, 16, Math.PI / 2, Math.PI),
         scleraMat,
       );
       sclera.castShadow = false;
       eye.add(sclera);
       this._eyeGlowMats.push(scleraMat);
 
-      // Iris — sits at -0.45 with radius 0.4 (so front face is at z=-0.85)
+      // Opaque black back cap so the cab interior stays dark (drivers'
+      // POV). Slightly larger radius so it visually fully occludes the
+      // hemisphere's open back rim.
+      const backCapMat = new THREE.MeshStandardMaterial({
+        color: 0x0a0a0a, roughness: 0.9, side: THREE.DoubleSide,
+      });
+      const backCap = new THREE.Mesh(
+        new THREE.SphereGeometry(0.71, 24, 16, -Math.PI / 2, Math.PI),
+        backCapMat,
+      );
+      eye.add(backCap);
+
+      // Iris — also translucent + glowing per Gary's feedback. Front-half
+      // hemisphere so the back of the cap stays unlit.
+      const irisMat = new THREE.MeshStandardMaterial({
+        color: COLOR_IRIS,
+        emissive: COLOR_IRIS,
+        emissiveIntensity: 0.6,
+        roughness: 0.3,
+        transparent: true,
+        opacity: 0.78,
+        side: THREE.DoubleSide,
+      });
       const iris = new THREE.Mesh(
-        new THREE.SphereGeometry(0.4, 16, 12),
-        new THREE.MeshStandardMaterial({
-          color: COLOR_IRIS,
-          emissive: 0x0a3f8a,
-          emissiveIntensity: 0.25,
-          roughness: 0.3,
-        })
+        new THREE.SphereGeometry(0.4, 18, 12, Math.PI / 2, Math.PI),
+        irisMat,
       );
       iris.position.z = -0.45;
       eye.add(iris);
+      this._eyeGlowMats.push(irisMat);
 
-      // Pupil — smaller and pulled back so only ~1/3 of it pokes past the
-      // iris (user feedback: previously it looked oversized and 2/3 stuck out).
-      // Iris front face is at z=-0.85; pupil center at z=-0.70 with radius
-      // 0.24 puts the pupil's front face at z=-0.94, ~9cm past the iris.
+      // Pupil — opaque black, the only solid element. Front face at
+      // z = -0.94 (~9cm past the iris).
       const pupil = new THREE.Mesh(
         new THREE.SphereGeometry(0.24, 14, 12),
         new THREE.MeshStandardMaterial({
@@ -377,19 +413,83 @@ export class Zerble {
     this.nozzle.rotation.x = Math.PI / 2;
     this.root.add(this.nozzle);
 
-    // Glowing ring at the nozzle tip
-    const ring = new THREE.Mesh(
-      new THREE.TorusGeometry(0.18, 0.05, 8, 18),
+    // ----- RGB disco light — replaces the old white nozzle ring -----
+    // Faceted hemisphere atop a small black base, like the USB DJ ball
+    // Gary referenced. Aims backwards + DOWN at ~45° so the beam splashes
+    // colored light onto the ground behind Zerble. Colors cycle (RGB
+    // chase) and a SpotLight pointed in the same direction throws actual
+    // illumination at night.
+    const discoGroup = new THREE.Group();
+    // Match the previous ring's world spot: behind the nozzle at z=2.7,
+    // y=3.0 (top of the bubble machine).
+    discoGroup.position.set(0, 3.0, 2.7);
+    // Pitch 45° down/back: rotate around X so the hemisphere's open face
+    // points away from the cart and downward.
+    discoGroup.rotation.x = Math.PI / 4;
+    this.root.add(discoGroup);
+
+    // Small black housing cup
+    const housing = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.20, 0.22, 0.14, 16, 1, true),
       new THREE.MeshStandardMaterial({
-        color: 0xa6ecff,
-        emissive: 0xa6ecff,
-        emissiveIntensity: 2,
-      })
+        color: 0x161616, roughness: 0.85, metalness: 0.3, side: THREE.DoubleSide,
+      }),
     );
-    ring.position.set(0, 3.0, 2.7);
-    ring.rotation.x = 0;
-    this.root.add(ring);
-    this._nozzleRing = ring;
+    // Local +Y of the disco group points "out" the aim direction; the cup
+    // sits at +Y=0 with the dome at +Y=0.08.
+    housing.position.y = 0;
+    discoGroup.add(housing);
+
+    // Faceted dome — IcosahedronGeometry detail 1 gives the chunky-prism
+    // look of a real disco-ball dome. Emissive material that cycles colors.
+    const discoMat = new THREE.MeshStandardMaterial({
+      color: 0xffffff,
+      emissive: 0xffffff,
+      emissiveIntensity: 1.4,
+      roughness: 0.15,
+      metalness: 0.0,
+      transparent: true,
+      opacity: 0.85,
+    });
+    const dome = new THREE.Mesh(
+      new THREE.IcosahedronGeometry(0.18, 1),
+      discoMat,
+    );
+    // Squash to a hemisphere by clipping below the cup (visual approximation
+    // via positioning + slight Y-scale).
+    dome.scale.set(1, 0.85, 1);
+    dome.position.y = 0.08;
+    discoGroup.add(dome);
+
+    // SpotLight that throws actual colored light backwards/down at night.
+    const discoLight = new THREE.SpotLight(
+      0xff3380,             // initial color (cycled in update)
+      0,                    // intensity (ramped with nightness)
+      14,                   // distance
+      Math.PI / 4,          // cone half-angle (~45°)
+      0.55,                 // penumbra
+      1.2,                  // decay
+    );
+    // SpotLight aims from itself toward .target.position. Position the
+    // light at the dome and target a point further along the disco
+    // group's +Y axis.
+    discoLight.position.set(0, 0.08, 0);
+    const discoTarget = new THREE.Object3D();
+    discoTarget.position.set(0, 5, 0);
+    discoGroup.add(discoLight);
+    discoGroup.add(discoTarget);
+    discoLight.target = discoTarget;
+
+    this._disco = {
+      group: discoGroup,
+      dome,
+      domeMat: discoMat,
+      light: discoLight,
+      // Animation state — pattern phase + color phase tick separately so
+      // the dome's hue cycle isn't locked to its spin.
+      phase: 0,
+      colorPhase: 0,
+    };
 
     // (Round headlights removed — the new LED bar above replaces them.)
 
@@ -736,27 +836,61 @@ export class Zerble {
       }
     }
 
-    // ----- Pulse nozzle ring -----
-    this._nozzleRing.material.emissiveIntensity = 1.4 + Math.sin(t * 6) * 0.5;
+    // ----- Disco light — color cycle + slow spin + nightness-gated spot --
+    if (this._disco) {
+      this._disco.phase += dt * 0.7;
+      this._disco.colorPhase += dt * 2.1;
+      // Dome spins around its local Y (its aim direction) — looks like
+      // the rotating prism inside the real fixture.
+      this._disco.dome.rotation.y = this._disco.phase;
+      // Hue chase through the standard RGB-Y-C-M loop.
+      const hue = (this._disco.colorPhase * 0.15) % 1;
+      const c = _tmpDiscoColor.setHSL(hue, 0.95, 0.55);
+      this._disco.domeMat.color.copy(c);
+      this._disco.domeMat.emissive.copy(c);
+      // Dome intensity pulses gently regardless of nightness so it's
+      // visible during the day too.
+      this._disco.domeMat.emissiveIntensity = 1.5 + Math.sin(t * 5) * 0.6;
+      // The SpotLight only kicks on as it gets dark — otherwise direct
+      // sunlight washes it out.
+      const discoNight = THREE.MathUtils.smoothstep(nightness, 0.2, 0.8);
+      this._disco.light.color.copy(c);
+      this._disco.light.intensity = discoNight * 6.5
+        * (0.7 + 0.3 * Math.sin(t * 3 + 1.2));
+    }
 
-    // ----- Headlights + eyes glow when it gets dark -----
-    // nightness 0 → headlights off, eyes at 0.5 emissive (baseline).
-    // nightness 1 → headlights blazing, eyes glow at 2.5x baseline.
-    const headlightIntensity = THREE.MathUtils.smoothstep(nightness, 0.25, 0.8) * 3.2;
+    // ----- Eye-glow brightness key control (I/O) ----------------------
+    // Hold I to ramp up, O to ramp down. Easing: approach target at ~0.65/s
+    // so the full 0..1 ramp takes ~1.55s.
+    let targetEyeLevel = this.eyeGlowLevel;
+    if (Input.isDown('I')) targetEyeLevel = 1.0;
+    else if (Input.isDown('O')) targetEyeLevel = 0.0;
+    const eyeStep = 0.65 * dt;
+    if (this.eyeGlowLevel < targetEyeLevel) {
+      this.eyeGlowLevel = Math.min(targetEyeLevel, this.eyeGlowLevel + eyeStep);
+    } else if (this.eyeGlowLevel > targetEyeLevel) {
+      this.eyeGlowLevel = Math.max(targetEyeLevel, this.eyeGlowLevel - eyeStep);
+    }
+
+    // ----- Headlights — much brighter at night -----
+    // The bloom pass benefits more from SpotLight intensity than from lamp
+    // emissive, so the SpotLight gets the big bump. Lamp lenses still light
+    // up so the bulbs read from behind.
+    const headlightIntensity = THREE.MathUtils.smoothstep(nightness, 0.25, 0.8) * 8.5;
     if (this._headlightLights) {
       for (const l of this._headlightLights) l.intensity = headlightIntensity;
     }
     if (this._headlightMat) {
-      // The lamp lenses themselves get a brighter emissive at night so they
-      // read as actual bulbs even from behind the cart.
-      this._headlightMat.emissiveIntensity = 1.2 + nightness * 2.4;
+      this._headlightMat.emissiveIntensity = 1.2 + nightness * 3.8;
     }
+    // ----- Eyes — dimmer than before, scaled by the user's I/O level -----
+    // Day baseline: 0.35 * level. Night peak: (0.35 + 0.35) * level = 0.70.
+    // Below that the eyes are visibly glowing without blooming out the cab.
     if (this._eyeGlowMats) {
-      // The bloom pass blows the sclera out to pure white if we crank the
-      // emissive too hard — keep the night boost gentle so it reads as a
-      // glow rather than headlights.
+      const eyeBase = 0.35 + nightness * 0.35;
+      const intensity = eyeBase * this.eyeGlowLevel;
       for (const m of this._eyeGlowMats) {
-        m.emissiveIntensity = 0.5 + nightness * 0.6;
+        m.emissiveIntensity = intensity;
       }
     }
 

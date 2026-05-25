@@ -19,7 +19,7 @@ import { registry } from './registry.js';
 import { hash2, mulberry32 } from './rng.js';
 import { Sound } from './sound.js';
 import { PERF } from './perf.js';
-import { chunkOverlapsLake } from './lakes.js';
+import { chunkOverlapsLake, chunkInLake } from './lakes.js';
 
 export const CHUNK_SIZE = 80;
 const LOAD_RADIUS = PERF.chunkLoadRadius;   // mobile: 1 (3x3), desktop: 2 (5x5)
@@ -126,18 +126,26 @@ export class ChunkManager {
       crowd: this.crowd,
     };
 
-    // Every chunk: paths along its grid axes
+    // Every chunk: paths along its grid axes (skipped if the chunk overlaps a lake)
     placePaths(ctx);
 
-    // Build theme content FIRST so footprints register before we scatter trees & NPCs.
-    THEME_BUILDERS[theme](ctx);
+    // Suppress theme content (stages, food trucks, vendor rows, drum circles,
+    // hammocks, picnic blankets) when the chunk center sits inside a lake.
+    // Otherwise these get placed on top of the water. Trees + sparse ambient
+    // crowd still happen — they consult registry footprints individually so
+    // they naturally land on the shoreline.
+    const inWater = chunkInLake(ctx.cxWorld, ctx.czWorld);
+    if (!inWater) {
+      THEME_BUILDERS[theme](ctx);
+    }
 
-    // Scatter trees — will dodge the buildings we just registered.
-    const treeDensity = THEME_PROPS[theme].treeDensity;
+    // Scatter trees — will dodge the buildings + lake footprints registered.
+    const treeDensity = inWater ? 0 : THEME_PROPS[theme].treeDensity;
     scatterTrees(ctx, treeDensity);
 
     // Ambient crowd
-    spawnAmbientCrowd(ctx, THEME_PROPS[theme].ambientCrowd);
+    const crowdCount = inWater ? 0 : THEME_PROPS[theme].ambientCrowd;
+    spawnAmbientCrowd(ctx, crowdCount);
 
     this.scene.add(group);
     this.loaded.set(key, { group, cx, cz, theme });
@@ -173,10 +181,13 @@ function pickTheme(cx, cz) {
     if (r < 0.90) return 'grove';
     return 'open_lawn';
   }
-  // Outer rings — peaceful
-  if (r < 0.10) return 'drum_circle';
-  if (r < 0.30) return 'vendor_row';
-  if (r < 0.65) return 'grove';
+  // Outer rings — keep stages + food plazas discoverable far from spawn so
+  // exploration always finds new POIs.
+  if (r < 0.10) return 'side_stage';      // 10% — rarer than near origin but still present
+  if (r < 0.20) return 'food_plaza';      // 10%
+  if (r < 0.30) return 'drum_circle';     // 10%
+  if (r < 0.45) return 'vendor_row';      // 15%
+  if (r < 0.75) return 'grove';
   return 'open_lawn';
 }
 
@@ -1019,6 +1030,16 @@ function leafBannerTexture(textColor, bgColor) {
   tex.anisotropy = 8;
   _leafTexCache.set(key, tex);
   return tex;
+}
+
+// Standalone builder for the sandbox — wraps buildHammock with a synthetic
+// ctx so the sandbox can drop a hammock into its scene without bringing in
+// the whole chunk system.
+export function buildHammockStandalone(x, z, rng = Math.random) {
+  const group = new THREE.Group();
+  group.name = 'sandbox-hammock';
+  buildHammock({ group, rng, cxWorld: 0, czWorld: 0, key: 'sandbox' }, x, z);
+  return group;
 }
 
 function buildHammock(ctx, x, z) {

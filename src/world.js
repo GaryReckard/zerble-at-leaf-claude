@@ -56,9 +56,9 @@ let _groundLastResampleX = NaN;
 let _groundLastResampleZ = NaN;
 const GROUND_RESAMPLE_THRESHOLD = 40; // re-derive heights when player moves > 40m
 
-export function updateWorld(playerPos) {
+export function updateWorld(playerPos, dt = 0.016) {
   // Lakes update first (same reason as boot: chunks consult lake footprints).
-  if (lakeManager) lakeManager.update(_scene, playerPos);
+  if (lakeManager) lakeManager.update(_scene, playerPos, dt);
   if (chunkManager) chunkManager.update(playerPos);
   // Keep the sky dome, ground plane and mountain ring centered on the player
   // so the world feels infinite — chunks at fixed world coords slide past,

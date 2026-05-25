@@ -196,7 +196,7 @@ function tickBody(dt) {
     updateStagePerformers(performance.now() * 0.001);
 
     // Procedural world expands around Zerble.
-    updateWorld(zerble.position);
+    updateWorld(zerble.position, dt);
 
     // Collisions: deduct smiles only when Zerble is actively driving into the obstacle.
     // If something brushes a stationary Zerble, just resolve the overlap silently.

@@ -383,19 +383,103 @@ function duudeSound(ctx, dest) {
   osc2.stop(t + 0.85);
 }
 
+// Two horn variants picked at random — clown squeeze-bulb or bicycle bell.
 function playHonk(ctx, dest) {
+  if (Math.random() < 0.5) playClownBulb(ctx, dest);
+  else playBicycleBell(ctx, dest);
+}
+
+// Squeeze-bulb / "ooga" clown horn: reedy sawtooth tone that drops in pitch
+// across the squeeze, with a soft mid-attack so it reads as a rubber bulb.
+function playClownBulb(ctx, dest) {
   const t = ctx.currentTime;
-  const env = makeEnv(ctx, dest, 0.01, 0.3, 0.42);
-  const osc = ctx.createOscillator();
-  osc.type = 'square';
-  osc.frequency.setValueAtTime(440, t);
-  osc.frequency.linearRampToValueAtTime(410, t + 0.3);
-  const lpf = ctx.createBiquadFilter();
-  lpf.type = 'lowpass';
-  lpf.frequency.value = 2200;
-  osc.connect(lpf).connect(env);
-  osc.start();
-  osc.stop(t + 0.4);
+  // Two parallel oscillators (saw + square) for a reedy timbre
+  const env = ctx.createGain();
+  env.gain.setValueAtTime(0.0001, t);
+  env.gain.exponentialRampToValueAtTime(0.32, t + 0.04);
+  env.gain.exponentialRampToValueAtTime(0.30, t + 0.32);
+  env.gain.exponentialRampToValueAtTime(0.0001, t + 0.42);
+  env.connect(dest);
+
+  const sawOsc = ctx.createOscillator();
+  sawOsc.type = 'sawtooth';
+  sawOsc.frequency.setValueAtTime(380, t);
+  sawOsc.frequency.exponentialRampToValueAtTime(260, t + 0.30);
+  const sqrOsc = ctx.createOscillator();
+  sqrOsc.type = 'square';
+  sqrOsc.frequency.setValueAtTime(190, t);
+  sqrOsc.frequency.exponentialRampToValueAtTime(130, t + 0.30);
+
+  // Bandpass filter to give it that "horn body" resonance
+  const bpf = ctx.createBiquadFilter();
+  bpf.type = 'bandpass';
+  bpf.frequency.value = 750;
+  bpf.Q.value = 1.2;
+
+  sawOsc.connect(bpf);
+  sqrOsc.connect(bpf);
+  bpf.connect(env);
+
+  sawOsc.start();
+  sqrOsc.start();
+  sawOsc.stop(t + 0.45);
+  sqrOsc.stop(t + 0.45);
+}
+
+// Bicycle bell: short high "ding" with a sine carrier modulated by another
+// sine to give it that metallic ring + a fast decay.
+function playBicycleBell(ctx, dest) {
+  const t = ctx.currentTime;
+
+  // Carrier — high pitch, ~2.4 kHz
+  const carrier = ctx.createOscillator();
+  carrier.type = 'sine';
+  carrier.frequency.value = 2400;
+
+  // Modulator — adds the metallic shimmer
+  const modulator = ctx.createOscillator();
+  modulator.type = 'sine';
+  modulator.frequency.value = 870;
+  const modGain = ctx.createGain();
+  modGain.gain.value = 380;
+  modulator.connect(modGain).connect(carrier.frequency);
+
+  // Envelope — sharp attack, ~0.6s ringing decay
+  const env = ctx.createGain();
+  env.gain.setValueAtTime(0.0001, t);
+  env.gain.exponentialRampToValueAtTime(0.45, t + 0.005);
+  env.gain.exponentialRampToValueAtTime(0.18, t + 0.06);
+  env.gain.exponentialRampToValueAtTime(0.0001, t + 0.65);
+
+  carrier.connect(env).connect(dest);
+  carrier.start();
+  modulator.start();
+  carrier.stop(t + 0.7);
+  modulator.stop(t + 0.7);
+
+  // Quick double-ring (two strikes ~0.18s apart) for the classic bell feel
+  setTimeout(() => {
+    if (!ctx || ctx.state === 'closed') return;
+    const t2 = ctx.currentTime;
+    const env2 = ctx.createGain();
+    env2.gain.setValueAtTime(0.0001, t2);
+    env2.gain.exponentialRampToValueAtTime(0.30, t2 + 0.004);
+    env2.gain.exponentialRampToValueAtTime(0.0001, t2 + 0.45);
+    const c2 = ctx.createOscillator();
+    c2.type = 'sine';
+    c2.frequency.value = 2400;
+    const m2 = ctx.createOscillator();
+    m2.type = 'sine';
+    m2.frequency.value = 870;
+    const mg2 = ctx.createGain();
+    mg2.gain.value = 380;
+    m2.connect(mg2).connect(c2.frequency);
+    c2.connect(env2).connect(dest);
+    c2.start();
+    m2.start();
+    c2.stop(t2 + 0.5);
+    m2.stop(t2 + 0.5);
+  }, 180);
 }
 
 // ---------- Spatial stage music ----------

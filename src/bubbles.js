@@ -6,7 +6,7 @@ const MAX_BUBBLES = 120;
 const SPAWN_PER_SEC = 26;
 const GRAVITY = -0.45;
 const BUOYANCY = 1.0;
-const LIFETIME = 8;
+const LIFETIME = 22;     // ~2.75x the original 8s — bubbles linger long enough to feel like a trail
 const POP_SCALE_TIME = 0.25;
 
 // Slowly varying global wind so all bubbles drift coherently most of the time.

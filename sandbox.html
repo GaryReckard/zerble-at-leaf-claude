@@ -1,0 +1,389 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Sandbox — Zerble at LEAF</title>
+  <style>
+    :root { color-scheme: dark; }
+    html, body { margin: 0; padding: 0; width: 100%; height: 100vh; overflow: hidden;
+      background: #1a1430; color: #fff6e6;
+      font-family: "Trebuchet MS", "Helvetica Neue", Helvetica, Arial, sans-serif; }
+    #canvas { position: fixed; inset: 0; width: 100%; height: 100%; display: block; touch-action: none; cursor: grab; }
+    #canvas:active { cursor: grabbing; }
+    #hud {
+      position: fixed; top: 16px; left: 16px; z-index: 10;
+      background: rgba(28, 19, 48, 0.7); padding: 12px 16px; border-radius: 12px;
+      border: 1px solid rgba(255, 246, 230, 0.15); backdrop-filter: blur(6px);
+      max-width: 320px;
+    }
+    #hud h1 { font-size: 14px; margin: 0 0 8px 0; letter-spacing: 0.1em; text-transform: uppercase; opacity: 0.7; }
+    #hud select { width: 100%; padding: 6px 8px; font-family: inherit; font-size: 14px;
+      background: rgba(255, 246, 230, 0.1); color: inherit; border: 1px solid rgba(255, 246, 230, 0.25);
+      border-radius: 6px; cursor: pointer; }
+    #hud .controls { margin-top: 10px; font-size: 12px; line-height: 1.5; opacity: 0.7; }
+    #hud kbd { background: rgba(255, 246, 230, 0.1); border: 1px solid rgba(255, 246, 230, 0.2);
+      border-radius: 4px; padding: 1px 5px; font-size: 11px; }
+    #info { margin-top: 10px; font-size: 12px; padding: 6px 8px; background: rgba(0,0,0,0.3); border-radius: 6px; min-height: 18px; }
+    label { display: block; font-size: 11px; opacity: 0.6; margin-bottom: 4px; letter-spacing: 0.05em; text-transform: uppercase; }
+    .row { display: flex; gap: 8px; margin-top: 8px; }
+    .row > * { flex: 1; }
+    button { padding: 6px 8px; font-family: inherit; font-size: 12px;
+      background: rgba(255, 210, 138, 0.2); color: inherit; border: 1px solid rgba(255, 210, 138, 0.4);
+      border-radius: 6px; cursor: pointer; }
+    button:hover { background: rgba(255, 210, 138, 0.35); }
+  </style>
+  <script>
+    // Same import-map cache-buster pattern as index.html so edits show up
+    // immediately during development. Only enabled on local hosts.
+    (function () {
+      const h = location.hostname;
+      const isLocal = h === 'localhost' || h === '127.0.0.1' || h === '0.0.0.0' ||
+        h.endsWith('.local') || /^10\./.test(h) || /^192\.168\./.test(h);
+      const v = isLocal ? '?v=' + Date.now() : '';
+      const mods = ['zerble','lurleen','bubbles','smiles','registry','rng','perf','sound','chunks','crowd','lakes'];
+      const base = new URL('./src/', document.baseURI).href;
+      const imports = {
+        'three': 'https://unpkg.com/three@0.160.0/build/three.module.js',
+        'three/addons/': 'https://unpkg.com/three@0.160.0/examples/jsm/',
+      };
+      for (const m of mods) imports[base + m + '.js'] = base + m + '.js' + v;
+      const im = document.createElement('script');
+      im.type = 'importmap';
+      im.textContent = JSON.stringify({ imports });
+      document.head.appendChild(im);
+    })();
+  </script>
+</head>
+<body>
+  <canvas id="canvas"></canvas>
+
+  <div id="hud">
+    <h1>Entity Sandbox</h1>
+    <label for="entity">Entity</label>
+    <select id="entity">
+      <option value="zerble">Zerble</option>
+      <option value="lurleen">Lurleen</option>
+      <option value="lurleen_zerble">Zerble + Lurleen (side by side)</option>
+      <option value="hammock">Hammock</option>
+      <option value="heart">Heart particle</option>
+      <option value="canoe">Canoe</option>
+      <option value="lake">Lake (mini)</option>
+    </select>
+    <div class="row">
+      <button id="reset-cam">Reset camera</button>
+      <button id="snapshot">Copy link</button>
+    </div>
+    <div id="info">drag to orbit · scroll to zoom · shift-drag to pan</div>
+    <div class="controls">
+      <kbd>1</kbd>–<kbd>6</kbd> snap to angles · <kbd>R</kbd> reset · <kbd>L</kbd> toggle ground
+    </div>
+  </div>
+
+  <script type="module">
+    import * as THREE from 'three';
+    import { Zerble } from './src/zerble.js';
+    import { Lurleen, createHeartGeometry } from './src/lurleen.js';
+    import { buildHammockStandalone } from './src/chunks.js';
+    import { _buildCanoeMeshForSandbox } from './src/lakes.js';
+
+    const canvas = document.getElementById('canvas');
+    const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+    renderer.shadowMap.enabled = true;
+    renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+    renderer.outputColorSpace = THREE.SRGBColorSpace;
+    renderer.toneMapping = THREE.ACESFilmicToneMapping;
+
+    const scene = new THREE.Scene();
+    scene.background = new THREE.Color(0x232040);
+    scene.fog = new THREE.Fog(0x232040, 30, 100);
+
+    const camera = new THREE.PerspectiveCamera(50, window.innerWidth / window.innerHeight, 0.1, 200);
+
+    // Lights tuned for clear entity inspection (warm key + cool fill)
+    const hemi = new THREE.HemisphereLight(0xb0d8ff, 0xb09060, 0.6);
+    scene.add(hemi);
+    const sun = new THREE.DirectionalLight(0xfff0c0, 1.3);
+    sun.position.set(8, 14, 7);
+    sun.castShadow = true;
+    sun.shadow.mapSize.set(2048, 2048);
+    sun.shadow.camera.near = 1;
+    sun.shadow.camera.far = 60;
+    sun.shadow.camera.left = -20;
+    sun.shadow.camera.right = 20;
+    sun.shadow.camera.top = 20;
+    sun.shadow.camera.bottom = -20;
+    scene.add(sun);
+    scene.add(new THREE.AmbientLight(0xffffff, 0.25));
+
+    // Ground reference (flat grass disc) — toggle with L
+    const groundGroup = new THREE.Group();
+    {
+      const ground = new THREE.Mesh(
+        new THREE.CircleGeometry(35, 48),
+        new THREE.MeshStandardMaterial({ color: 0x7cb37a, roughness: 0.95, flatShading: true }),
+      );
+      ground.rotation.x = -Math.PI / 2;
+      ground.receiveShadow = true;
+      groundGroup.add(ground);
+      // Subtle grid so motion is readable
+      const grid = new THREE.GridHelper(30, 30, 0x4a8048, 0x4a8048);
+      grid.position.y = 0.01;
+      grid.material.opacity = 0.3;
+      grid.material.transparent = true;
+      groundGroup.add(grid);
+    }
+    scene.add(groundGroup);
+
+    // Orbit camera (no OrbitControls dep — hand-rolled, works on touch + mouse)
+    const cam = { yaw: -0.4, pitch: 0.45, dist: 10, target: new THREE.Vector3(0, 1.6, 0) };
+    function applyCam() {
+      const cp = Math.cos(cam.pitch);
+      camera.position.set(
+        cam.target.x + Math.sin(cam.yaw) * cp * cam.dist,
+        cam.target.y + Math.sin(cam.pitch) * cam.dist,
+        cam.target.z + Math.cos(cam.yaw) * cp * cam.dist,
+      );
+      camera.lookAt(cam.target);
+    }
+    applyCam();
+
+    function resize() {
+      const w = window.innerWidth, h = window.innerHeight;
+      renderer.setSize(w, h);
+      camera.aspect = w / h;
+      camera.updateProjectionMatrix();
+    }
+    resize();
+    window.addEventListener('resize', resize);
+
+    // Input — pointer-based, works for mouse + touch
+    let dragging = false, lastX = 0, lastY = 0, panning = false;
+    canvas.addEventListener('pointerdown', (e) => {
+      dragging = true; panning = e.shiftKey || e.button === 1;
+      lastX = e.clientX; lastY = e.clientY;
+      canvas.setPointerCapture(e.pointerId);
+    });
+    canvas.addEventListener('pointermove', (e) => {
+      if (!dragging) return;
+      const dx = e.clientX - lastX, dy = e.clientY - lastY;
+      lastX = e.clientX; lastY = e.clientY;
+      if (panning) {
+        const panScale = cam.dist * 0.0025;
+        // Pan in camera-relative axes
+        const right = new THREE.Vector3();
+        camera.getWorldDirection(right);
+        right.cross(new THREE.Vector3(0, 1, 0)).normalize();
+        const up = new THREE.Vector3(0, 1, 0);
+        cam.target.addScaledVector(right, -dx * panScale).addScaledVector(up, dy * panScale);
+      } else {
+        cam.yaw -= dx * 0.008;
+        cam.pitch = Math.max(-1.3, Math.min(1.4, cam.pitch + dy * 0.008));
+      }
+      applyCam();
+    });
+    canvas.addEventListener('pointerup', () => { dragging = false; panning = false; });
+    canvas.addEventListener('wheel', (e) => {
+      cam.dist = Math.max(2, Math.min(50, cam.dist * (1 + e.deltaY * 0.001)));
+      applyCam();
+      e.preventDefault();
+    }, { passive: false });
+
+    // Keyboard snaps + toggles
+    const snaps = {
+      '1': { yaw: 0, pitch: 0.15 },         // front
+      '2': { yaw: Math.PI / 2, pitch: 0.15 },  // right
+      '3': { yaw: Math.PI, pitch: 0.15 },   // back
+      '4': { yaw: -Math.PI / 2, pitch: 0.15 }, // left
+      '5': { yaw: -0.5, pitch: 0.9 },       // top-iso
+      '6': { yaw: -0.5, pitch: 0.45 },      // 3/4
+    };
+    window.addEventListener('keydown', (e) => {
+      if (snaps[e.key]) {
+        cam.yaw = snaps[e.key].yaw;
+        cam.pitch = snaps[e.key].pitch;
+        applyCam();
+      } else if (e.key === 'r' || e.key === 'R') {
+        cam.yaw = -0.4; cam.pitch = 0.45; cam.dist = 10;
+        cam.target.set(0, 1.6, 0);
+        applyCam();
+      } else if (e.key === 'l' || e.key === 'L') {
+        groundGroup.visible = !groundGroup.visible;
+      }
+    });
+
+    // ----- Entity management -----
+    let currentEntity = null;
+    let entityRoot = null;
+    let updateFn = null;
+    const select = document.getElementById('entity');
+    const info = document.getElementById('info');
+
+    function clearEntity() {
+      // Aggressive cleanup — remove every non-light, non-ground object so
+      // entities that add multiple top-level roots (e.g. Lurleen's heart
+      // group + her cart root) all get torn down on switch.
+      for (let i = scene.children.length - 1; i >= 0; i--) {
+        const c = scene.children[i];
+        if (c.isLight || c === groundGroup) continue;
+        scene.remove(c);
+        c.traverse?.((o) => {
+          if (o.geometry) o.geometry.dispose?.();
+          if (o.material) {
+            if (Array.isArray(o.material)) o.material.forEach((m) => m.dispose?.());
+            else o.material.dispose?.();
+          }
+        });
+      }
+      currentEntity = null;
+      entityRoot = null;
+      updateFn = null;
+    }
+
+    function loadEntity(name) {
+      clearEntity();
+      info.textContent = `Loading ${name}...`;
+      switch (name) {
+        case 'zerble': {
+          const z = new Zerble();
+          z.position.set(0, 0, 0);
+          scene.add(z.root);
+          entityRoot = z.root;
+          currentEntity = z;
+          // Animate via the same update path but with no input
+          const mockInput = { throttle: 0, steer: 0, boost: false, isDown: () => false, consumePressed: () => false };
+          updateFn = (dt) => { try { z.update(dt, mockInput); } catch (e) { /* mock may not satisfy */ } };
+          cam.target.set(0, 1.6, 0);
+          break;
+        }
+        case 'lurleen': {
+          const l = new Lurleen(scene);
+          l.position.set(0, 0, 0);
+          l.root.position.set(0, 0, 0);
+          entityRoot = l.root;
+          currentEntity = l;
+          // Drive her with a "Zerble" position that's just out of sight so she
+          // wanders in place without entering aware/follow.
+          const fakeZerbleFar = new THREE.Vector3(200, 0, 200);
+          updateFn = (dt) => l.update(dt, fakeZerbleFar);
+          cam.target.set(0, 1.6, 0);
+          break;
+        }
+        case 'lurleen_zerble': {
+          const z = new Zerble();
+          z.position.set(-3, 0, 0);
+          z.root.position.set(-3, 0, 0);
+          scene.add(z.root);     // Zerble's constructor doesn't add to scene; do it here.
+          const l = new Lurleen(scene);   // Lurleen.constructor adds her root + heart group already.
+          l.position.set(3, 0, 0);
+          l.root.position.set(3, 0, 0);
+          // entityRoot is just a sentinel for clearEntity's old behavior — the
+          // aggressive scene cleanup handles both roots now.
+          entityRoot = z.root;
+          currentEntity = { z, l };
+          const mockInput = { throttle: 0, steer: 0, boost: false, isDown: () => false, consumePressed: () => false };
+          updateFn = (dt) => {
+            try { z.update(dt, mockInput); } catch (_) {}
+            l.update(dt, new THREE.Vector3(200, 0, 200));
+          };
+          cam.dist = 14;
+          cam.target.set(0, 1.4, 0);
+          applyCam();
+          break;
+        }
+        case 'hammock': {
+          const g = buildHammockStandalone(0, 0, Math.random);
+          scene.add(g);
+          entityRoot = g;
+          cam.target.set(0, 1.0, 0);
+          break;
+        }
+        case 'heart': {
+          const heart = new THREE.Mesh(
+            createHeartGeometry(),
+            new THREE.MeshStandardMaterial({
+              color: 0xff4d8a,
+              emissive: 0xff2266,
+              emissiveIntensity: 1.4,
+            }),
+          );
+          heart.scale.setScalar(8);     // big enough to inspect detail
+          heart.position.y = 2;
+          scene.add(heart);
+          entityRoot = heart;
+          updateFn = (dt) => { heart.rotation.y += dt; };
+          cam.target.set(0, 2, 0);
+          cam.dist = 6;
+          applyCam();
+          break;
+        }
+        case 'canoe': {
+          const g = new THREE.Group();
+          _buildCanoeMeshForSandbox(g, Math.random);
+          scene.add(g);
+          entityRoot = g;
+          cam.target.set(0, 0.7, 0);
+          cam.dist = 8;
+          applyCam();
+          break;
+        }
+        case 'lake': {
+          // Mini lake-water disc for testing material/edge appearance
+          const water = new THREE.Mesh(
+            new THREE.CircleGeometry(12, 48),
+            new THREE.MeshStandardMaterial({
+              color: 0x4d96d6, emissive: 0x1a3550, emissiveIntensity: 0.25,
+              roughness: 0.3, metalness: 0.05, transparent: true, opacity: 0.88,
+              flatShading: true,
+            }),
+          );
+          water.rotation.x = -Math.PI / 2;
+          water.position.y = 0.08;
+          scene.add(water);
+          entityRoot = water;
+          cam.target.set(0, 0, 0);
+          cam.dist = 18;
+          applyCam();
+          break;
+        }
+      }
+      info.textContent = `Loaded: ${name}`;
+    }
+
+    // URL param + selector wiring
+    const params = new URLSearchParams(location.search);
+    const initial = params.get('entity') || 'lurleen';
+    select.value = Array.from(select.options).some(o => o.value === initial) ? initial : 'lurleen';
+    loadEntity(select.value);
+
+    select.addEventListener('change', (e) => {
+      const v = e.target.value;
+      history.replaceState(null, '', `?entity=${v}`);
+      loadEntity(v);
+    });
+
+    document.getElementById('reset-cam').addEventListener('click', () => {
+      cam.yaw = -0.4; cam.pitch = 0.45; cam.dist = 10;
+      cam.target.set(0, 1.6, 0);
+      applyCam();
+    });
+
+    document.getElementById('snapshot').addEventListener('click', () => {
+      navigator.clipboard?.writeText(location.href);
+      info.textContent = 'URL copied to clipboard';
+      setTimeout(() => info.textContent = `Loaded: ${select.value}`, 1200);
+    });
+
+    // Render loop
+    const clock = new THREE.Clock();
+    function tick() {
+      requestAnimationFrame(tick);
+      const dt = Math.min(clock.getDelta(), 0.05);
+      if (updateFn) updateFn(dt);
+      renderer.render(scene, camera);
+    }
+    tick();
+  </script>
+</body>
+</html>

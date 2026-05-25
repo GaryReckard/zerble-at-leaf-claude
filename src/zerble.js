@@ -14,7 +14,7 @@ const WORLD_BOUND = 230;
 
 // --- Visual palette (matches the reference image) ---
 const COLOR_BODY = 0xe63b3b;
-const COLOR_ROOF = 0xe879b8;
+const COLOR_ROOF = 0xf2c14e;   // warm gold
 const COLOR_SEAT = 0x2563d6;
 const COLOR_FRAME = 0x2a1f3a;
 const COLOR_WHEEL = 0x1c1c20;
@@ -139,7 +139,7 @@ export class Zerble {
       this.root.add(p);
     }
 
-    // ----- Roof (pink) — shorter, covers only the front-seat area -----
+    // ----- Roof (gold) — shorter, covers only the front-seat area -----
     const roof = new THREE.Mesh(
       this._roundedBoxGeometry(3.4, 0.25, 2.4, 0.12),
       mat(COLOR_ROOF, { roughness: 0.5 })
@@ -282,14 +282,12 @@ export class Zerble {
       iris.position.z = -0.45;
       eye.add(iris);
 
-      // Pupil — pushed in FRONT of the iris so it actually shows.
-      // Pupil at z=-0.78 r=0.3 → front face z=-1.08, comfortably in front of
-      // iris front face (-0.85). The look-around animation in update() now
-      // oscillates around this base position by ±0.05 — kept entirely on the
-      // viewer side of the iris so the pupil never disappears into it.
-      // polygonOffset is belt-and-suspenders for any remaining z-fight.
+      // Pupil — smaller and pulled back so only ~1/3 of it pokes past the
+      // iris (user feedback: previously it looked oversized and 2/3 stuck out).
+      // Iris front face is at z=-0.85; pupil center at z=-0.70 with radius
+      // 0.24 puts the pupil's front face at z=-0.94, ~9cm past the iris.
       const pupil = new THREE.Mesh(
-        new THREE.SphereGeometry(0.3, 14, 12),
+        new THREE.SphereGeometry(0.24, 14, 12),
         new THREE.MeshStandardMaterial({
           color: 0x000000,
           roughness: 1,
@@ -298,7 +296,7 @@ export class Zerble {
           polygonOffsetUnits: -2,
         })
       );
-      pupil.position.z = -0.78;
+      pupil.position.z = -0.70;
       eye.add(pupil);
 
       // (highlight catch-light removed — was floating in front of the eye)
@@ -550,44 +548,42 @@ export class Zerble {
       tube.castShadow = true;
       this.root.add(tube);
 
-      // ----- Hair strands along the tube — thin tapered cones flowing outward + up -----
-      // Each strand emerges from a point on the tube surface, oriented mostly
-      // radially outward (perpendicular to the curve tangent), with a partial
-      // tilt toward the tangent direction so the hair "flows" along the
-      // handlebar curl. World-up bias adds the upward sweep the user wanted.
+      // ----- Hair strands along the tube — thin cones flowing ALONG the tube -----
+      // Previous version was too spikey (60% radial outward). Now the strands
+      // mostly follow the tangent direction (75%), with only a small radial
+      // component (20%) and slight up-bias (5%). Density doubled to 192 per
+      // side so the mustache reads as dense hair rather than sparse spikes.
       const _ref = new THREE.Vector3();
       const _side = new THREE.Vector3();
       const _normal = new THREE.Vector3();
       const _radial = new THREE.Vector3();
       const _dir = new THREE.Vector3();
       const _yAxis = new THREE.Vector3(0, 1, 0);
-      const strandCount = 96;
+      const strandCount = 192;
       for (let i = 0; i < strandCount; i++) {
         const u = (i + 0.5) / strandCount;
         const p = curve.getPoint(u);
         const tangent = curve.getTangent(u).normalize();
 
-        // Build a frame perpendicular to the tangent. Pick a reference vector
-        // not parallel to the tangent to avoid degenerate cross products.
         _ref.set(0, 1, 0);
         if (Math.abs(tangent.y) > 0.9) _ref.set(1, 0, 0);
         _side.crossVectors(tangent, _ref).normalize();
         _normal.crossVectors(_side, tangent).normalize();
 
-        // Random angle around the tube — golden-angle for even coverage.
         const theta = (i * 2.39996) % (Math.PI * 2);
         _radial.copy(_side).multiplyScalar(Math.cos(theta))
                .addScaledVector(_normal, Math.sin(theta));
 
-        // Strand direction: 60% radial outward (away from tube) + 35% tangent
-        // (flow along the curve) + slight world-up bias for "up the handlebar".
-        _dir.copy(_radial).multiplyScalar(0.60)
-            .addScaledVector(tangent, 0.35)
-            .addScaledVector(_yAxis, 0.15);
-        // Small jitter so strands aren't perfectly regimented.
-        _dir.x += (Math.random() - 0.5) * 0.10;
-        _dir.y += (Math.random() - 0.5) * 0.10;
-        _dir.z += (Math.random() - 0.5) * 0.10;
+        // Tangent-dominant: strands lie close to the tube, flowing along its
+        // length. The radial component is small (20%) so they don't spike
+        // outward.
+        _dir.copy(tangent).multiplyScalar(0.75)
+            .addScaledVector(_radial, 0.20)
+            .addScaledVector(_yAxis, 0.05);
+        // Smaller jitter so the cloud reads as combed hair.
+        _dir.x += (Math.random() - 0.5) * 0.06;
+        _dir.y += (Math.random() - 0.5) * 0.06;
+        _dir.z += (Math.random() - 0.5) * 0.06;
         _dir.normalize();
 
         const useShort = i % 3 === 0;
@@ -595,13 +591,13 @@ export class Zerble {
           useShort ? strandGeoShort : strandGeoLong,
           i % 2 === 0 ? fuzzMatA : fuzzMatB,
         );
-        // Cone's +y axis (post-translate, base at origin) → align with _dir.
         strand.quaternion.setFromUnitVectors(_yAxis, _dir);
-        // Anchor strand base at the point on the curve, slightly recessed into
-        // the tube so the base isn't visible.
+        // Anchor closer to the tube surface (was 0.7, now 0.55) so strands
+        // appear to emerge from within the hair mass rather than floating in
+        // space around the tube.
         const tubeR = 0.22;
         strand.position.copy(p)
-              .addScaledVector(_radial, tubeR * 0.7);
+              .addScaledVector(_radial, tubeR * 0.55);
         strand.castShadow = true;
         tube.add(strand);
       }
@@ -696,13 +692,12 @@ export class Zerble {
     }
 
     // ----- Animate eyes (idle wobble + look ahead) -----
-    // Pupil base z = -0.78 keeps the pupil's front face clearly in front of
-    // the iris (front face at -0.85). The ±0.05 wobble stays well within
-    // that margin, so the pupil never recedes into the iris.
+    // Smaller pupil oscillation (±0.02) keeps the pupil cleanly in front of
+    // the iris throughout the cycle.
     const t = performance.now() * 0.001;
     for (const eye of this.eyes) {
       eye.root.position.y = eye.basePos.y + Math.sin(t * 1.5 + eye.basePos.x) * 0.05;
-      eye.pupil.position.z = -0.78 + Math.sin(t * 0.7) * 0.05;
+      eye.pupil.position.z = -0.70 + Math.sin(t * 0.7) * 0.02;
       eye.pupil.position.x = Math.sin(t * 0.4) * 0.06;
     }
 

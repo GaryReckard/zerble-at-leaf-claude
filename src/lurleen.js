@@ -12,14 +12,50 @@
 import * as THREE from 'three';
 import { registry } from './registry.js';
 
+// Heart shape — extruded 2D heart using THREE.Shape. Centered at origin.
+// Used for Lurleen's heart particles. Exported so the sandbox can preview.
+export function createHeartGeometry() {
+  const shape = new THREE.Shape();
+  // Standard three.js heart construction. Coordinates are pre-centered so the
+  // resulting geometry has its visual center at (0, 0).
+  const x = -0.5;
+  const y = -0.95;
+  shape.moveTo(x + 0.5, y + 0.5);
+  shape.bezierCurveTo(x + 0.5, y + 0.5, x + 0.4, y, x, y);
+  shape.bezierCurveTo(x - 0.6, y, x - 0.6, y + 0.7, x - 0.6, y + 0.7);
+  shape.bezierCurveTo(x - 0.6, y + 1.1, x - 0.3, y + 1.54, x + 0.5, y + 1.9);
+  shape.bezierCurveTo(x + 1.2, y + 1.54, x + 1.6, y + 1.1, x + 1.6, y + 0.7);
+  shape.bezierCurveTo(x + 1.6, y + 0.7, x + 1.6, y, x + 1, y);
+  shape.bezierCurveTo(x + 0.7, y, x + 0.5, y + 0.5, x + 0.5, y + 0.5);
+
+  const geo = new THREE.ExtrudeGeometry(shape, {
+    depth: 0.18,
+    bevelEnabled: true,
+    bevelSegments: 2,
+    bevelSize: 0.05,
+    bevelThickness: 0.05,
+    curveSegments: 8,
+  });
+  geo.center();
+  // Heart is built "right-side up" but ExtrudeGeometry leaves it oriented
+  // with the +Z face forward. Flip vertically so the point hangs DOWN like
+  // a heart should when seen face-on.
+  geo.rotateZ(Math.PI);
+  geo.scale(0.18, 0.18, 0.18);   // tune to roughly match previous sphere size
+  return geo;
+}
+
+// Shared heart geometry — cheap to clone refs across particles.
+const _heartGeo = createHeartGeometry();
+
 const SPAWN_POS = new THREE.Vector3(240, 0, 260);   // ~360m from origin, 3 chunks NE
 const HOME_RADIUS = 55;
 const AWARE_RANGE = 28;
 const FORGET_RANGE = AWARE_RANGE * 3;
 const FOLLOW_DIST = 11;
-const SPEED_MAX = 5.5;
-const ACCEL = 8.0;
-const TURN_RATE = 2.4;
+const SPEED_MAX = 16.0;    // close to Zerble's 18 — fast enough to keep up
+const ACCEL = 18.0;
+const TURN_RATE = 3.0;
 const HEART_LIFETIME = 2.4;
 const HEART_INTERVAL_AWARE = 0.18;
 const HEART_INTERVAL_FOLLOW = 0.55;
@@ -122,137 +158,253 @@ export class Lurleen {
     }
   }
 
-  // ---------- Lips — pink puffy pillow with a horizontal seam ----------
+  // ---------- Lips — plump pink pillow with a horizontal seam ----------
+  // Taller, fuller, more prominent than v1. Reference: large fabric/plush
+  // lips stretched across the windshield front.
 
   _buildLips() {
     const lipMat = new THREE.MeshStandardMaterial({
-      color: 0xff3a8c,
-      emissive: 0xff1a6e,
+      color: 0xff3580,
+      emissive: 0xff1466,
       emissiveIntensity: 0.30,
-      roughness: 0.4,
+      roughness: 0.5,
     });
 
     const lipGroup = new THREE.Group();
-    const fill = new THREE.Mesh(new THREE.SphereGeometry(0.5, 18, 10), lipMat);
-    fill.scale.set(1.55, 0.42, 0.55);
-    fill.castShadow = true;
-    lipGroup.add(fill);
+    // Upper lobe + lower lobe stacked vertically gives the cupid's-bow shape.
+    const upper = new THREE.Mesh(new THREE.SphereGeometry(0.45, 22, 12), lipMat);
+    upper.scale.set(1.7, 0.55, 0.7);
+    upper.position.y = 0.18;
+    upper.castShadow = true;
+    lipGroup.add(upper);
 
-    // Horizontal seam separating upper/lower lip
+    const lower = new THREE.Mesh(new THREE.SphereGeometry(0.45, 22, 12), lipMat);
+    lower.scale.set(1.85, 0.65, 0.75);   // lower lip a bit bigger
+    lower.position.y = -0.20;
+    lower.castShadow = true;
+    lipGroup.add(lower);
+
+    // Horizontal seam in the middle
     const seam = new THREE.Mesh(
-      new THREE.BoxGeometry(1.4, 0.04, 0.06),
-      new THREE.MeshStandardMaterial({ color: 0x991133, roughness: 0.9 }),
+      new THREE.BoxGeometry(1.55, 0.04, 0.06),
+      new THREE.MeshStandardMaterial({ color: 0x88112c, roughness: 0.9 }),
     );
-    seam.position.set(0, 0, -0.32);
+    seam.position.set(0, 0, -0.45);
     lipGroup.add(seam);
 
-    lipGroup.position.set(0, 1.05, -1.55);
+    lipGroup.position.set(0, 1.10, -1.65);
     this.root.add(lipGroup);
   }
 
-  // ---------- Eyes — googly with eyelashes ----------
+  // ---------- Eyes — flat googly stickers on the windshield ----------
+  // Reference photo: two large flat circles stuck on the windshield (white
+  // outer ring + freely-rolling black pupil disc inside). NOT 3D globes —
+  // they read as eye stickers, not real eyes. The pupil wobbles inside the
+  // sclera disc for the classic googly-eye effect.
 
   _buildEyes() {
+    const scleraMat = new THREE.MeshStandardMaterial({
+      color: 0xffffff,
+      emissive: 0xffffff,
+      emissiveIntensity: 0.10,
+      roughness: 0.4,
+    });
+    const ringMat = new THREE.MeshStandardMaterial({
+      color: 0x111111,
+      roughness: 0.7,
+    });
+    const pupilMat = new THREE.MeshStandardMaterial({
+      color: 0x080808,
+      roughness: 0.9,
+      polygonOffset: true,
+      polygonOffsetFactor: -2,
+      polygonOffsetUnits: -2,
+    });
+    const lashMat = new THREE.MeshStandardMaterial({ color: 0x111111, roughness: 0.9 });
+
     for (const ex of [-0.78, 0.78]) {
       const eye = new THREE.Group();
-      eye.position.set(ex, 2.20, -1.50);
+      eye.position.set(ex, 2.05, -1.62);
+      // Eye faces forward (cart-local -Z). CircleGeometry's normal is +Z by
+      // default, so flip the eye group 180° around Y.
+      eye.rotation.y = Math.PI;
 
+      // White flat disc — the "sclera sticker"
       const sclera = new THREE.Mesh(
-        new THREE.IcosahedronGeometry(0.68, 2),
-        new THREE.MeshStandardMaterial({
-          color: 0xffffff,
-          emissive: 0xfff0e0,
-          emissiveIntensity: 0.45,
-          roughness: 0.25,
-        }),
+        new THREE.CircleGeometry(0.50, 32),
+        scleraMat,
       );
       eye.add(sclera);
 
-      // Purple iris for distinction from Zerble's blue.
-      const iris = new THREE.Mesh(
-        new THREE.SphereGeometry(0.40, 16, 12),
-        new THREE.MeshStandardMaterial({
-          color: 0x9966ff,
-          emissive: 0x6633cc,
-          emissiveIntensity: 0.25,
-          roughness: 0.3,
-        }),
+      // Thin dark outline ring around the sclera — sells the sticker look
+      const ring = new THREE.Mesh(
+        new THREE.RingGeometry(0.48, 0.52, 32),
+        ringMat,
       );
-      iris.position.z = -0.42;
-      eye.add(iris);
+      ring.position.z = 0.005;
+      eye.add(ring);
 
+      // Pupil — flat black disc that wobbles around inside the sclera. Held
+      // in its own group so we can pan it within the sclera circle.
+      const pupilGroup = new THREE.Group();
       const pupil = new THREE.Mesh(
-        new THREE.SphereGeometry(0.30, 14, 12),
+        new THREE.CircleGeometry(0.20, 28),
+        pupilMat,
+      );
+      pupil.position.z = 0.02;     // sit on top of sclera
+      pupilGroup.add(pupil);
+      // Subtle highlight (small white circle on the pupil's upper-left)
+      const highlight = new THREE.Mesh(
+        new THREE.CircleGeometry(0.05, 16),
         new THREE.MeshStandardMaterial({
-          color: 0x000000,
-          roughness: 1,
-          polygonOffset: true,
-          polygonOffsetFactor: -2,
-          polygonOffsetUnits: -2,
+          color: 0xffffff, emissive: 0xffffff, emissiveIntensity: 0.6, roughness: 0.2,
+          polygonOffset: true, polygonOffsetFactor: -3, polygonOffsetUnits: -3,
         }),
       );
-      pupil.position.z = -0.78;
-      eye.add(pupil);
+      highlight.position.set(-0.06, 0.07, 0.025);
+      pupilGroup.add(highlight);
+      eye.add(pupilGroup);
 
-      // Eyelashes — small black cones fanned above the eye
-      const lashMat = new THREE.MeshStandardMaterial({ color: 0x222222, roughness: 0.9 });
-      for (let k = -2; k <= 2; k++) {
+      // Eyelashes — three small black cones along the top of the sclera,
+      // fanned outward. Cone default is +Y axis; we set rotation.x to point
+      // up-and-out from the eye.
+      for (let k = -1; k <= 1; k++) {
         const lash = new THREE.Mesh(
           new THREE.ConeGeometry(0.035, 0.30, 5),
           lashMat,
         );
-        lash.position.set(k * 0.16, 0.58, -0.40);
-        // Tilt outward (radial from eye top) and slightly forward
-        lash.rotation.x = -0.45;
+        // Position above the sclera; CircleGeometry is in XY plane.
+        lash.position.set(k * 0.20, 0.46, 0.005);
+        // Tilt upward and slightly outward from center
+        lash.rotation.x = -0.25;
         lash.rotation.z = -k * 0.18;
         eye.add(lash);
       }
 
       this.root.add(eye);
-      this.eyes.push({ root: eye, pupil, iris, basePos: eye.position.clone() });
+      this.eyes.push({ root: eye, pupil: pupilGroup, basePos: eye.position.clone() });
     }
   }
 
-  // ---------- Hair — raffia strands + a few flowers ----------
+  // ---------- Hair — raffia strands wrapping the whole roof + flower crown ----------
+  // Reference photo: long fringe of raffia hanging down all four sides of the
+  // roof, gathered into bunches/parts in a few places, with a row of small
+  // bright flowers along the top edge. Builds the perimeter as four runs (front,
+  // back, left, right), each laying strands along its edge.
 
   _buildHair() {
     const goldHair = new THREE.MeshStandardMaterial({ color: 0xd8b878, roughness: 0.95, flatShading: true });
     const brownHair = new THREE.MeshStandardMaterial({ color: 0xa07840, roughness: 0.95, flatShading: true });
+    const lightHair = new THREE.MeshStandardMaterial({ color: 0xe6c98c, roughness: 0.95, flatShading: true });
 
-    // Drape strands over the front edge of the roof, hanging down.
-    const strandCount = 90;
-    for (let i = 0; i < strandCount; i++) {
-      const t = i / (strandCount - 1);
-      const xLocal = -1.0 + t * 2.0 + (Math.random() - 0.5) * 0.05;
-      const zLocal = 0.35 + (Math.random() - 0.5) * 0.25;     // along the roof front edge
-      const len = 0.55 + Math.random() * 0.35;
-      const cone = new THREE.ConeGeometry(0.022, len, 5, 1);
-      cone.translate(0, -len / 2, 0);                          // base at origin, tip hangs down
+    // Roof outline (matches `roof` geometry built in _buildBody — 2.1 wide, 1.9 deep, centered at z=-0.5)
+    const halfW = 1.05;
+    const halfD = 0.95;
+    const roofZ = -0.5;
+    const hairY = 1.94;     // sits flush against the roof bottom edge
 
-      const strand = new THREE.Mesh(cone, i % 2 === 0 ? goldHair : brownHair);
-      strand.position.set(xLocal, 1.96, zLocal);
-      // Slight outward fan + jitter so strands aren't perfectly vertical
-      strand.rotation.x = -0.15 + (Math.random() - 0.5) * 0.5;
-      strand.rotation.z = (Math.random() - 0.5) * 0.45;
+    // Bunches: at these normalized angles around the roof, density is x2 and
+    // strands are longer. Creates the gathered "parts" the user asked about.
+    const bunchCenters = [0.0, 0.25, 0.50, 0.75];   // front, right, back, left midpoints
+    function bunchBoost(u) {
+      let m = 1.0;
+      for (const c of bunchCenters) {
+        const d = Math.min(Math.abs(u - c), 1 - Math.abs(u - c));
+        if (d < 0.06) m += (1 - d / 0.06) * 1.6;     // up to ~2.6x at center
+      }
+      return m;
+    }
+
+    // Place strands along the rectangular perimeter — parameterized by u in [0,1)
+    // walking clockwise from the front-center.
+    function perimeterPoint(u) {
+      // 4 sides, each takes 0.25 of u
+      const side = Math.floor(u * 4);
+      const t = (u * 4) - side;
+      switch (side) {
+        case 0: // front edge (-halfW, halfD)  →  (+halfW, halfD)
+          return { x: -halfW + t * 2 * halfW, z: roofZ + halfD,
+                   tangentX: 1, tangentZ: 0 };
+        case 1: // right edge (+halfW, halfD)  →  (+halfW, -halfD)
+          return { x: halfW, z: roofZ + halfD - t * 2 * halfD,
+                   tangentX: 0, tangentZ: -1 };
+        case 2: // back edge (+halfW, -halfD) →  (-halfW, -halfD)
+          return { x: halfW - t * 2 * halfW, z: roofZ - halfD,
+                   tangentX: -1, tangentZ: 0 };
+        case 3: // left edge (-halfW, -halfD) →  (-halfW, halfD)
+          return { x: -halfW, z: roofZ - halfD + t * 2 * halfD,
+                   tangentX: 0, tangentZ: 1 };
+      }
+    }
+
+    const baseCount = 220;       // base density walking the perimeter
+    const samples = baseCount * 2;  // oversampled, density tapers via bunchBoost
+    for (let i = 0; i < samples; i++) {
+      const u = i / samples;
+      const boost = bunchBoost(u);
+      // Skip strands probabilistically based on boost — gives sparse base + dense bunches
+      if (Math.random() > 0.45 * boost) continue;
+
+      const p = perimeterPoint(u);
+      // Jitter perpendicular to the edge tangent so strands fan out slightly
+      const perpX = p.tangentZ;
+      const perpZ = -p.tangentX;
+      const jitter = (Math.random() - 0.5) * 0.08;
+      const x = p.x + perpX * jitter + (Math.random() - 0.5) * 0.03;
+      const z = p.z + perpZ * jitter + (Math.random() - 0.5) * 0.03;
+      // Bunches have longer strands
+      const len = (0.45 + Math.random() * 0.40) * (1 + (boost - 1) * 0.3);
+
+      const cone = new THREE.ConeGeometry(0.020, len, 5, 1);
+      cone.translate(0, -len / 2, 0);
+      const matRoll = Math.random();
+      const mat = matRoll < 0.4 ? goldHair : matRoll < 0.75 ? brownHair : lightHair;
+      const strand = new THREE.Mesh(cone, mat);
+      strand.position.set(x, hairY, z);
+      // Drape outward over the roof edge: tilt away from the roof center in
+      // the perpendicular direction.
+      const outX = (x - 0) * 0.3;     // tilt outward in X based on position
+      const outZ = (z - roofZ) * 0.3;
+      strand.rotation.x = outZ * 0.6 + (Math.random() - 0.5) * 0.2;
+      strand.rotation.z = -outX * 0.6 + (Math.random() - 0.5) * 0.2;
       strand.castShadow = true;
       this.root.add(strand);
     }
 
-    // Flower crown along the top of the roof
-    const flowerColors = [0xff4d8a, 0xff9933, 0x9966ff, 0x66ccff, 0xffee33, 0xff6f6f];
-    for (let i = 0; i < 8; i++) {
-      const x = -0.9 + (i / 7) * 1.8;
+    // Flower crown along the top of the roof, with a couple at each bunch.
+    const flowerColors = [0xff4d8a, 0xff9933, 0x9966ff, 0x66ccff, 0xffee33, 0xff6f6f, 0x66ff99];
+    const flowerCount = 18;
+    for (let i = 0; i < flowerCount; i++) {
+      const u = i / flowerCount;
+      const p = perimeterPoint(u);
       const flower = new THREE.Mesh(
-        new THREE.IcosahedronGeometry(0.10, 0),
+        new THREE.IcosahedronGeometry(0.10 + Math.random() * 0.03, 0),
         new THREE.MeshStandardMaterial({
           color: flowerColors[i % flowerColors.length],
           emissive: flowerColors[i % flowerColors.length],
-          emissiveIntensity: 0.45,
+          emissiveIntensity: 0.5,
           roughness: 0.4,
         }),
       );
-      flower.position.set(x, 2.10, -0.5 + (i % 2) * 0.3);
+      // Sit slightly inside the perimeter on top of the roof
+      const inset = 0.08;
+      const cx = p.x - p.tangentZ * inset * 0;      // edge stays
+      const cz = p.z + p.tangentX * inset * 0;
+      flower.position.set(cx, 2.10, cz);
       this.root.add(flower);
+    }
+
+    // A few "bows" — small colored ribbons gathered at each bunch as visual
+    // accents (matches the bows in the reference photo).
+    for (const u of bunchCenters) {
+      const p = perimeterPoint(u);
+      const bow = new THREE.Mesh(
+        new THREE.IcosahedronGeometry(0.13, 0),
+        new THREE.MeshStandardMaterial({ color: 0x66d9ff, roughness: 0.5, flatShading: true }),
+      );
+      bow.scale.set(1.4, 1.0, 0.6);
+      bow.position.set(p.x, 1.85, p.z);
+      this.root.add(bow);
     }
   }
 
@@ -331,12 +483,16 @@ export class Lurleen {
       w.mesh.position.y = w.baseY + Math.sin(performance.now() * 0.01 + w.mesh.position.x) * 0.02;
     }
 
-    // Eye wobble
+    // Eye wobble — the flat pupil disc rolls around within the sclera circle,
+    // staying clear of the rim. The wobble pattern is the same kind of small-
+    // amplitude lissajous that real googly eyes do when shaken.
     const t = performance.now() * 0.001;
     for (const eye of this.eyes) {
-      eye.root.position.y = eye.basePos.y + Math.sin(t * 1.4 + eye.basePos.x) * 0.05;
-      eye.pupil.position.z = -0.78 + Math.sin(t * 0.9) * 0.05;
-      eye.pupil.position.x = Math.sin(t * 0.5) * 0.06;
+      eye.root.position.y = eye.basePos.y + Math.sin(t * 1.4 + eye.basePos.x) * 0.04;
+      // Pupil moves in a circle within the sclera. Sclera radius 0.5, pupil
+      // radius 0.2, so max safe wobble = 0.5 - 0.2 - 0.04 = 0.26.
+      eye.pupil.position.x = Math.sin(t * 0.9 + eye.basePos.x * 3) * 0.18;
+      eye.pupil.position.y = Math.cos(t * 1.3 + eye.basePos.x * 2) * 0.14;
     }
 
     this._updateHearts(dt);
@@ -426,8 +582,9 @@ export class Lurleen {
   }
 
   _spawnHeart() {
-    // Simple "heart" — pink emissive sphere. Reading as a heart at a glance is
-    // enough at this scale; the cluster + upward float carries the meaning.
+    // Heart-shaped extruded geometry, pink emissive material. Particles
+    // billboard toward the camera each frame so the heart shape is always
+    // readable.
     const mat = new THREE.MeshStandardMaterial({
       color: 0xff4d8a,
       emissive: 0xff2266,
@@ -435,7 +592,7 @@ export class Lurleen {
       transparent: true,
       opacity: 1,
     });
-    const heart = new THREE.Mesh(new THREE.IcosahedronGeometry(0.18, 0), mat);
+    const heart = new THREE.Mesh(_heartGeo, mat);
     heart.position.set(
       this.position.x + (Math.random() - 0.5) * 1.4,
       2.4 + Math.random() * 0.4,
@@ -446,18 +603,22 @@ export class Lurleen {
       vy: 1.4 + Math.random() * 0.7,
       vx: (Math.random() - 0.5) * 0.6,
       vz: (Math.random() - 0.5) * 0.6,
+      spinSign: Math.random() < 0.5 ? -1 : 1,
     };
     this._heartGroup.add(heart);
     this._activeHearts.push(heart);
   }
 
   _updateHearts(dt) {
+    // Cache camera world position for billboarding (uses the live three.js
+    // camera so hearts always face the player).
+    const cam = window.__game?.camera;
     for (let i = this._activeHearts.length - 1; i >= 0; i--) {
       const h = this._activeHearts[i];
       h.userData.age += dt;
       if (h.userData.age >= HEART_LIFETIME) {
         this._heartGroup.remove(h);
-        h.geometry.dispose();
+        // Heart geometry is shared; only dispose the material.
         h.material.dispose();
         this._activeHearts.splice(i, 1);
         continue;
@@ -465,11 +626,16 @@ export class Lurleen {
       h.position.x += h.userData.vx * dt;
       h.position.y += h.userData.vy * dt;
       h.position.z += h.userData.vz * dt;
-      h.userData.vy *= Math.pow(0.5, dt * 0.4);    // gentle slowdown
+      h.userData.vy *= Math.pow(0.5, dt * 0.4);
       const fade = 1 - h.userData.age / HEART_LIFETIME;
       h.material.opacity = fade;
       h.scale.setScalar(1 + h.userData.age * 0.4);
-      h.rotation.y += dt * 2.0;
+      // Billboard toward the camera, then add a gentle rocking spin so it
+      // doesn't look perfectly static.
+      if (cam) {
+        h.lookAt(cam.position);
+      }
+      h.rotation.z += dt * 1.5 * h.userData.spinSign;
     }
   }
 }

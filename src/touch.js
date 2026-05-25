@@ -102,6 +102,14 @@ export const Touch = {
     canvas.addEventListener('touchmove', onCanvasMove, { passive: false });
     canvas.addEventListener('touchend', onCanvasEnd, { passive: false });
     canvas.addEventListener('touchcancel', onCanvasEnd, { passive: false });
+
+    // ----- Mouse drag for desktop — same camera deltas as touch -----
+    // Pointer events filtered to mouse (touches already handled above).
+    canvas.addEventListener('pointerdown', onMouseDown);
+    canvas.addEventListener('pointermove', onMouseMove);
+    canvas.addEventListener('pointerup', onMouseUp);
+    canvas.addEventListener('pointercancel', onMouseUp);
+    canvas.style.cursor = 'grab';
   },
 
   // Consumed each frame by Input.consumePressed('SPACE').
@@ -279,5 +287,41 @@ function onCanvasEnd(e) {
       dragTouchId = null;
       return;
     }
+  }
+}
+
+// ---------- Mouse drag (desktop) ----------
+
+let mouseDragging = false;
+let mouseLastX = 0;
+let mouseLastY = 0;
+
+function onMouseDown(e) {
+  if (e.pointerType !== 'mouse') return;
+  // Right-click and middle-click are reserved.
+  if (e.button !== 0) return;
+  const canvas = e.currentTarget;
+  mouseDragging = true;
+  mouseLastX = e.clientX;
+  mouseLastY = e.clientY;
+  canvas.setPointerCapture(e.pointerId);
+  canvas.style.cursor = 'grabbing';
+}
+
+function onMouseMove(e) {
+  if (e.pointerType !== 'mouse' || !mouseDragging) return;
+  const dx = e.clientX - mouseLastX;
+  const dy = e.clientY - mouseLastY;
+  mouseLastX = e.clientX;
+  mouseLastY = e.clientY;
+  state.camYawDelta += -dx * DRAG_YAW_SCALE;
+  state.camPitchDelta += -dy * DRAG_PITCH_SCALE;
+}
+
+function onMouseUp(e) {
+  if (e.pointerType !== 'mouse') return;
+  if (mouseDragging) {
+    mouseDragging = false;
+    e.currentTarget.style.cursor = 'grab';
   }
 }

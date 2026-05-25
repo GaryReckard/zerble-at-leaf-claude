@@ -28,6 +28,7 @@ import {
 import { installDebug, shouldRunFrame, isGod, npcsFrozen } from './debug.js';
 import { PERF } from './perf.js';
 import { Trip } from './trip.js';
+import { Analytics } from './analytics.js';
 
 const canvas = document.getElementById('game');
 
@@ -146,6 +147,7 @@ HUD.showTitle();
 HUD.onStart(() => {
   HUD.hideTitle();
   running = true;
+  Analytics.gameStart();
   // Sound.init() MUST run synchronously inside the tap handler on iOS — any
   // await/setTimeout boundary loses the "user gesture" status and the
   // AudioContext starts suspended (silent).
@@ -199,12 +201,14 @@ function tickBody(dt) {
       if (bellHonk)      Sound.playBicycleBell();
       else if (hornHonk) Sound.playClownHorn();
       else               Sound.playHonk();   // SPACE → random
+      Analytics.firstHonk();
     }
 
     // V toggles first-person view from Zerble's eyes.
     if (Input.consumePressed('V')) {
       chaseCam.toggleMode();
       HUD.toast(chaseCam.mode === 'first' ? 'First-person view (V to exit)' : 'Chase view', 1500);
+      Analytics.viewToggle(chaseCam.mode);
     }
 
     bubbles.update(dt, zerble, nightness);
@@ -213,6 +217,8 @@ function tickBody(dt) {
       score += n;
       HUD.setSmiles(score);
       HUD.saveBest(score);
+      Analytics.smileScore(score);
+      Analytics.personalBest(score);
     });
 
     puppets.update(dt);
@@ -226,6 +232,7 @@ function tickBody(dt) {
     if (!lurleenMet && lurleen.state === 'aware') {
       lurleenMet = true;
       HUD.toast('You found Lurleen! 💗', 3500);
+      Analytics.lurleenFound();
     }
     const nowS = performance.now() * 0.001;
     updateStagePerformers(nowS);
@@ -273,6 +280,7 @@ function tickBody(dt) {
         HUD.flashHit();
         HUD.toast(toastForKind(hit.kind), 1400);
         Sound.playCollision(hit.kind);
+        Analytics.collision(hit.kind);
       } else if (hit && hit.notify) {
         // Non-damaging but worth surfacing — e.g. Zerble bumps into Lurleen.
         HUD.toast(toastForKind(hit.kind), 1400);

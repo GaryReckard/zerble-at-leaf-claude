@@ -19,6 +19,7 @@
 //   Trip.update(dt, zerble.position, Math.abs(zerble.speed), wookPositions);
 
 import { ShaderPass } from 'three/addons/postprocessing/ShaderPass.js';
+import { Analytics } from './analytics.js';
 
 // ---------- GLSL ----------
 
@@ -203,12 +204,14 @@ export const Trip = {
   trigger() {
     this.dynamic = false;
     this._enterFadingIn();
+    Analytics.tripStart('manual_static');
   },
 
   // Manual trigger from the Dynamic Trip button — uses scripted per-effect timelines
   triggerDynamic() {
     this.dynamic = true;
     this._enterFadingIn();
+    Analytics.tripStart('manual_dynamic');
   },
 
   _enterFadingIn() {
@@ -371,6 +374,7 @@ export const Trip = {
             // Wook-dose: always uses Dynamic mode.
             this.dynamic = true;
             this._enterFadingIn();
+            Analytics.tripStart('wook');
           }
         } else {
           this._proximityTimer = 0;

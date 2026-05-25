@@ -11,6 +11,7 @@
 
 import * as THREE from 'three';
 import { Sound } from './sound.js';
+import { Analytics } from './analytics.js';
 
 const PANEL_ID = 'debug-panel';
 const TRIP_PANEL_ID = 'trip-panel';
@@ -79,7 +80,11 @@ function api() {
     },
     pause(on = true) { state.paused = !!on; logToast(`paused: ${state.paused}`); },
     step(n = 1) { state.pendingSteps += Math.max(1, n | 0); },
-    toggle() { state.visible = !state.visible; state.panelEl.style.display = state.visible ? 'block' : 'none'; },
+    toggle() {
+      state.visible = !state.visible;
+      state.panelEl.style.display = state.visible ? 'block' : 'none';
+      Analytics.debugMenuToggle(state.visible);
+    },
     dropSmile(n = 10) {
       for (let i = 0; i < n; i++) {
         const a = Math.random() * Math.PI * 2;
@@ -276,6 +281,7 @@ function toggleTripPanel() {
     state.tripPanelEl.style.display = state.tripVisible ? 'block' : 'none';
   }
   if (state.tripVisible) updateTripPanel();
+  Analytics.tripMenuToggle(state.tripVisible);
 }
 
 function sampleFPS(dt) {

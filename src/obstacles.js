@@ -400,6 +400,28 @@ export class Wooks {
     const DETECTION_RANGE = 25;     // wooks notice a stopped Zerble within this
     const APPROACH_SPEED  = 1.8;    // m/s when walking up to the driver
     const REST_SPEED      = 0.5;    // |zerble.speed| below this counts as stopped
+    const FAR_THRESHOLD2  = 300 * 300;  // recycle a wook whose anchor is this far
+    const RECYCLE_MIN     = 60;     // re-anchor within this minimum distance
+    const RECYCLE_MAX     = 140;    // ...and this maximum, around Zerble
+
+    // Recycle wooks whose anchor drifted too far from Zerble — without this,
+    // the 7 wooks spawned at world origin stay at radius 40-120m forever, so
+    // anyone who drives 800m away never encounters one.
+    if (zerblePos) {
+      for (let i = 0; i < this.wooks.length; i++) {
+        const w = this.wooks[i];
+        const a = w.userData.anchor;
+        const adx = a.x - zerblePos.x;
+        const adz = a.z - zerblePos.z;
+        if (adx * adx + adz * adz > FAR_THRESHOLD2) {
+          const ang = Math.random() * TAU;
+          const dist = RECYCLE_MIN + Math.random() * (RECYCLE_MAX - RECYCLE_MIN);
+          a.set(zerblePos.x + Math.cos(ang) * dist, 0, zerblePos.z + Math.sin(ang) * dist);
+          // Re-randomize so all recycled wooks don't lock to the same orbit phase
+          w.userData.phase = Math.random() * TAU;
+        }
+      }
+    }
 
     // Pick the wook that should approach: closest to Zerble, if Zerble is at rest
     // and within detection range. -1 means no one is approaching this frame.

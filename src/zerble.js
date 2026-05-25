@@ -784,6 +784,8 @@ export class Zerble {
     const throttle = input.throttle;
     const steer = input.steer;
     const wantBoost = input.boost && throttle > 0;
+    // Expose so the engine sound (and anything else that cares) can react.
+    this.isBoosting = wantBoost;
 
     const maxFwd = MAX_SPEED * (wantBoost ? BOOST_MULT : 1);
     const maxRev = -REVERSE_MAX;

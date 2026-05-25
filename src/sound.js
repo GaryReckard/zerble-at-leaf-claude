@@ -149,9 +149,11 @@ export const Sound = {
     }
   },
 
-  setEngineSpeed(speed) {
+  // boost: 0..1 — when > 0, the engine revs higher and growls louder, like
+  // the driver dropped a gear. Wired from Zerble's `wantBoost` state.
+  setEngineSpeed(speed, boost = 0) {
     if (!engineNodes) return;
-    engineNodes.update(Math.abs(speed));
+    engineNodes.update(Math.abs(speed), boost);
   },
 
   playCollision(kind) {
@@ -258,13 +260,23 @@ function createEngine(ctx, dest) {
   let nextMisfireCheck = ctx.currentTime + 2 + Math.random() * 2;
   let warblePhase = 0;
 
+  // Boost smoothing — sudden 0→1 jumps in input.boost would make the engine
+  // pitch jump audibly. Glide between current and target boost.
+  let boostSmoothed = 0;
+
   return {
-    update(absSpeed) {
+    update(absSpeed, boost = 0) {
       const now = ctx.currentTime;
       const dt = Math.min(0.1, now - lastUpdate);
       lastUpdate = now;
 
-      const t = Math.min(1, absSpeed / 18);
+      // Glide boost toward target so engagement/disengagement isn't a step.
+      boostSmoothed += (boost - boostSmoothed) * Math.min(1, dt * 6);
+
+      // Boost raises the effective "throttle" so the engine reads as revving
+      // harder even when Zerble is at max speed cap. Adds up to +30% to t.
+      const baseT = Math.min(1, absSpeed / 18);
+      const t = Math.min(1, baseT + boostSmoothed * 0.3);
 
       // Chug speeds up with throttle. Irregular rhythm: slight noise on the rate.
       const lfoHz = 4 + t * 14 + Math.sin(lfoPhase * 0.31) * 1.2;
@@ -283,15 +295,18 @@ function createEngine(ctx, dest) {
       const misfireMul = now < misfireUntil ? 0.2 : 1;
 
       // Volume ramps with speed * chug * misfire. At 0 speed → 0 volume → silent.
-      const targetVol = t * 0.24 * chug * misfireMul;
+      // Boost also adds a flat +20% gain so the engine sounds "louder", not just
+      // higher-pitched, when the player floors it.
+      const targetVol = t * 0.24 * chug * misfireMul * (1 + boostSmoothed * 0.2);
       engineGain.gain.setTargetAtTime(targetVol, now, 0.04);
 
       // Pitch climbs with speed + slow warble for the wheezy old-cart wobble.
+      // Boost shifts the whole pitch range up so the engine wails when revving.
       warblePhase += dt * (1.8 + t * 1.5);
       const warble = Math.sin(warblePhase) * (0.04 + t * 0.05); // ±5-9 % at high revs
 
-      const baseFreq = 48;
-      const maxFreq = 145;
+      const baseFreq = 48 + boostSmoothed * 10;
+      const maxFreq = 145 + boostSmoothed * 40;
       const f = (baseFreq + (maxFreq - baseFreq) * t) * (1 + warble);
       osc1.frequency.setTargetAtTime(f, now, 0.07);
       osc2.frequency.setTargetAtTime(f * 1.5, now, 0.07);

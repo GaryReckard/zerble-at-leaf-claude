@@ -185,7 +185,7 @@ function tickBody(dt) {
     const tod = getTimeOfDay();
     const nightness = tod ? tod.nightness : 0;
     zerble.update(dt, Input, nightness);
-    Sound.setEngineSpeed(zerble.speed);
+    Sound.setEngineSpeed(zerble.speed, zerble.isBoosting ? 1 : 0);
 
     if (Input.consumePressed('SPACE') && zerble.canHonk()) {
       zerble.honk();

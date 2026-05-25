@@ -109,12 +109,28 @@ export class Crowd {
     const headGeo = new THREE.IcosahedronGeometry(0.26, 1);
     headGeo.translate(0, 1.65, 0);
 
+    // ---- Eyes: two small spheres baked at NPC-local (±0.08, 1.68, -0.22) ----
+    const eyeL = new THREE.SphereGeometry(0.028, 6, 6);
+    eyeL.translate(-0.08, 1.68, -0.22);
+    const eyeR = new THREE.SphereGeometry(0.028, 6, 6);
+    eyeR.translate(0.08, 1.68, -0.22);
+    const eyesGeo = BufferGeometryUtils.mergeGeometries([eyeL, eyeR]);
+    eyeL.dispose(); eyeR.dispose();
+
+    // ---- Mouth: half-torus smile arc baked at the ORIGIN (positioned via matrix) ----
+    // TorusGeometry lies in XY plane; default arc is top half. rotateZ(PI) flips it
+    // so the arc opens upward (smile shape). Baked at origin so per-NPC matrix can
+    // apply scale around its local center for the smile-pop effect.
+    const mouthGeo = new THREE.TorusGeometry(0.06, 0.012, 4, 8, Math.PI);
+    mouthGeo.rotateZ(Math.PI);
+
     // ---- Materials ----
     const legsMat  = new THREE.MeshStandardMaterial({ color: 0x223a5c, roughness: 0.92, flatShading: true });
     const shoesMat = new THREE.MeshStandardMaterial({ color: 0x111111, roughness: 0.8,  flatShading: true });
     const bodyMat  = new THREE.MeshStandardMaterial({ roughness: 0.85, flatShading: true });
     const armsMat  = new THREE.MeshStandardMaterial({ roughness: 0.85, flatShading: true });
     const headMat  = new THREE.MeshStandardMaterial({ color: 0xe6c098, roughness: 0.9,  flatShading: true });
+    const featureMat = new THREE.MeshStandardMaterial({ color: 0x111111, roughness: 0.8 });
 
     // ---- InstancedMeshes ----
     this.legsMesh  = new THREE.InstancedMesh(legsGeo,  legsMat,  MAX_NPCS);
@@ -122,6 +138,8 @@ export class Crowd {
     this.bodyMesh  = new THREE.InstancedMesh(bodyGeo,  bodyMat,  MAX_NPCS);
     this.armsMesh  = new THREE.InstancedMesh(armsGeo,  armsMat,  MAX_NPCS);
     this.headMesh  = new THREE.InstancedMesh(headGeo,  headMat,  MAX_NPCS);
+    this.eyesMesh  = new THREE.InstancedMesh(eyesGeo,  featureMat, MAX_NPCS);
+    this.mouthMesh = new THREE.InstancedMesh(mouthGeo, featureMat, MAX_NPCS);
 
     // Per-NPC shirt color shared between body and arms (sleeves).
     this.bodyMesh.instanceColor = new THREE.InstancedBufferAttribute(new Float32Array(MAX_NPCS * 3), 3);
@@ -133,7 +151,7 @@ export class Crowd {
     // and the entire crowd vanishes (while game logic keeps running →
     // invisible collisions, invisible smiles). Bubbles already disables
     // culling for the same reason. One drawcall per mesh either way.
-    const allMeshes = [this.legsMesh, this.shoesMesh, this.bodyMesh, this.armsMesh, this.headMesh];
+    const allMeshes = [this.legsMesh, this.shoesMesh, this.bodyMesh, this.armsMesh, this.headMesh, this.eyesMesh, this.mouthMesh];
     for (const m of allMeshes) {
       m.castShadow = PERF.shadows;
       m.frustumCulled = false;
@@ -157,9 +175,12 @@ export class Crowd {
     this._mat4 = new THREE.Matrix4();
     this._tmpV = new THREE.Vector3();
     this._tmpV2 = new THREE.Vector3();
+    this._tmpV3 = new THREE.Vector3();
     this._tmpQuat = new THREE.Quaternion();
     this._tmpEuler = new THREE.Euler();
     this._tmpDanceMat = new THREE.Matrix4();
+    this._tmpScale = new THREE.Vector3();
+    this._mouthMat = new THREE.Matrix4();
 
     // High-water mark: highest slot index ever written. count is set to
     // _maxIdx + 1 each frame so three.js skips unwritten slots above it.
@@ -296,6 +317,8 @@ export class Crowd {
         this.bodyMesh.setMatrixAt(npc.idx, zero);
         this.armsMesh.setMatrixAt(npc.idx, zero);
         this.headMesh.setMatrixAt(npc.idx, zero);
+        this.eyesMesh.setMatrixAt(npc.idx, zero);
+        this.mouthMesh.setMatrixAt(npc.idx, zero);
         this.free.push(npc.idx);
         freed++;
       } else {
@@ -309,6 +332,8 @@ export class Crowd {
       this.bodyMesh.instanceMatrix.needsUpdate = true;
       this.armsMesh.instanceMatrix.needsUpdate = true;
       this.headMesh.instanceMatrix.needsUpdate = true;
+      this.eyesMesh.instanceMatrix.needsUpdate = true;
+      this.mouthMesh.instanceMatrix.needsUpdate = true;
     }
   }
 
@@ -345,6 +370,8 @@ export class Crowd {
     this.bodyMesh.instanceMatrix.needsUpdate = true;
     this.armsMesh.instanceMatrix.needsUpdate = true;
     this.headMesh.instanceMatrix.needsUpdate = true;
+    this.eyesMesh.instanceMatrix.needsUpdate = true;
+    this.mouthMesh.instanceMatrix.needsUpdate = true;
     // Narrow draw count to the highest slot ever written + 1. Slots above
     // _maxIdx are untouched (zero matrix from init) and never drawn. Slots
     // below that mark that have been despawned are still in range but carry a
@@ -356,6 +383,8 @@ export class Crowd {
       this.bodyMesh.count = drawCount;
       this.armsMesh.count = drawCount;
       this.headMesh.count = drawCount;
+      this.eyesMesh.count = drawCount;
+      this.mouthMesh.count = drawCount;
     }
   }
 
@@ -491,7 +520,7 @@ export class Crowd {
 
       case 'watching': {
         // Face Zerble; tiny dance bob if music-y
-        const target = Math.atan2(dx, dz);
+        const target = Math.atan2(-dx, -dz);
         const diff = wrapAngle(target - npc.yaw);
         npc.yaw += diff * Math.min(1, dt * 6);
         break;
@@ -507,7 +536,7 @@ export class Crowd {
         } else {
           npc.state = 'watching';
         }
-        const target = Math.atan2(dx, dz);
+        const target = Math.atan2(-dx, -dz);
         const diff = wrapAngle(target - npc.yaw);
         npc.yaw += diff * Math.min(1, dt * 6);
         break;
@@ -528,7 +557,7 @@ export class Crowd {
         desiredX /= dn;
         desiredZ /= dn;
         speed = 3.5 * npc.energy;
-        const lookDir = Math.atan2(desiredX, desiredZ);
+        const lookDir = Math.atan2(-desiredX, -desiredZ);
         npc.yaw = lookDir;
         if (dToZerble > NOTICE_RANGE + 4) {
           npc.state = 'idle';
@@ -618,7 +647,7 @@ export class Crowd {
 
     // Face direction of motion when walking/fleeing/approaching
     if (Math.abs(npc.vel.x) + Math.abs(npc.vel.z) > 0.4 && npc.state !== 'watching') {
-      const targetYaw = Math.atan2(npc.vel.x, npc.vel.z);
+      const targetYaw = Math.atan2(-npc.vel.x, -npc.vel.z);
       const diff = wrapAngle(targetYaw - npc.yaw);
       npc.yaw += diff * Math.min(1, dt * 6);
     }
@@ -678,7 +707,14 @@ export class Crowd {
       ? Math.sin(npc.bob * 2) * 0.05 * (npc.dance - 0.5)
       : 0;
 
-    // All 5 meshes share one matrix. The matrix's Y = "feet level" for this NPC.
+    // Happy bounce: while smile cooldown is active the body bobs up by a small
+    // sin wave (~6cm amplitude) so the whole figure (body + mouth) hops.
+    const bouncing = npc.smileTimeCooldown > 0;
+    const bounceY = bouncing
+      ? Math.abs(Math.sin(performance.now() * 0.012 + npc.bob)) * 0.06
+      : 0;
+
+    // All 5 body meshes share one matrix. The matrix's Y = "feet level" for this NPC.
     // Each geometry has its part offset baked in (legs at y≈0.325, torso at y=1.0,
     // arms at y=1.10, head at y=1.65, shoes at y≈0.035). Scale is applied uniformly
     // via compose() so the whole figure scales together from the feet origin.
@@ -691,11 +727,11 @@ export class Crowd {
     //   - normal:        feet at ground (npc.pos.y = 0 always from behavior code)
     let feetY;
     if (npc.state === 'riding' && npc.seatY != null) {
-      feetY = npc.seatY - 1.05 + bobY;
+      feetY = npc.seatY - 1.05 + bobY + bounceY;
     } else if (npc.state === 'hammock_riding' && npc.hammockY != null) {
-      feetY = npc.hammockY - 1.1 + bobY;
+      feetY = npc.hammockY - 1.1 + bobY + bounceY;
     } else {
-      feetY = bobY; // feet on the ground; npc.pos.y is always 0
+      feetY = bobY + bounceY; // feet on the ground; npc.pos.y is always 0
     }
 
     // CRITICAL: position and scale must be DISTINCT Vector3 instances.
@@ -713,12 +749,29 @@ export class Crowd {
       m.multiply(this._tmpDanceMat);
     }
 
-    // Write the same transform to all 5 meshes — per-part offsets live in geometry.
+    // Write the same transform to legs/shoes/body/arms/head/eyes — per-part offsets live in geometry.
+    // Eyes also use this matrix (eyes geometry has offsets baked in, no scale reaction).
     this.legsMesh.setMatrixAt(npc.idx, m);
     this.shoesMesh.setMatrixAt(npc.idx, m);
     this.bodyMesh.setMatrixAt(npc.idx, m);
     this.armsMesh.setMatrixAt(npc.idx, m);
     this.headMesh.setMatrixAt(npc.idx, m);
+    this.eyesMesh.setMatrixAt(npc.idx, m);
+
+    // ---- Mouth: separate matrix with per-NPC scale for smile-pop effect ----
+    // Mouth geometry is baked at origin; we translate it to its face position
+    // (in NPC local space → world space) then apply scale so it pops when smiling.
+    // The mouth bobs with the body by including bounceY in the world Y.
+    const smileScale = npc.smileTimeCooldown > 0 ? 1.0 : 0.3;
+    // Rotate the face-local offset (0, 1.55, -0.215) by the NPC's yaw quaternion
+    // to get the world offset from npc.pos.
+    this._tmpV3.set(0, 1.55, -0.215).applyQuaternion(this._tmpQuat);
+    this._tmpV3.x += npc.pos.x;
+    this._tmpV3.y += npc.pos.y + bobY + bounceY;
+    this._tmpV3.z += npc.pos.z;
+    this._tmpScale.set(smileScale, smileScale, smileScale);
+    this._mouthMat.compose(this._tmpV3, this._tmpQuat, this._tmpScale);
+    this.mouthMesh.setMatrixAt(npc.idx, this._mouthMat);
   }
 
   // ----- Passenger system helpers -----
@@ -780,7 +833,7 @@ export class Crowd {
     npc.pos.z += npc.vel.z * dt;
 
     // Face direction of motion
-    const targetYaw = Math.atan2(npc.vel.x, npc.vel.z);
+    const targetYaw = Math.atan2(-npc.vel.x, -npc.vel.z);
     const diff = wrapAngle(targetYaw - npc.yaw);
     npc.yaw += diff * Math.min(1, dt * 6);
 
@@ -900,7 +953,7 @@ export class Crowd {
     npc.pos.x += npc.vel.x * dt;
     npc.pos.z += npc.vel.z * dt;
     // Face direction of motion
-    const targetYaw = Math.atan2(npc.vel.x, npc.vel.z);
+    const targetYaw = Math.atan2(-npc.vel.x, -npc.vel.z);
     const diff = wrapAngle(targetYaw - npc.yaw);
     npc.yaw += diff * Math.min(1, dt * 6);
     this._writeMatrices(npc);

@@ -172,8 +172,12 @@ export function buildKid(rng = Math.random) {
         color: accColor, emissive: accColor, emissiveIntensity: 1.4, roughness: 0.4,
       }),
     );
-    stick.position.set(0.30, 0.85, 0);
-    stick.rotation.z = -0.55;
+    // Position at the right hand: kid's right shoulder is at (0.20, 0.72, 0)
+    // with a slight outward splay. The arm hangs ~0.50 long so the hand sits
+    // around (0.30, 0.20, 0). Stick is 0.50 tall, so center at y = 0.20 + 0.25
+    // puts the base at the hand and the tip ~0.5m above.
+    stick.position.set(0.30, 0.45, -0.05);
+    stick.rotation.z = 0.20;  // slight outward lean
     body.add(stick);
   } else if (accRoll < 0.75) {
     // Balloon on a string

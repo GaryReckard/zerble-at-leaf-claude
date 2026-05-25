@@ -17,9 +17,9 @@ const HOME_RADIUS = 55;
 const AWARE_RANGE = 28;
 const FORGET_RANGE = AWARE_RANGE * 3;
 const FOLLOW_DIST = 11;
-const SPEED_MAX = 4.5;
-const ACCEL = 6.0;
-const TURN_RATE = 1.6;
+const SPEED_MAX = 5.5;
+const ACCEL = 8.0;
+const TURN_RATE = 2.4;
 const HEART_LIFETIME = 2.4;
 const HEART_INTERVAL_AWARE = 0.18;
 const HEART_INTERVAL_FOLLOW = 0.55;
@@ -398,10 +398,15 @@ export class Lurleen {
     this.heading += Math.sign(diff) * Math.min(Math.abs(diff), TURN_RATE * dt);
     this.steerAngle = THREE.MathUtils.clamp(diff * 1.5, -0.5, 0.5);
 
-    // Accelerate when roughly aligned with target heading; coast when turning.
+    // Speed scales with how aligned we are with the target direction — but
+    // always at least a fraction of full speed so she can start moving while
+    // still rotating to face the target. The previous `aligned > 0.4` gate
+    // left her stuck at 0 speed during the initial turn-toward-Zerble.
     const aligned = Math.cos(diff);
-    if (aligned > 0.4) {
-      this.speed = Math.min(SPEED_MAX * speedScale, this.speed + ACCEL * dt);
+    const driveFactor = Math.max(0.25, (aligned + 1) * 0.5);   // 0.25..1.0
+    const target = SPEED_MAX * speedScale * driveFactor;
+    if (this.speed < target) {
+      this.speed = Math.min(target, this.speed + ACCEL * dt);
     } else {
       this.speed *= Math.pow(0.5, dt * 2);
     }

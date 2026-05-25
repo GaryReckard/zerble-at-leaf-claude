@@ -362,7 +362,7 @@ if (window.visualViewport) {
   window.visualViewport.addEventListener('resize', handleResize);
 }
 
-window.__game = { camera, zerble, scene, renderer, crowd, registry, chaseCam };
+window.__game = { camera, zerble, scene, renderer, crowd, registry, chaseCam, lurleen };
 
 installDebug({
   scene, camera, renderer,

@@ -11,42 +11,10 @@
 
 import * as THREE from 'three';
 import { registry } from './registry.js';
+import { createHeartGeometry, sharedHeartGeometry as _heartGeo } from './models/heart.js';
 
-// Heart shape — extruded 2D heart using THREE.Shape. Centered at origin.
-// Used for Lurleen's heart particles. Exported so the sandbox can preview.
-export function createHeartGeometry() {
-  const shape = new THREE.Shape();
-  // Standard three.js heart construction. Coordinates are pre-centered so the
-  // resulting geometry has its visual center at (0, 0).
-  const x = -0.5;
-  const y = -0.95;
-  shape.moveTo(x + 0.5, y + 0.5);
-  shape.bezierCurveTo(x + 0.5, y + 0.5, x + 0.4, y, x, y);
-  shape.bezierCurveTo(x - 0.6, y, x - 0.6, y + 0.7, x - 0.6, y + 0.7);
-  shape.bezierCurveTo(x - 0.6, y + 1.1, x - 0.3, y + 1.54, x + 0.5, y + 1.9);
-  shape.bezierCurveTo(x + 1.2, y + 1.54, x + 1.6, y + 1.1, x + 1.6, y + 0.7);
-  shape.bezierCurveTo(x + 1.6, y + 0.7, x + 1.6, y, x + 1, y);
-  shape.bezierCurveTo(x + 0.7, y, x + 0.5, y + 0.5, x + 0.5, y + 0.5);
-
-  const geo = new THREE.ExtrudeGeometry(shape, {
-    depth: 0.18,
-    bevelEnabled: true,
-    bevelSegments: 2,
-    bevelSize: 0.05,
-    bevelThickness: 0.05,
-    curveSegments: 8,
-  });
-  geo.center();
-  // Heart is built "right-side up" but ExtrudeGeometry leaves it oriented
-  // with the +Z face forward. Flip vertically so the point hangs DOWN like
-  // a heart should when seen face-on.
-  geo.rotateZ(Math.PI);
-  geo.scale(0.18, 0.18, 0.18);   // tune to roughly match previous sphere size
-  return geo;
-}
-
-// Shared heart geometry — cheap to clone refs across particles.
-const _heartGeo = createHeartGeometry();
+// Re-export so older imports (e.g. from sandbox.html or main) keep working.
+export { createHeartGeometry };
 
 const SPAWN_POS = new THREE.Vector3(240, 0, 260);   // ~360m from origin, 3 chunks NE
 const HOME_RADIUS = 55;
@@ -59,6 +27,14 @@ const TURN_RATE = 3.0;
 const HEART_LIFETIME = 2.4;
 const HEART_INTERVAL_AWARE = 0.18;
 const HEART_INTERVAL_FOLLOW = 0.55;
+
+// Lay out N evenly-spaced positions along a [0..1] parameter, mapping each
+// through `fn` to a value. Helper used to plot a flower crown on the roof.
+function range(n, fn) {
+  const out = [];
+  for (let i = 0; i < n; i++) out.push(fn(i / Math.max(1, n - 1)));
+  return out;
+}
 
 export class Lurleen {
   constructor(scene) {
@@ -81,6 +57,7 @@ export class Lurleen {
     this.eyes = [];
 
     this._buildBody();
+    this._buildWindshield();
     this._buildLips();
     this._buildEyes();
     this._buildHair();
@@ -107,6 +84,18 @@ export class Lurleen {
     });
   }
 
+  // Move Lurleen + her wander home to a new origin. Used by sandbox.html so
+  // she doesn't immediately race off toward her hard-coded SPAWN_POS once
+  // moved to (0,0,0) for inspection.
+  setSpawnAt(x, z) {
+    this.position.set(x, 0, z);
+    this.homePos.set(x, 0, z);
+    this.wanderTarget.set(x, 0, z);
+    this.wanderTimer = 9 + Math.random() * 8;   // pause before picking next target
+    this.speed = 0;
+    this.root.position.copy(this.position);
+  }
+
   // ---------- Body ----------
 
   _buildBody() {
@@ -121,25 +110,37 @@ export class Lurleen {
     chassis.castShadow = true;
     this.root.add(chassis);
 
-    // Roof — bright yellow/gold base; hair drapes over it from above.
+    // Roof — bright yellow/gold base, now at Zerble's roof height so the two
+    // carts look like equals from a distance. Hair attaches at the four
+    // corners and drapes down to the chassis.
     const roofMat = new THREE.MeshStandardMaterial({
       color: 0xffe066, roughness: 0.95, flatShading: true,
     });
     const roof = new THREE.Mesh(
-      new THREE.BoxGeometry(2.1, 0.15, 1.9),
+      new THREE.BoxGeometry(2.1, 0.18, 1.9),
       roofMat,
     );
-    roof.position.set(0, 2.0, -0.5);
+    // Roof center at y=3.85, top at 3.94 — matches Zerble's roof at 3.75+0.125.
+    roof.position.set(0, 3.85, -0.5);
     roof.castShadow = true;
     this.root.add(roof);
+    this._roofY = 3.85;
+    this._roofHalfW = 1.05;
+    this._roofHalfD = 0.95;
+    this._roofZ = -0.5;
 
-    // Roof posts
+    // Roof posts — tall enough to reach the new roof height.
     const postMat = new THREE.MeshStandardMaterial({
       color: 0x2a1f3a, roughness: 0.7, flatShading: true,
     });
+    // Posts span from chassis top (y ~1.2) up to roof bottom (y ~3.76).
+    const postLen = 2.55;
+    const postY = 1.2 + postLen / 2;
     for (const [px, pz] of [[-0.95, 0.3], [0.95, 0.3], [-0.95, -1.3], [0.95, -1.3]]) {
-      const post = new THREE.Mesh(new THREE.CylinderGeometry(0.05, 0.05, 1.3, 6), postMat);
-      post.position.set(px, 1.4, pz);
+      const post = new THREE.Mesh(
+        new THREE.CylinderGeometry(0.05, 0.05, postLen, 6), postMat,
+      );
+      post.position.set(px, postY, pz);
       this.root.add(post);
     }
 
@@ -156,6 +157,33 @@ export class Lurleen {
       this.root.add(wheel);
       this._wheels.push({ mesh: wheel, baseY: 0.42, front: wz < 0 });
     }
+  }
+
+  // ---------- Windshield — a clear plane between the front posts ----------
+  // The googly eyes sit on this surface. Reference photo: the eyes are stuck
+  // to the actual clear windshield, not floating in space.
+
+  _buildWindshield() {
+    // The front-of-cart edge of the roof is at z = roofZ - halfD = -1.45.
+    // The chassis top is at y=1.2. The roof bottom is at y=3.76.
+    // Match the front roof-posts at x = ±0.95.
+    const windshieldGeo = new THREE.PlaneGeometry(2.0, 2.5);
+    const windshieldMat = new THREE.MeshStandardMaterial({
+      color: 0xa6d8ff,
+      roughness: 0.05,
+      metalness: 0.1,
+      transparent: true,
+      opacity: 0.18,
+      side: THREE.DoubleSide,
+    });
+    const windshield = new THREE.Mesh(windshieldGeo, windshieldMat);
+    // Position: centered between the front posts, vertical between chassis & roof.
+    // Front face of cart is at z = -1.5 (slightly past the front posts at z=-1.3).
+    windshield.position.set(0, 2.45, -1.45);
+    // A subtle tilt forward at the top (like a real golf cart windshield)
+    windshield.rotation.x = 0.08;
+    this.root.add(windshield);
+    this._windshield = windshield;
   }
 
   // ---------- Lips — plump pink pillow with a horizontal seam ----------
@@ -222,23 +250,34 @@ export class Lurleen {
     });
     const lashMat = new THREE.MeshStandardMaterial({ color: 0x111111, roughness: 0.9 });
 
-    for (const ex of [-0.78, 0.78]) {
+    // Per Gary's feedback: a tad smaller eyes than v2 and a bit closer
+    // together. Position them ON the windshield surface (z=-1.45 + tilt) so
+    // they read as actual stickers, not floating discs.
+    const eyeR = 0.38;     // sclera radius (was 0.50)
+    const eyeSep = 0.55;   // ±X (was 0.78 → closer together)
+    const eyeY = 2.55;     // sits on the upper half of the windshield
+    // Windshield front face: z = -1.45 with a 0.08 forward tilt at top.
+    // Stick eyes slightly in front of it so they sit on the surface visibly.
+    const eyeZ = -1.50;
+    for (const ex of [-eyeSep, eyeSep]) {
       const eye = new THREE.Group();
-      eye.position.set(ex, 2.05, -1.62);
+      eye.position.set(ex, eyeY, eyeZ);
+      // Match the windshield's tilt so the eye sticker lies flush.
+      eye.rotation.x = 0.08;
       // Eye faces forward (cart-local -Z). CircleGeometry's normal is +Z by
       // default, so flip the eye group 180° around Y.
       eye.rotation.y = Math.PI;
 
       // White flat disc — the "sclera sticker"
       const sclera = new THREE.Mesh(
-        new THREE.CircleGeometry(0.50, 32),
+        new THREE.CircleGeometry(eyeR, 32),
         scleraMat,
       );
       eye.add(sclera);
 
       // Thin dark outline ring around the sclera — sells the sticker look
       const ring = new THREE.Mesh(
-        new THREE.RingGeometry(0.48, 0.52, 32),
+        new THREE.RingGeometry(eyeR - 0.02, eyeR + 0.02, 32),
         ringMat,
       );
       ring.position.z = 0.005;
@@ -246,43 +285,43 @@ export class Lurleen {
 
       // Pupil — flat black disc that wobbles around inside the sclera. Held
       // in its own group so we can pan it within the sclera circle.
+      const pupilR = 0.16;       // scaled down with the sclera
       const pupilGroup = new THREE.Group();
       const pupil = new THREE.Mesh(
-        new THREE.CircleGeometry(0.20, 28),
+        new THREE.CircleGeometry(pupilR, 28),
         pupilMat,
       );
-      pupil.position.z = 0.02;     // sit on top of sclera
+      pupil.position.z = 0.02;
       pupilGroup.add(pupil);
-      // Subtle highlight (small white circle on the pupil's upper-left)
       const highlight = new THREE.Mesh(
-        new THREE.CircleGeometry(0.05, 16),
+        new THREE.CircleGeometry(0.04, 16),
         new THREE.MeshStandardMaterial({
           color: 0xffffff, emissive: 0xffffff, emissiveIntensity: 0.6, roughness: 0.2,
           polygonOffset: true, polygonOffsetFactor: -3, polygonOffsetUnits: -3,
         }),
       );
-      highlight.position.set(-0.06, 0.07, 0.025);
+      highlight.position.set(-0.05, 0.06, 0.025);
       pupilGroup.add(highlight);
       eye.add(pupilGroup);
 
-      // Eyelashes — three small black cones along the top of the sclera,
-      // fanned outward. Cone default is +Y axis; we set rotation.x to point
-      // up-and-out from the eye.
+      // Eyelashes
       for (let k = -1; k <= 1; k++) {
         const lash = new THREE.Mesh(
-          new THREE.ConeGeometry(0.035, 0.30, 5),
+          new THREE.ConeGeometry(0.030, 0.24, 5),
           lashMat,
         );
-        // Position above the sclera; CircleGeometry is in XY plane.
-        lash.position.set(k * 0.20, 0.46, 0.005);
-        // Tilt upward and slightly outward from center
+        lash.position.set(k * 0.16, eyeR - 0.04, 0.005);
         lash.rotation.x = -0.25;
         lash.rotation.z = -k * 0.18;
         eye.add(lash);
       }
 
       this.root.add(eye);
-      this.eyes.push({ root: eye, pupil: pupilGroup, basePos: eye.position.clone() });
+      // Save the wobble bounds so the pupil can't escape the (smaller) sclera.
+      this.eyes.push({
+        root: eye, pupil: pupilGroup, basePos: eye.position.clone(),
+        wobbleX: eyeR - pupilR - 0.04, wobbleY: eyeR - pupilR - 0.06,
+      });
     }
   }
 
@@ -293,118 +332,92 @@ export class Lurleen {
   // back, left, right), each laying strands along its edge.
 
   _buildHair() {
+    // Per Gary's reference photo + feedback: hair is gathered into FOUR
+    // bunches at the roof corners (like hair ties / pigtails) and hangs
+    // straight down from there. No perimeter fringe.
     const goldHair = new THREE.MeshStandardMaterial({ color: 0xd8b878, roughness: 0.95, flatShading: true });
     const brownHair = new THREE.MeshStandardMaterial({ color: 0xa07840, roughness: 0.95, flatShading: true });
     const lightHair = new THREE.MeshStandardMaterial({ color: 0xe6c98c, roughness: 0.95, flatShading: true });
 
-    // Roof outline (matches `roof` geometry built in _buildBody — 2.1 wide, 1.9 deep, centered at z=-0.5)
-    const halfW = 1.05;
-    const halfD = 0.95;
-    const roofZ = -0.5;
-    const hairY = 1.94;     // sits flush against the roof bottom edge
+    const halfW = this._roofHalfW;
+    const halfD = this._roofHalfD;
+    const roofZ = this._roofZ;
+    // Strands anchor flush against the bottom of the roof slab.
+    const hairTopY = this._roofY - 0.09;
+    // Length: long enough to drape past the roof posts and just past chassis
+    // height, like the photo where hair brushes the windshield top.
+    const hairLen = 1.65;
 
-    // Bunches: at these normalized angles around the roof, density is x2 and
-    // strands are longer. Creates the gathered "parts" the user asked about.
-    const bunchCenters = [0.0, 0.25, 0.50, 0.75];   // front, right, back, left midpoints
-    function bunchBoost(u) {
-      let m = 1.0;
-      for (const c of bunchCenters) {
-        const d = Math.min(Math.abs(u - c), 1 - Math.abs(u - c));
-        if (d < 0.06) m += (1 - d / 0.06) * 1.6;     // up to ~2.6x at center
+    const corners = [
+      { x: -halfW, z: roofZ + halfD, normX: -1, normZ: 1 },     // front-left
+      { x:  halfW, z: roofZ + halfD, normX:  1, normZ: 1 },     // front-right
+      { x: -halfW, z: roofZ - halfD, normX: -1, normZ: -1 },    // back-left
+      { x:  halfW, z: roofZ - halfD, normX:  1, normZ: -1 },    // back-right
+    ];
+
+    for (const c of corners) {
+      // Each corner has a "hair tie" gather (a small dark ring), then a fan
+      // of strands fanning out + hanging down.
+      const tieMat = new THREE.MeshStandardMaterial({
+        color: 0x66d9ff, roughness: 0.5, flatShading: true,
+      });
+      const tie = new THREE.Mesh(
+        new THREE.TorusGeometry(0.10, 0.04, 6, 14),
+        tieMat,
+      );
+      tie.position.set(c.x, hairTopY - 0.05, c.z);
+      tie.rotation.x = Math.PI / 2;       // ring lies flat horizontally
+      this.root.add(tie);
+
+      // Bunch of strands. Each strand starts at the tie and falls straight
+      // down with a tiny outward bias toward the corner's diagonal — that's
+      // the "draped over the edge" feel.
+      const strandsPerBunch = 90;
+      for (let i = 0; i < strandsPerBunch; i++) {
+        // Cluster radius ~0.18 around the tie's center
+        const a = Math.random() * Math.PI * 2;
+        const r = Math.sqrt(Math.random()) * 0.18;
+        const sx = c.x + Math.cos(a) * r;
+        const sz = c.z + Math.sin(a) * r;
+        // Length jitter
+        const len = hairLen * (0.75 + Math.random() * 0.45);
+
+        const cone = new THREE.ConeGeometry(0.022, len, 5, 1);
+        cone.translate(0, -len / 2, 0);       // anchor strand's top at origin
+        const matRoll = Math.random();
+        const mat = matRoll < 0.4 ? goldHair : matRoll < 0.75 ? brownHair : lightHair;
+        const strand = new THREE.Mesh(cone, mat);
+        strand.position.set(sx, hairTopY, sz);
+        // Mostly straight down. Tilt slightly outward along the corner's
+        // diagonal so the bunch reads as a swept ponytail.
+        strand.rotation.x = c.normZ * 0.08 + (Math.random() - 0.5) * 0.12;
+        strand.rotation.z = -c.normX * 0.08 + (Math.random() - 0.5) * 0.12;
+        strand.castShadow = true;
+        this.root.add(strand);
       }
-      return m;
     }
 
-    // Place strands along the rectangular perimeter — parameterized by u in [0,1)
-    // walking clockwise from the front-center.
-    function perimeterPoint(u) {
-      // 4 sides, each takes 0.25 of u
-      const side = Math.floor(u * 4);
-      const t = (u * 4) - side;
-      switch (side) {
-        case 0: // front edge (-halfW, halfD)  →  (+halfW, halfD)
-          return { x: -halfW + t * 2 * halfW, z: roofZ + halfD,
-                   tangentX: 1, tangentZ: 0 };
-        case 1: // right edge (+halfW, halfD)  →  (+halfW, -halfD)
-          return { x: halfW, z: roofZ + halfD - t * 2 * halfD,
-                   tangentX: 0, tangentZ: -1 };
-        case 2: // back edge (+halfW, -halfD) →  (-halfW, -halfD)
-          return { x: halfW - t * 2 * halfW, z: roofZ - halfD,
-                   tangentX: -1, tangentZ: 0 };
-        case 3: // left edge (-halfW, -halfD) →  (-halfW, halfD)
-          return { x: -halfW, z: roofZ - halfD + t * 2 * halfD,
-                   tangentX: 0, tangentZ: 1 };
-      }
-    }
-
-    const baseCount = 220;       // base density walking the perimeter
-    const samples = baseCount * 2;  // oversampled, density tapers via bunchBoost
-    for (let i = 0; i < samples; i++) {
-      const u = i / samples;
-      const boost = bunchBoost(u);
-      // Skip strands probabilistically based on boost — gives sparse base + dense bunches
-      if (Math.random() > 0.45 * boost) continue;
-
-      const p = perimeterPoint(u);
-      // Jitter perpendicular to the edge tangent so strands fan out slightly
-      const perpX = p.tangentZ;
-      const perpZ = -p.tangentX;
-      const jitter = (Math.random() - 0.5) * 0.08;
-      const x = p.x + perpX * jitter + (Math.random() - 0.5) * 0.03;
-      const z = p.z + perpZ * jitter + (Math.random() - 0.5) * 0.03;
-      // Bunches have longer strands
-      const len = (0.45 + Math.random() * 0.40) * (1 + (boost - 1) * 0.3);
-
-      const cone = new THREE.ConeGeometry(0.020, len, 5, 1);
-      cone.translate(0, -len / 2, 0);
-      const matRoll = Math.random();
-      const mat = matRoll < 0.4 ? goldHair : matRoll < 0.75 ? brownHair : lightHair;
-      const strand = new THREE.Mesh(cone, mat);
-      strand.position.set(x, hairY, z);
-      // Drape outward over the roof edge: tilt away from the roof center in
-      // the perpendicular direction.
-      const outX = (x - 0) * 0.3;     // tilt outward in X based on position
-      const outZ = (z - roofZ) * 0.3;
-      strand.rotation.x = outZ * 0.6 + (Math.random() - 0.5) * 0.2;
-      strand.rotation.z = -outX * 0.6 + (Math.random() - 0.5) * 0.2;
-      strand.castShadow = true;
-      this.root.add(strand);
-    }
-
-    // Flower crown along the top of the roof, with a couple at each bunch.
+    // Flower crown along the top of the roof — perimeter line of small blossoms.
     const flowerColors = [0xff4d8a, 0xff9933, 0x9966ff, 0x66ccff, 0xffee33, 0xff6f6f, 0x66ff99];
-    const flowerCount = 18;
-    for (let i = 0; i < flowerCount; i++) {
-      const u = i / flowerCount;
-      const p = perimeterPoint(u);
+    const flowerCount = 22;
+    const perimeter = [
+      // walk front edge L→R, right edge F→B, back edge R→L, left edge B→F
+      ...range(6, (t) => ({ x: -halfW + t * (2 * halfW), z: roofZ + halfD })),
+      ...range(5, (t) => ({ x: halfW, z: roofZ + halfD - t * (2 * halfD) })),
+      ...range(6, (t) => ({ x: halfW - t * (2 * halfW), z: roofZ - halfD })),
+      ...range(5, (t) => ({ x: -halfW, z: roofZ - halfD + t * (2 * halfD) })),
+    ];
+    for (let i = 0; i < Math.min(flowerCount, perimeter.length); i++) {
+      const p = perimeter[i];
+      const c = flowerColors[i % flowerColors.length];
       const flower = new THREE.Mesh(
         new THREE.IcosahedronGeometry(0.10 + Math.random() * 0.03, 0),
         new THREE.MeshStandardMaterial({
-          color: flowerColors[i % flowerColors.length],
-          emissive: flowerColors[i % flowerColors.length],
-          emissiveIntensity: 0.5,
-          roughness: 0.4,
+          color: c, emissive: c, emissiveIntensity: 0.5, roughness: 0.4,
         }),
       );
-      // Sit slightly inside the perimeter on top of the roof
-      const inset = 0.08;
-      const cx = p.x - p.tangentZ * inset * 0;      // edge stays
-      const cz = p.z + p.tangentX * inset * 0;
-      flower.position.set(cx, 2.10, cz);
+      flower.position.set(p.x, this._roofY + 0.13, p.z);
       this.root.add(flower);
-    }
-
-    // A few "bows" — small colored ribbons gathered at each bunch as visual
-    // accents (matches the bows in the reference photo).
-    for (const u of bunchCenters) {
-      const p = perimeterPoint(u);
-      const bow = new THREE.Mesh(
-        new THREE.IcosahedronGeometry(0.13, 0),
-        new THREE.MeshStandardMaterial({ color: 0x66d9ff, roughness: 0.5, flatShading: true }),
-      );
-      bow.scale.set(1.4, 1.0, 0.6);
-      bow.position.set(p.x, 1.85, p.z);
-      this.root.add(bow);
     }
   }
 
@@ -483,16 +496,13 @@ export class Lurleen {
       w.mesh.position.y = w.baseY + Math.sin(performance.now() * 0.01 + w.mesh.position.x) * 0.02;
     }
 
-    // Eye wobble — the flat pupil disc rolls around within the sclera circle,
-    // staying clear of the rim. The wobble pattern is the same kind of small-
-    // amplitude lissajous that real googly eyes do when shaken.
+    // Eye wobble — flat pupil disc rolls around within the sclera circle,
+    // staying inside the rim. Lissajous-style motion mimics real googly eyes.
     const t = performance.now() * 0.001;
     for (const eye of this.eyes) {
-      eye.root.position.y = eye.basePos.y + Math.sin(t * 1.4 + eye.basePos.x) * 0.04;
-      // Pupil moves in a circle within the sclera. Sclera radius 0.5, pupil
-      // radius 0.2, so max safe wobble = 0.5 - 0.2 - 0.04 = 0.26.
-      eye.pupil.position.x = Math.sin(t * 0.9 + eye.basePos.x * 3) * 0.18;
-      eye.pupil.position.y = Math.cos(t * 1.3 + eye.basePos.x * 2) * 0.14;
+      eye.root.position.y = eye.basePos.y + Math.sin(t * 1.4 + eye.basePos.x) * 0.03;
+      eye.pupil.position.x = Math.sin(t * 0.9 + eye.basePos.x * 3) * eye.wobbleX;
+      eye.pupil.position.y = Math.cos(t * 1.3 + eye.basePos.x * 2) * eye.wobbleY;
     }
 
     this._updateHearts(dt);

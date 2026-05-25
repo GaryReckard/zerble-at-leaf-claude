@@ -20,6 +20,14 @@ import { hash2, mulberry32 } from './rng.js';
 import { Sound } from './sound.js';
 import { PERF } from './perf.js';
 import { chunkOverlapsLake, chunkInLake } from './lakes.js';
+import { buildTent } from './models/tent.js';
+import { buildFoodTruck } from './models/foodTruck.js';
+import { buildHammock as buildHammockModel } from './models/hammock.js';
+import { buildEntranceArch as buildEntranceArchModel } from './models/entranceArch.js';
+import { buildStage as buildStageModel, placeBandOnStage } from './models/stage.js';
+import { buildTentStage } from './models/tentStage.js';
+import { buildTree } from './models/tree.js';
+import { leafBannerTextures } from './models/leafBanner.js';
 
 export const CHUNK_SIZE = 80;
 const LOAD_RADIUS = PERF.chunkLoadRadius;   // mobile: 1 (3x3), desktop: 2 (5x5)
@@ -31,6 +39,10 @@ export const stagePerformers = [];
 // Spatial music handles, one per stage, tagged by chunkKey so we can detach on unload.
 const stageMusic = [];
 
+// Stage light lens meshes — the day/night system samples these for the night
+// "light show" pulse + color. Each entry: { lens: Mesh, chunkKey, baseColor }.
+export const stageLightLenses = [];
+
 export function updateStagePerformers(t) {
   for (let i = 0; i < stagePerformers.length; i++) {
     const p = stagePerformers[i];
@@ -38,6 +50,43 @@ export function updateStagePerformers(t) {
     p.group.position.y = p.baseY + Math.abs(Math.sin(phase)) * 0.08;
     p.group.rotation.z = Math.sin(phase * 0.5) * 0.05;
     p.group.rotation.y = p.baseYaw + Math.sin(phase * 0.3) * 0.15;
+  }
+}
+
+// Stage-light show: during the day the lenses just sit there with their
+// baseline emissive. At night they pulse and cycle through a club-like
+// rainbow palette. `t` is seconds since start, `nightness` 0..1 from the
+// time-of-day system.
+const _showColors = [0xff3380, 0xffae33, 0xffe066, 0x66ff88, 0x33d9ff, 0xc080ff];
+const _tmpC1 = new THREE.Color();
+const _tmpC2 = new THREE.Color();
+export function updateStageLightShow(t, nightness) {
+  if (stageLightLenses.length === 0) return;
+  for (let i = 0; i < stageLightLenses.length; i++) {
+    const entry = stageLightLenses[i];
+    const mat = entry.lens.material;
+    // Daytime: gentle pulse around the baseline (2.5).
+    // Nighttime: shift hue and pulse hard.
+    if (nightness < 0.05) {
+      mat.emissiveIntensity = 2.4 + Math.sin(t * 1.5 + i) * 0.2;
+      // Fade color back toward baseline
+      const base = _tmpC1.setHex(entry.baseColor);
+      mat.color.lerp(base, 0.05);
+      mat.emissive.lerp(base, 0.05);
+    } else {
+      const phase = t * 1.4 + i * 0.7;
+      const colorIdx = Math.floor((t * 0.4 + i) % _showColors.length);
+      const nextIdx = (colorIdx + 1) % _showColors.length;
+      const blend = (t * 0.4 + i) % 1;
+      _tmpC1.setHex(_showColors[colorIdx]);
+      _tmpC2.setHex(_showColors[nextIdx]);
+      const c = _tmpC1.lerp(_tmpC2, blend);
+      mat.color.copy(c);
+      mat.emissive.copy(c);
+      // Strong pulsing peaks at night.
+      const pulse = 0.5 + 0.5 * Math.sin(phase);
+      mat.emissiveIntensity = 2.0 + pulse * 5.0 * nightness;
+    }
   }
 }
 
@@ -106,6 +155,9 @@ export class ChunkManager {
         stageMusic.splice(i, 1);
       }
     }
+    for (let i = stageLightLenses.length - 1; i >= 0; i--) {
+      if (stageLightLenses[i].chunkKey === key) stageLightLenses.splice(i, 1);
+    }
 
     this.loaded.delete(key);
   }
@@ -167,26 +219,29 @@ function pickTheme(cx, cz) {
   const r = rng();
 
   if (dist <= 1.5) {
-    if (r < 0.35) return 'side_stage';
-    if (r < 0.55) return 'food_plaza';
+    if (r < 0.18) return 'tent_stage';     // ~18% near origin
+    if (r < 0.40) return 'side_stage';
+    if (r < 0.58) return 'food_plaza';
     if (r < 0.80) return 'vendor_row';
     if (r < 0.92) return 'drum_circle';
     return 'grove';
   }
   if (dist <= 3.5) {
-    if (r < 0.20) return 'side_stage';
-    if (r < 0.35) return 'food_plaza';
-    if (r < 0.55) return 'vendor_row';
-    if (r < 0.70) return 'drum_circle';
+    if (r < 0.10) return 'tent_stage';
+    if (r < 0.25) return 'side_stage';
+    if (r < 0.40) return 'food_plaza';
+    if (r < 0.58) return 'vendor_row';
+    if (r < 0.72) return 'drum_circle';
     if (r < 0.90) return 'grove';
     return 'open_lawn';
   }
   // Outer rings — keep stages + food plazas discoverable far from spawn so
   // exploration always finds new POIs.
-  if (r < 0.10) return 'side_stage';      // 10% — rarer than near origin but still present
-  if (r < 0.20) return 'food_plaza';      // 10%
-  if (r < 0.30) return 'drum_circle';     // 10%
-  if (r < 0.45) return 'vendor_row';      // 15%
+  if (r < 0.05) return 'tent_stage';
+  if (r < 0.13) return 'side_stage';
+  if (r < 0.23) return 'food_plaza';
+  if (r < 0.33) return 'drum_circle';
+  if (r < 0.47) return 'vendor_row';
   if (r < 0.75) return 'grove';
   return 'open_lawn';
 }
@@ -194,6 +249,7 @@ function pickTheme(cx, cz) {
 const THEME_PROPS = {
   main_stage:  { treeDensity: 0.15, ambientCrowd: 30 },
   side_stage:  { treeDensity: 0.25, ambientCrowd: 16 },
+  tent_stage:  { treeDensity: 0.10, ambientCrowd: 22 },   // dense crowd inside
   food_plaza:  { treeDensity: 0.2,  ambientCrowd: 14 },
   vendor_row:  { treeDensity: 0.3,  ambientCrowd: 13 },
   drum_circle: { treeDensity: 0.4,  ambientCrowd: 12 },
@@ -204,6 +260,7 @@ const THEME_PROPS = {
 const THEME_BUILDERS = {
   main_stage: buildMainStage,
   side_stage: buildSideStage,
+  tent_stage: buildTentStageTheme,
   food_plaza: buildFoodPlaza,
   vendor_row: buildVendorRow,
   drum_circle: buildDrumCircle,
@@ -338,10 +395,6 @@ function buildCurvedPath(x1, z1, x2, z2, width, rng, material) {
 // ---------- Tree scattering ----------
 
 function scatterTrees(ctx, density) {
-  const TREE_GREENS = [0x4f8a4d, 0x5fa55d, 0x6dba6a, 0x4b7c4a, 0x82c277];
-  const trunkGeo = new THREE.CylinderGeometry(0.35, 0.5, 3.6, 8);
-  const trunkMat = new THREE.MeshStandardMaterial({ color: 0x6a4a2a, roughness: 0.95, flatShading: true });
-
   const targetCount = Math.floor(density * 18);
   let placed = 0;
   let tries = 0;
@@ -354,36 +407,7 @@ function scatterTrees(ctx, density) {
     if (Math.abs(z - ctx.czWorld) < 4 && Math.abs(x - ctx.cxWorld) < CHUNK_SIZE * 0.5) continue;
     if (registry.closestBuilding(new THREE.Vector3(x, 0, z), 2.5)) continue;
 
-    const tree = new THREE.Group();
-    const trunk = new THREE.Mesh(trunkGeo, trunkMat);
-    trunk.position.y = 1.8;
-    trunk.castShadow = true;
-    tree.add(trunk);
-
-    if (ctx.rng() < 0.65) {
-      const r = 1.6 + ctx.rng() * 1.0;
-      const leaf = new THREE.Mesh(
-        new THREE.IcosahedronGeometry(r, 1),
-        new THREE.MeshStandardMaterial({
-          color: TREE_GREENS[Math.floor(ctx.rng() * TREE_GREENS.length)],
-          roughness: 0.95,
-          flatShading: true,
-        })
-      );
-      leaf.position.y = 3.8 + ctx.rng() * 0.4;
-      leaf.castShadow = true;
-      tree.add(leaf);
-    } else {
-      const h = 4 + ctx.rng() * 2.5;
-      const cone = new THREE.Mesh(
-        new THREE.ConeGeometry(1.4, h, 8),
-        new THREE.MeshStandardMaterial({ color: 0x2d5d3e, roughness: 0.95, flatShading: true })
-      );
-      cone.position.y = 2 + h / 2;
-      cone.castShadow = true;
-      tree.add(cone);
-    }
-
+    const tree = buildTree(ctx.rng);
     tree.position.set(x, 0, z);
     tree.rotation.y = ctx.rng() * Math.PI * 2;
     ctx.group.add(tree);
@@ -418,6 +442,126 @@ function buildSideStage(ctx) {
   buildStage(ctx, x, z, false);
 }
 
+// Tent stage chunk theme — drops the big white-tent stage at the chunk
+// center, registers wall colliders, attractor, and dense crowd inside.
+function buildTentStageTheme(ctx) {
+  const tex = leafBannerTextures('#fff4d0', '#6fcf6a', '#ffd28a');
+  const tent = buildTentStage({ rng: ctx.rng, leafTexture: tex });
+  // Random yaw so tent openings face different directions across chunks.
+  const yaw = ctx.rng() * Math.PI * 2;
+  tent.group.position.set(ctx.cxWorld, 0, ctx.czWorld);
+  tent.group.rotation.y = yaw;
+  ctx.group.add(tent.group);
+
+  // Track the tent's stage lights with the rest of the light show.
+  for (const lens of tent.stageLights) {
+    stageLightLenses.push({
+      lens, chunkKey: ctx.key, baseColor: lens.material.color.getHex(),
+    });
+  }
+
+  // Helper: rotate a local (lx, lz) into world coordinates given the yaw.
+  const cosY = Math.cos(yaw);
+  const sinY = Math.sin(yaw);
+  const worldXZ = (lx, lz) => ({
+    x: ctx.cxWorld + lx * cosY + lz * sinY,
+    z: ctx.czWorld + -lx * sinY + lz * cosY,
+  });
+
+  // Stage colliders: re-use the inscribed-spheres approach from buildStage.
+  // Local stage coordinates are at tent.stagePos.
+  const w = tent.stageWidth;
+  const d = tent.stageDepth;
+  const sphereR = 2.5;
+  const innerW = Math.max(0.001, w - sphereR * 2);
+  const innerD = Math.max(0.001, d - sphereR * 2);
+  const cols = Math.max(2, Math.ceil(innerW / 3.5) + 1);
+  const rows = Math.max(2, Math.ceil(innerD / 3.5) + 1);
+  for (let cc = 0; cc < cols; cc++) {
+    for (let rr = 0; rr < rows; rr++) {
+      const localX = tent.stagePos.x + (-innerW / 2 + (cc / (cols - 1)) * innerW);
+      const localZ = tent.stagePos.z + (-innerD / 2 + (rr / (rows - 1)) * innerD);
+      const w3 = worldXZ(localX, localZ);
+      registry.add({
+        kind: 'stage',
+        position: new THREE.Vector3(w3.x, 1, w3.z),
+        footprint: sphereR,
+        collider: { radius: sphereR, damage: 9 },
+        chunkKey: ctx.key,
+      });
+    }
+  }
+
+  // Tent pole colliders so Zerble bounces off the four corners.
+  const halfW = tent.width / 2;
+  const halfD = tent.depth / 2;
+  for (const [lx, lz] of [
+    [-halfW, -halfD], [halfW, -halfD], [-halfW, halfD], [halfW, halfD],
+  ]) {
+    const w3 = worldXZ(lx, lz);
+    registry.add({
+      kind: 'tent',
+      position: new THREE.Vector3(w3.x, 0, w3.z),
+      footprint: 0.5,
+      collider: { radius: 0.5, damage: 3 },
+      chunkKey: ctx.key,
+    });
+  }
+
+  // Soundbooth platform collider (so Zerble can't drive through the mixer)
+  {
+    const w3 = worldXZ(tent.mixerPos.x, tent.mixerPos.z);
+    registry.add({
+      kind: 'tent',
+      position: new THREE.Vector3(w3.x, 0.5, w3.z),
+      footprint: 1.4,
+      collider: { radius: 1.4, damage: 5 },
+      attractor: { radius: 3, weight: 0.6 },
+      chunkKey: ctx.key,
+    });
+  }
+
+  // Attractor in front of the stage so crowds gather there even outside the
+  // tent placement loop below.
+  {
+    const w3 = worldXZ(0, tent.stagePos.z + d / 2 + 4);
+    registry.add({
+      kind: 'stage_front',
+      position: new THREE.Vector3(w3.x, 0, w3.z),
+      footprint: 0,
+      attractor: { radius: 10, weight: 2.5 },
+      chunkKey: ctx.key,
+    });
+  }
+
+  // Spawn the in-tent crowd directly so they actually appear inside the tent
+  // (the ambient-crowd pass spawns globally on the chunk, which would scatter
+  // them across the grass too).
+  if (ctx.crowd) {
+    for (const spot of tent.crowdSpots) {
+      const w3 = worldXZ(spot.x, spot.z);
+      ctx.crowd.spawn({
+        pos: new THREE.Vector3(w3.x, 0, w3.z),
+        chunkKey: ctx.key,
+        rng: ctx.rng,
+      });
+    }
+    // Sound engineer at the mixer
+    const m3 = worldXZ(tent.mixerPos.x, tent.mixerPos.z + 0.6);
+    ctx.crowd.spawn({
+      pos: new THREE.Vector3(m3.x, 0, m3.z),
+      chunkKey: ctx.key,
+      rng: ctx.rng,
+    });
+  }
+
+  // Spatial music — same brass style the tent vibes with.
+  const musicSeed = hash2(ctx.cx * 13 + 23, ctx.cz * 19 + 17);
+  const m3 = worldXZ(0, tent.stagePos.z);
+  const handle = Sound.attachStageMusic(m3.x, 4, m3.z, musicSeed, 'jam');
+  if (handle) stageMusic.push({ handle, chunkKey: ctx.key });
+}
+
 function buildFoodPlaza(ctx) {
   // 3-5 food trucks arranged around a central area
   const count = 3 + Math.floor(ctx.rng() * 3);
@@ -428,7 +572,7 @@ function buildFoodPlaza(ctx) {
     const ang = (i / count) * Math.PI * 2 + ctx.rng() * 0.4;
     const x = centerX + Math.cos(ang) * ring;
     const z = centerZ + Math.sin(ang) * ring;
-    const truck = buildFoodTruck(ctx);
+    const truck = buildFoodTruck(ctx.rng);
     truck.position.set(x, 0, z);
     truck.rotation.y = Math.atan2(centerX - x, centerZ - z); // face inward
     ctx.group.add(truck);
@@ -455,7 +599,7 @@ function buildVendorRow(ctx) {
       const t = i - (count - 1) / 2;
       const x = ctx.cxWorld + (axisH ? t * spacing : side * rowOffset);
       const z = ctx.czWorld + (axisH ? side * rowOffset : t * spacing);
-      const tent = buildTent(ctx);
+      const tent = buildTent(ctx.rng);
       tent.position.set(x, 0, z);
       tent.rotation.y = axisH ? (side < 0 ? 0 : Math.PI) : (side < 0 ? Math.PI / 2 : -Math.PI / 2);
       ctx.group.add(tent);
@@ -574,98 +718,20 @@ function buildOpenLawn(ctx) {
 // ---------- Reusable builders ----------
 
 function buildStage(ctx, x, z, isMain) {
-  const w = isMain ? 24 : 14;
-  const d = isMain ? 12 : 8;
-  const h = 1.5;
+  // ----- Visual model — the deck, banner, truss, speakers, lights -----
+  const leafTex = isMain ? leafBannerTextures('#fff4d0', '#6fcf6a', '#ffd28a') : null;
+  const stage = buildStageModel({ isMain, leafTexture: leafTex, rng: ctx.rng });
+  stage.group.position.set(x, 0, z);
+  // Match the original orientation: the front (banner side) faces -Z so the
+  // crowd attractor in +Z is "in front" of the stage.
+  ctx.group.add(stage.group);
 
-  const deck = new THREE.Mesh(
-    new THREE.BoxGeometry(w, h, d),
-    new THREE.MeshStandardMaterial({ color: 0x4a3a2a, roughness: 0.95, flatShading: true })
-  );
-  deck.position.set(x, h / 2, z);
-  deck.castShadow = true;
-  deck.receiveShadow = true;
-  ctx.group.add(deck);
-
-  const bannerColor = isMain ? 0x6fcf6a : [0xff9a8b, 0xc77dff, 0x66d9ff, 0xffd28a][Math.floor(ctx.rng() * 4)];
-  const banner = new THREE.Mesh(
-    new THREE.BoxGeometry(w, 7, 0.4),
-    new THREE.MeshStandardMaterial({ color: bannerColor, roughness: 0.9, flatShading: true })
-  );
-  banner.position.set(x, 4.5, z - d / 2 - 0.2);
-  banner.castShadow = true;
-  ctx.group.add(banner);
-
-  // LEAF on the main stage — single banner plane painted with the word
-  if (isMain) {
-    const bannerW = Math.min(w - 2, 16);
-    const leaf = new THREE.Mesh(
-      new THREE.PlaneGeometry(bannerW, 3.4),
-      new THREE.MeshStandardMaterial({
-        map: leafBannerTexture('#fff4d0', '#6fcf6a'),
-        emissive: 0xffd28a,
-        emissiveMap: leafBannerTexture('#ffd28a', '#000000'),
-        emissiveIntensity: 0.55,
-        roughness: 0.6,
-        side: THREE.DoubleSide,
-      })
-    );
-    // Sit slightly in front of the green banner's front face (front face is at z - d/2)
-    leaf.position.set(x, 5.3, z - d / 2 + 0.06);
-    ctx.group.add(leaf);
-  }
-
-  // Truss
-  const trussMat = new THREE.MeshStandardMaterial({ color: 0x2a1f3a, roughness: 0.5, metalness: 0.4, flatShading: true });
-  for (const [px, pz] of [
-    [-w / 2 + 0.3, -d / 2 + 0.3], [w / 2 - 0.3, -d / 2 + 0.3],
-    [-w / 2 + 0.3, d / 2 - 0.3], [w / 2 - 0.3, d / 2 - 0.3],
-  ]) {
-    const p = new THREE.Mesh(new THREE.BoxGeometry(0.25, 9, 0.25), trussMat);
-    p.position.set(x + px, 4.5, z + pz);
-    ctx.group.add(p);
-  }
-  for (const dx of [-w / 2, w / 2]) {
-    const b = new THREE.Mesh(new THREE.BoxGeometry(0.25, 0.25, d), trussMat);
-    b.position.set(x + dx, 9, z);
-    ctx.group.add(b);
-  }
-  for (const dz of [-d / 2, d / 2]) {
-    const b = new THREE.Mesh(new THREE.BoxGeometry(w, 0.25, 0.25), trussMat);
-    b.position.set(x, 9, z + dz);
-    ctx.group.add(b);
-  }
-
-  // Speaker stacks
-  for (const sx of [-w / 2 - 1, w / 2 + 1]) {
-    for (let sy = 0; sy < 3; sy++) {
-      const spk = new THREE.Mesh(
-        new THREE.BoxGeometry(1.6, 1.4, 1.4),
-        new THREE.MeshStandardMaterial({ color: 0x121212, roughness: 0.8, flatShading: true })
-      );
-      spk.position.set(x + sx, 1.4 + sy * 1.45, z - d / 2 + 1.2);
-      spk.castShadow = true;
-      ctx.group.add(spk);
-    }
-  }
-
-  // Stage lights
-  for (const lx of [-w * 0.3, 0, w * 0.3]) {
-    const colorHex = isMain ? [0xff6f9c, 0xffd28a, 0xb285ff][Math.floor(ctx.rng() * 3)] : 0xffd28a;
-    const lampLens = new THREE.Mesh(
-      new THREE.ConeGeometry(0.4, 0.6, 12, 1, true),
-      new THREE.MeshStandardMaterial({
-        color: colorHex,
-        emissive: colorHex,
-        emissiveIntensity: 2.5,
-        side: THREE.DoubleSide,
-        transparent: true,
-        opacity: 0.85,
-      })
-    );
-    lampLens.position.set(x + lx, 8.3, z);
-    lampLens.rotation.x = Math.PI;
-    ctx.group.add(lampLens);
+  const w = stage.deckWidth;
+  const d = stage.deckDepth;
+  const h = stage.deckHeight;
+  // Track lens meshes for the day-night light show
+  for (const lens of stage.stageLights) {
+    stageLightLenses.push({ lens, chunkKey: ctx.key, baseColor: lens.material.color.getHex() });
   }
 
   // ----- Colliders: spheres INSCRIBED in the deck rectangle -----
@@ -711,23 +777,16 @@ function buildStage(ctx, x, z, isMain) {
 
   // ----- The band on stage -----
   // Main stage gets a bigger ensemble (6 performers). Side stages get a trio.
+  // placeBandOnStage adds the performers as children of stage.group at LOCAL
+  // coords; we record world-space positions via stage.group's transform so the
+  // animator can wiggle them around the stage's height/yaw.
   const instruments = isMain
     ? ['lead_vocal', 'guitar', 'guitar', 'bass', 'drum', 'sax']
     : ['lead_vocal', 'guitar', 'drum'];
-  // Lay them out along the stage front, lead vocal center-front, others slightly behind.
-  const lineZ = z + 0.5; // slightly behind front edge, on the deck
-  const backZ = z - d * 0.25;
-  for (let i = 0; i < instruments.length; i++) {
-    const inst = instruments[i];
-    const isLead = inst === 'lead_vocal' || inst === 'drum' || inst === 'bass';
-    const spread = w * 0.32;
-    const spotX = x + ((i / (instruments.length - 1 || 1)) - 0.5) * spread * 2;
-    const spotZ = inst === 'drum' ? backZ : isLead && i === 0 ? lineZ + 1.0 : lineZ - 0.5;
-    const performer = makePerformer(ctx, inst);
-    performer.position.set(spotX, h, spotZ); // h = stage deck height
-    performer.rotation.y = Math.PI; // face the audience (local -Z faces +Z toward crowd)
-    ctx.group.add(performer);
-
+  const performers = placeBandOnStage(stage.group, instruments, {
+    deckWidth: w, deckDepth: d, deckHeight: h, rng: ctx.rng,
+  });
+  for (const performer of performers) {
     stagePerformers.push({
       group: performer,
       chunkKey: ctx.key,
@@ -738,251 +797,11 @@ function buildStage(ctx, x, z, isMain) {
   }
 }
 
-function makePerformer(ctx, instrument) {
-  const g = new THREE.Group();
-  const shirtColors = [0xff6f9c, 0xffd28a, 0xb285ff, 0x66d9ff, 0x6fcf6a, 0xff8a5b];
-  const shirt = shirtColors[Math.floor(ctx.rng() * shirtColors.length)];
-
-  const body = new THREE.Mesh(
-    new THREE.CapsuleGeometry(0.34, 1.1, 4, 8),
-    new THREE.MeshStandardMaterial({ color: shirt, roughness: 0.85, flatShading: true })
-  );
-  body.position.y = 0.9;
-  body.castShadow = true;
-  g.add(body);
-
-  const head = new THREE.Mesh(
-    new THREE.IcosahedronGeometry(0.3, 1),
-    new THREE.MeshStandardMaterial({ color: 0xe6c098, roughness: 0.9, flatShading: true })
-  );
-  head.position.y = 1.75;
-  head.castShadow = true;
-  g.add(head);
-
-  const brass = new THREE.MeshStandardMaterial({
-    color: 0xe8b042, roughness: 0.4, metalness: 0.85, flatShading: true,
-  });
-  const black = new THREE.MeshStandardMaterial({ color: 0x121212, roughness: 0.6, flatShading: true });
-  const wood = new THREE.MeshStandardMaterial({ color: 0x6a4a2a, roughness: 0.9, flatShading: true });
-
-  if (instrument === 'guitar') {
-    const guitarBody = new THREE.Mesh(
-      new THREE.BoxGeometry(0.55, 0.7, 0.15),
-      new THREE.MeshStandardMaterial({
-        color: [0x9b3b2a, 0x4a6f2a, 0x222244, 0xc28a44][Math.floor(ctx.rng() * 4)],
-        roughness: 0.5, flatShading: true,
-      })
-    );
-    guitarBody.position.set(0.15, 1.0, -0.35);
-    guitarBody.rotation.z = -0.4;
-    g.add(guitarBody);
-    const neck = new THREE.Mesh(new THREE.BoxGeometry(0.09, 1.0, 0.09), wood);
-    neck.position.set(-0.55, 1.25, -0.45);
-    neck.rotation.z = -0.4;
-    g.add(neck);
-    const head2 = new THREE.Mesh(new THREE.BoxGeometry(0.18, 0.18, 0.06), wood);
-    head2.position.set(-0.95, 1.45, -0.5);
-    head2.rotation.z = -0.4;
-    g.add(head2);
-  } else if (instrument === 'bass') {
-    const bassBody = new THREE.Mesh(
-      new THREE.BoxGeometry(0.6, 0.85, 0.18),
-      new THREE.MeshStandardMaterial({ color: 0x1a3658, roughness: 0.5, flatShading: true })
-    );
-    bassBody.position.set(0.1, 0.9, -0.35);
-    bassBody.rotation.z = -0.35;
-    g.add(bassBody);
-    const neck = new THREE.Mesh(new THREE.BoxGeometry(0.1, 1.2, 0.1), wood);
-    neck.position.set(-0.6, 1.2, -0.45);
-    neck.rotation.z = -0.35;
-    g.add(neck);
-  } else if (instrument === 'drum') {
-    // Kick drum + tom on a stand
-    const kick = new THREE.Mesh(
-      new THREE.CylinderGeometry(0.7, 0.7, 0.6, 16),
-      new THREE.MeshStandardMaterial({ color: 0xfff4d0, roughness: 0.7, flatShading: true })
-    );
-    kick.rotation.x = Math.PI / 2;
-    kick.position.set(0, 0.6, -0.6);
-    g.add(kick);
-    const tom = new THREE.Mesh(
-      new THREE.CylinderGeometry(0.32, 0.32, 0.4, 12),
-      new THREE.MeshStandardMaterial({ color: 0xc97a3b, roughness: 0.7, flatShading: true })
-    );
-    tom.position.set(0.45, 1.25, -0.55);
-    g.add(tom);
-    const cymbal = new THREE.Mesh(
-      new THREE.CylinderGeometry(0.4, 0.4, 0.03, 16),
-      brass
-    );
-    cymbal.position.set(-0.5, 1.65, -0.55);
-    cymbal.rotation.x = -0.15;
-    g.add(cymbal);
-  } else if (instrument === 'sax') {
-    const body2 = new THREE.Mesh(new THREE.CylinderGeometry(0.13, 0.18, 0.95, 10), brass);
-    body2.position.set(0.25, 1.25, -0.35);
-    body2.rotation.z = -0.35;
-    g.add(body2);
-    const bell = new THREE.Mesh(new THREE.ConeGeometry(0.28, 0.45, 12, 1, true), brass);
-    bell.position.set(0.45, 1.8, -0.35);
-    bell.rotation.z = -0.35;
-    g.add(bell);
-  } else {
-    // lead_vocal: just a mic on a stand
-    const standBase = new THREE.Mesh(new THREE.CylinderGeometry(0.18, 0.22, 0.05, 12), black);
-    standBase.position.set(0, 0.025, -0.4);
-    g.add(standBase);
-    const standPole = new THREE.Mesh(new THREE.CylinderGeometry(0.025, 0.025, 1.5, 8), black);
-    standPole.position.set(0, 0.8, -0.4);
-    g.add(standPole);
-    const mic = new THREE.Mesh(new THREE.SphereGeometry(0.09, 8, 6), black);
-    mic.position.set(0, 1.55, -0.4);
-    g.add(mic);
-  }
-
-  return g;
-}
-
-function buildTent(ctx) {
-  const g = new THREE.Group();
-
-  const baseColor = [0xfff4d0, 0xe7c995, 0xfddfa5, 0xd0c2a8][Math.floor(ctx.rng() * 4)];
-  const roofColor = [0xff6f9c, 0x6fcf6a, 0xffd28a, 0xb285ff, 0x66d9ff][Math.floor(ctx.rng() * 5)];
-
-  const legMat = new THREE.MeshStandardMaterial({ color: 0x3a2e22, roughness: 0.8, flatShading: true });
-  for (const [lx, lz] of [[-2, -2], [2, -2], [-2, 2], [2, 2]]) {
-    const leg = new THREE.Mesh(new THREE.BoxGeometry(0.15, 2.5, 0.15), legMat);
-    leg.position.set(lx, 1.25, lz);
-    leg.castShadow = true;
-    g.add(leg);
-  }
-
-  const roof = new THREE.Mesh(
-    new THREE.ConeGeometry(3.2, 1.8, 4),
-    new THREE.MeshStandardMaterial({ color: roofColor, roughness: 0.85, flatShading: true })
-  );
-  roof.position.y = 3.4;
-  roof.rotation.y = Math.PI / 4;
-  roof.castShadow = true;
-  g.add(roof);
-
-  const table = new THREE.Mesh(
-    new THREE.BoxGeometry(3.0, 0.1, 1.2),
-    new THREE.MeshStandardMaterial({ color: baseColor, roughness: 0.9, flatShading: true })
-  );
-  table.position.set(0, 1.0, 0);
-  table.castShadow = true;
-  table.receiveShadow = true;
-  g.add(table);
-
-  for (let i = 0; i < 3; i++) {
-    const obj = new THREE.Mesh(
-      new THREE.BoxGeometry(0.25 + ctx.rng() * 0.2, 0.2 + ctx.rng() * 0.3, 0.25),
-      new THREE.MeshStandardMaterial({
-        color: new THREE.Color().setHSL(ctx.rng(), 0.7, 0.55),
-        roughness: 0.7,
-        flatShading: true,
-      })
-    );
-    obj.position.set(-1 + i * 1, 1.2, 0);
-    g.add(obj);
-  }
-
-  return g;
-}
-
-function buildFoodTruck(ctx) {
-  const g = new THREE.Group();
-
-  const color = [0xff6f9c, 0xffd28a, 0x66d9ff, 0x6fcf6a, 0xb285ff, 0xff8a5b][Math.floor(ctx.rng() * 6)];
-  const bodyMat = new THREE.MeshStandardMaterial({ color, roughness: 0.55, flatShading: true });
-  const darkMat = new THREE.MeshStandardMaterial({ color: 0x1c1c1c, roughness: 0.8, flatShading: true });
-  const windowMat = new THREE.MeshStandardMaterial({
-    color: 0x97e6ff, emissive: 0x97e6ff, emissiveIntensity: 0.15, roughness: 0.2,
-  });
-
-  const box = new THREE.Mesh(new THREE.BoxGeometry(6, 3, 3.2), bodyMat);
-  box.position.set(0.5, 1.9, 0);
-  box.castShadow = true;
-  box.receiveShadow = true;
-  g.add(box);
-
-  const cab = new THREE.Mesh(new THREE.BoxGeometry(2, 2.2, 3.0), bodyMat);
-  cab.position.set(-2.5, 1.4, 0);
-  cab.castShadow = true;
-  g.add(cab);
-
-  const wind = new THREE.Mesh(new THREE.BoxGeometry(0.05, 1.0, 2.5), windowMat);
-  wind.position.set(-3.55, 1.9, 0);
-  g.add(wind);
-
-  const serv = new THREE.Mesh(new THREE.BoxGeometry(3.5, 1.0, 0.05), windowMat);
-  serv.position.set(0.5, 2.4, 1.6);
-  g.add(serv);
-
-  const canopy = new THREE.Mesh(
-    new THREE.BoxGeometry(3.6, 0.1, 1.2),
-    new THREE.MeshStandardMaterial({ color: 0xfff4d0, roughness: 0.8, flatShading: true })
-  );
-  canopy.position.set(0.5, 3.1, 2.3);
-  canopy.rotation.x = -0.2;
-  canopy.castShadow = true;
-  g.add(canopy);
-
-  for (const [wx, wz] of [[-2.5, -1.5], [-2.5, 1.5], [1.5, -1.5], [1.5, 1.5]]) {
-    const w = new THREE.Mesh(new THREE.CylinderGeometry(0.5, 0.5, 0.3, 14), darkMat);
-    w.rotation.z = Math.PI / 2;
-    w.position.set(wx, 0.5, wz);
-    g.add(w);
-  }
-
-  const sign = new THREE.Mesh(
-    new THREE.BoxGeometry(4, 0.7, 0.15),
-    new THREE.MeshStandardMaterial({
-      color: 0xfff4d0, emissive: 0xffe066, emissiveIntensity: 0.4, roughness: 0.5,
-    })
-  );
-  sign.position.set(0.5, 3.8, 1);
-  sign.rotation.x = -0.15;
-  g.add(sign);
-
-  return g;
-}
-
+// EntranceArch wrapper — uses the model and registers post colliders.
 function buildEntranceArch(ctx, x, z) {
-  const sideMat = new THREE.MeshStandardMaterial({ color: 0x4f8a4d, roughness: 0.9, flatShading: true });
-  const left = new THREE.Mesh(new THREE.BoxGeometry(0.6, 8, 0.6), sideMat);
-  left.position.set(x - 6, 4, z);
-  left.castShadow = true;
-  ctx.group.add(left);
-
-  const right = left.clone();
-  right.position.x = x + 6;
-  ctx.group.add(right);
-
-  // The arch: half-torus, NOT rotated, so its curve opens downward like a real arch.
-  const arch = new THREE.Mesh(
-    new THREE.TorusGeometry(6, 0.4, 8, 24, Math.PI),
-    new THREE.MeshStandardMaterial({ color: 0xff6f9c, roughness: 0.7, flatShading: true })
-  );
-  arch.position.set(x, 8, z);
-  arch.castShadow = true;
+  const arch = buildEntranceArchModel(leafBannerTextures('#fff4d0', '#ff6f9c', '#ffe066'));
+  arch.position.set(x, 0, z);
   ctx.group.add(arch);
-
-  // LEAF banner — a thin double-sided plane painted with the word, hung from the arch.
-  const bannerGeo = new THREE.PlaneGeometry(8, 2.2);
-  const bannerMat = new THREE.MeshStandardMaterial({
-    map: leafBannerTexture('#fff4d0', '#ff6f9c'),
-    emissive: 0xffe066,
-    emissiveMap: leafBannerTexture('#ffe066', '#000000'),
-    emissiveIntensity: 0.55,
-    roughness: 0.6,
-    side: THREE.DoubleSide,
-    transparent: false,
-  });
-  const banner = new THREE.Mesh(bannerGeo, bannerMat);
-  banner.position.set(x, 10.5, z);
-  ctx.group.add(banner);
 
   registry.add({
     kind: 'arch',
@@ -1000,130 +819,26 @@ function buildEntranceArch(ctx, x, z) {
   });
 }
 
-// Cached canvas texture for the "LEAF" banner used on arches and stage banners.
-const _leafTexCache = new Map();
-function leafBannerTexture(textColor, bgColor) {
-  const key = `${textColor}|${bgColor}`;
-  if (_leafTexCache.has(key)) return _leafTexCache.get(key);
-
-  const c = document.createElement('canvas');
-  c.width = 1024;
-  c.height = 256;
-  const cx = c.getContext('2d');
-
-  cx.fillStyle = bgColor;
-  cx.fillRect(0, 0, c.width, c.height);
-
-  // Subtle border
-  cx.strokeStyle = 'rgba(0,0,0,0.18)';
-  cx.lineWidth = 8;
-  cx.strokeRect(8, 8, c.width - 16, c.height - 16);
-
-  cx.fillStyle = textColor;
-  cx.font = 'bold 200px "Trebuchet MS", "Helvetica Neue", Helvetica, Arial, sans-serif';
-  cx.textAlign = 'center';
-  cx.textBaseline = 'middle';
-  cx.fillText('LEAF', c.width / 2, c.height / 2 + 8);
-
-  const tex = new THREE.CanvasTexture(c);
-  tex.colorSpace = THREE.SRGBColorSpace;
-  tex.anisotropy = 8;
-  _leafTexCache.set(key, tex);
-  return tex;
-}
-
-// Standalone builder for the sandbox — wraps buildHammock with a synthetic
-// ctx so the sandbox can drop a hammock into its scene without bringing in
-// the whole chunk system.
-export function buildHammockStandalone(x, z, rng = Math.random) {
-  const group = new THREE.Group();
-  group.name = 'sandbox-hammock';
-  buildHammock({ group, rng, cxWorld: 0, czWorld: 0, key: 'sandbox' }, x, z);
-  return group;
-}
-
+// Hammock wrapper — uses the model and registers the entry crowd.js consults.
 function buildHammock(ctx, x, z) {
-  // Curved cloth between two posts. Sling geometry is built directly as a
-  // BufferGeometry: a ribbon of triangles following a cosine sag so the
-  // hammock dips in the middle the way a real one would.
-  const postMat = new THREE.MeshStandardMaterial({ color: 0x6a4a2a, roughness: 0.95, flatShading: true });
-  const slingColor = [0xff6f9c, 0xffd28a, 0x6fcf6a, 0x66d9ff, 0xb285ff][Math.floor(ctx.rng() * 5)];
+  const { group, seatPos, yaw } = buildHammockModel(x, z, ctx.rng);
+  ctx.group.add(group);
 
-  const yaw = ctx.rng() * Math.PI * 2;
-  const cosY = Math.cos(yaw);
-  const sinY = Math.sin(yaw);
-  const halfLen = 2.0;     // post-to-post half-length
-  const restY = 1.5;        // sling height at the posts
-  const sagDepth = 0.55;    // how deep the middle sags
-  const slingW = 1.05;
-
-  // Two posts at ±halfLen along the rotated long axis
-  for (const s of [-1, 1]) {
-    const post = new THREE.Mesh(new THREE.CylinderGeometry(0.12, 0.15, 2.2, 8), postMat);
-    post.position.set(x + s * halfLen * cosY, 1.1, z + s * halfLen * sinY);
-    post.castShadow = true;
-    ctx.group.add(post);
-  }
-
-  // Curved sling
-  const segments = 16;
-  const verts = [];
-  const indices = [];
-  for (let i = 0; i <= segments; i++) {
-    const t = i / segments;
-    const u = (t - 0.5) * 2;     // -1 .. 1
-    const along = u * halfLen;
-    const sag = -Math.cos(u * Math.PI / 2) * sagDepth;
-    const py = restY + sag;
-    for (const side of [-1, 1]) {
-      const sideOff = side * slingW / 2;
-      // Apply yaw rotation around Y
-      const lx = along * cosY - sideOff * sinY;
-      const lz = along * sinY + sideOff * cosY;
-      verts.push(x + lx, py, z + lz);
-    }
-  }
-  for (let i = 0; i < segments; i++) {
-    const a = i * 2, b = i * 2 + 1, c = (i + 1) * 2, d = (i + 1) * 2 + 1;
-    indices.push(a, c, b);
-    indices.push(b, c, d);
-  }
-  const slingGeo = new THREE.BufferGeometry();
-  slingGeo.setAttribute('position', new THREE.Float32BufferAttribute(verts, 3));
-  slingGeo.setIndex(indices);
-  slingGeo.computeVertexNormals();
-
-  const sling = new THREE.Mesh(
-    slingGeo,
-    new THREE.MeshStandardMaterial({
-      color: slingColor,
-      roughness: 0.95,
-      side: THREE.DoubleSide,
-      flatShading: true,
-    }),
-  );
-  sling.castShadow = true;
-  sling.receiveShadow = true;
-  ctx.group.add(sling);
-
-  // Seat position = deepest dip + a little Y so the NPC's body sits in the
-  // sling rather than passing through it.
-  const seatPos = new THREE.Vector3(x, restY - sagDepth + 0.2, z);
-
-  // Registry entry includes a `hammock` sub-object that crowd.js consults to
-  // claim the hammock for a riding NPC.
   registry.add({
     kind: 'hammock',
     position: new THREE.Vector3(x, 0, z),
     footprint: 1.6,
     attractor: { radius: 3, weight: 0.6 },
     chunkKey: ctx.key,
-    hammock: {
-      seatPos,
-      yaw,
-      occupied: false,
-    },
+    hammock: { seatPos, yaw, occupied: false },
   });
+}
+
+// Sandbox helper — back-compat with the old export shape (returns a Group).
+export function buildHammockStandalone(x, z, rng = Math.random) {
+  const { group } = buildHammockModel(x, z, rng);
+  group.name = 'sandbox-hammock';
+  return group;
 }
 
 function placePolePair(ctx, ax, az, bx, bz) {

@@ -3,9 +3,15 @@
 //   .update(dt) : per-frame movement
 //   .colliders : array of { position: Vector3, radius: number, damage: number, kind: string }
 //
-// All geometry is procedural and low-poly.
+// Geometry lives in src/models/. This file owns path/AI behavior + colliders.
 
 import * as THREE from 'three';
+import { buildPuppet } from './models/puppet.js';
+import { buildBandMember } from './models/bandMember.js';
+import { buildParasolMarshal } from './models/parasolMarshal.js';
+import { buildKid } from './models/kid.js';
+import { buildWook } from './models/wook.js';
+import { Sound } from './sound.js';
 
 const TAU = Math.PI * 2;
 
@@ -33,7 +39,7 @@ export class PuppetParade {
     this.puppets = [];
     const PUPPET_COUNT = 6;
     for (let i = 0; i < PUPPET_COUNT; i++) {
-      const puppet = makePuppet(i);
+      const puppet = buildPuppet(i);
       const ahead = i * 4.5;  // spacing along the path
       puppet.userData.distance = -ahead;
       this.group.add(puppet);
@@ -74,91 +80,6 @@ export class PuppetParade {
   }
 }
 
-function makePuppet(seed) {
-  const g = new THREE.Group();
-
-  // A whimsical creature: tall thin pole with a giant head and floppy arms.
-  const hueA = (seed * 0.37) % 1;
-  const colorA = new THREE.Color().setHSL(hueA, 0.75, 0.55).getHex();
-  const colorB = new THREE.Color().setHSL((hueA + 0.5) % 1, 0.75, 0.6).getHex();
-
-  // Floating creature body (held aloft)
-  const body = new THREE.Group();
-  body.position.y = 4;
-
-  // Head (large oblong)
-  const head = new THREE.Mesh(
-    new THREE.IcosahedronGeometry(1.2, 1),
-    new THREE.MeshStandardMaterial({ color: colorA, roughness: 0.8, flatShading: true })
-  );
-  head.scale.set(1, 1.25, 1);
-  head.castShadow = true;
-  body.add(head);
-
-  // Eyes — big white discs
-  for (const ex of [-0.45, 0.45]) {
-    const eye = new THREE.Mesh(
-      new THREE.SphereGeometry(0.25, 12, 10),
-      new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.4 })
-    );
-    eye.position.set(ex, 0.2, -0.95);
-    body.add(eye);
-
-    const pupil = new THREE.Mesh(
-      new THREE.SphereGeometry(0.12, 10, 8),
-      new THREE.MeshStandardMaterial({ color: 0x000000 })
-    );
-    pupil.position.set(ex, 0.2, -1.15);
-    body.add(pupil);
-  }
-
-  // Mouth (open, dark)
-  const mouth = new THREE.Mesh(
-    new THREE.BoxGeometry(0.6, 0.25, 0.1),
-    new THREE.MeshStandardMaterial({ color: 0x222035 })
-  );
-  mouth.position.set(0, -0.45, -1.05);
-  body.add(mouth);
-
-  // Floppy arms (two cylinders) hanging from sides
-  for (const ax of [-1.2, 1.2]) {
-    const arm = new THREE.Mesh(
-      new THREE.CylinderGeometry(0.18, 0.12, 2.4, 8),
-      new THREE.MeshStandardMaterial({ color: colorB, roughness: 0.9, flatShading: true })
-    );
-    arm.position.set(ax, -1.2, 0);
-    arm.rotation.z = ax > 0 ? -0.25 : 0.25;
-    arm.castShadow = true;
-    body.add(arm);
-  }
-
-  // Frilly collar (a torus)
-  const collar = new THREE.Mesh(
-    new THREE.TorusGeometry(0.9, 0.18, 8, 16),
-    new THREE.MeshStandardMaterial({ color: colorB, roughness: 0.9, flatShading: true })
-  );
-  collar.rotation.x = Math.PI / 2;
-  collar.position.y = -1;
-  body.add(collar);
-
-  g.add(body);
-
-  // Handler (a person under the puppet)
-  const handler = makeSimpleNPC(0x222033, 0xe6c098);
-  handler.position.y = 0;
-  g.add(handler);
-
-  // Pole connecting handler to puppet body
-  const pole = new THREE.Mesh(
-    new THREE.CylinderGeometry(0.06, 0.06, 3.5, 8),
-    new THREE.MeshStandardMaterial({ color: 0x3a2e22, roughness: 0.95 })
-  );
-  pole.position.y = 2.8;
-  g.add(pole);
-
-  return g;
-}
-
 // =================================================================
 // BRASS BAND — a cluster of marching musicians
 // =================================================================
@@ -182,18 +103,23 @@ export class BrassBand {
     this.speed = 1.8;
 
     this.members = [];
+    // Grand-marshal-led second-line formation: parasol up front, two
+    // trumpets + sax behind, tuba + drum + trombone in the back row.
+    // Distinct instruments per row gives the silhouette real variety.
     const formation = [
-      [0, 0, 'trumpet'],
-      [-1.4, -1.2, 'trumpet'],
-      [1.4, -1.2, 'sax'],
-      [0, -2.6, 'tuba'],
-      [-2.6, -2.4, 'drum'],
-      [2.6, -2.4, 'sax'],
+      [0, 1.6, 'parasol'],         // grand marshal up front (positive Z = ahead)
+      [-1.4, 0, 'trumpet'],
+      [1.4, 0, 'trumpet'],
+      [0, -1.0, 'sax'],
+      [-2.6, -2.2, 'trombone'],
+      [0, -2.4, 'tuba'],
+      [2.6, -2.2, 'drum'],
     ];
 
     for (const [offX, offZ, instrument] of formation) {
-      const m = makeBandMember(instrument);
+      const m = instrument === 'parasol' ? buildParasolMarshal() : buildBandMember(instrument);
       m.userData.formationOff = new THREE.Vector3(offX, 0, offZ);
+      m.userData.instrument = instrument;
       this.group.add(m);
       this.members.push(m);
     }
@@ -205,9 +131,18 @@ export class BrassBand {
       kind: 'brass',
     }));
 
+    this._parasolPhase = 0;
+
     this.distance = 0;
     this._tmpA = new THREE.Vector3();
     this._tmpB = new THREE.Vector3();
+
+    // Second-line groove that follows the band around the world. The seed
+    // is just a constant so the band's tune is stable across reloads — only
+    // one brass band exists in the game so per-band variation is moot.
+    this._music = Sound.attachStageMusic(
+      this.path[0].x, 1, this.path[0].z, 0xb4a55, 'second_line',
+    );
   }
 
   update(dt) {
@@ -232,191 +167,22 @@ export class BrassBand {
       const t = performance.now() * 0.004 + i;
       m.children[0].position.y = 0.85 + Math.abs(Math.sin(t * 2)) * 0.08;
 
+      // The grand marshal's parasol twirls — handle separately.
+      if (m.userData.instrument === 'parasol') {
+        const parasol = m.userData.parasol;
+        if (parasol) parasol.rotation.y += dt * 2.4;
+      }
+
       this.colliders[i].position.copy(m.position);
       this.colliders[i].position.y = 1;
     }
+
+    // Move the spatial music source to the band leader's current position so
+    // the music actually walks around the festival with them.
+    if (this._music && this._music.setPosition) {
+      this._music.setPosition(leadPos.x, 1, leadPos.z);
+    }
   }
-}
-
-function makeBandMember(instrument) {
-  const g = new THREE.Group();
-  const body = makeSimpleNPC(
-    instrument === 'drum' ? 0x6a2a2a : 0xc77dff,
-    0xe6c098
-  );
-  g.add(body);
-
-  // Hat
-  const hat = new THREE.Mesh(
-    new THREE.CylinderGeometry(0.32, 0.32, 0.35, 12),
-    new THREE.MeshStandardMaterial({ color: 0x121212, roughness: 0.8 })
-  );
-  hat.position.set(0, 2.05, 0);
-  g.add(hat);
-  const brim = new THREE.Mesh(
-    new THREE.CylinderGeometry(0.45, 0.45, 0.05, 12),
-    new THREE.MeshStandardMaterial({ color: 0x121212, roughness: 0.8 })
-  );
-  brim.position.set(0, 1.9, 0);
-  g.add(brim);
-
-  // Instrument
-  const brass = new THREE.MeshStandardMaterial({
-    color: 0xe8b042,
-    roughness: 0.4,
-    metalness: 0.85,
-    flatShading: true,
-  });
-
-  if (instrument === 'tuba') {
-    // A big spiral approximated with a torus + bell cone
-    const ring = new THREE.Mesh(new THREE.TorusGeometry(0.55, 0.18, 10, 16), brass);
-    ring.position.set(0, 1.4, -0.5);
-    g.add(ring);
-    const bell = new THREE.Mesh(new THREE.ConeGeometry(0.55, 0.7, 14, 1, true), brass);
-    bell.position.set(0, 2.0, -0.5);
-    bell.rotation.x = Math.PI;
-    g.add(bell);
-  } else if (instrument === 'drum') {
-    const drum = new THREE.Mesh(
-      new THREE.CylinderGeometry(0.7, 0.7, 0.6, 16),
-      new THREE.MeshStandardMaterial({ color: 0xfff4d0, roughness: 0.7, flatShading: true })
-    );
-    drum.rotation.x = Math.PI / 2;
-    drum.position.set(0, 1.2, -0.5);
-    g.add(drum);
-    // Drum head color band
-    const band = new THREE.Mesh(
-      new THREE.CylinderGeometry(0.72, 0.72, 0.1, 16),
-      new THREE.MeshStandardMaterial({ color: 0xff6f9c })
-    );
-    band.rotation.x = Math.PI / 2;
-    band.position.set(0, 1.2, -0.5);
-    g.add(band);
-  } else if (instrument === 'sax') {
-    const body = new THREE.Mesh(new THREE.CylinderGeometry(0.13, 0.18, 0.95, 10), brass);
-    body.position.set(0.35, 1.35, -0.4);
-    body.rotation.z = -0.35;
-    g.add(body);
-    const bell = new THREE.Mesh(new THREE.ConeGeometry(0.28, 0.45, 12, 1, true), brass);
-    bell.position.set(0.55, 1.9, -0.4);
-    bell.rotation.z = -0.35;
-    g.add(bell);
-  } else {
-    // trumpet
-    const tube = new THREE.Mesh(new THREE.CylinderGeometry(0.07, 0.07, 0.85, 8), brass);
-    tube.rotation.z = Math.PI / 2;
-    tube.position.set(0, 1.5, -0.45);
-    g.add(tube);
-    const bell = new THREE.Mesh(new THREE.ConeGeometry(0.18, 0.35, 12, 1, true), brass);
-    bell.rotation.z = Math.PI / 2;
-    bell.position.set(0.5, 1.5, -0.45);
-    g.add(bell);
-  }
-
-  return g;
-}
-
-// =================================================================
-// FOOD TRUCKS — stationary
-// =================================================================
-
-export function buildFoodTrucks(scene) {
-  const colliders = [];
-
-  const locations = [
-    { x: 75, z: -15, color: 0xff6f9c, name: 'TACOS' },
-    { x: 75, z: 5, color: 0xffd28a, name: 'BBQ' },
-    { x: 75, z: 25, color: 0x66d9ff, name: 'PHO' },
-    { x: -75, z: -10, color: 0x6fcf6a, name: 'KOMBUCHA' },
-    { x: -75, z: 10, color: 0xb285ff, name: 'WAFFLES' },
-  ];
-
-  for (const loc of locations) {
-    const truck = makeFoodTruck(loc.color, loc.name);
-    truck.position.set(loc.x, 0, loc.z);
-    truck.rotation.y = loc.x > 0 ? -Math.PI / 2 : Math.PI / 2;
-    scene.add(truck);
-
-    colliders.push({
-      position: new THREE.Vector3(loc.x, 1.5, loc.z),
-      radius: 3.6,
-      damage: 12,
-      kind: 'truck',
-    });
-  }
-
-  return colliders;
-}
-
-function makeFoodTruck(color, _name) {
-  const g = new THREE.Group();
-
-  const bodyMat = new THREE.MeshStandardMaterial({ color, roughness: 0.55, flatShading: true });
-  const darkMat = new THREE.MeshStandardMaterial({ color: 0x1c1c1c, roughness: 0.8, flatShading: true });
-  const windowMat = new THREE.MeshStandardMaterial({
-    color: 0x97e6ff,
-    emissive: 0x97e6ff,
-    emissiveIntensity: 0.15,
-    roughness: 0.2,
-  });
-
-  // Cargo box
-  const box = new THREE.Mesh(new THREE.BoxGeometry(6, 3, 3.2), bodyMat);
-  box.position.set(0.5, 1.9, 0);
-  box.castShadow = true;
-  box.receiveShadow = true;
-  g.add(box);
-
-  // Cab
-  const cab = new THREE.Mesh(new THREE.BoxGeometry(2, 2.2, 3.0), bodyMat);
-  cab.position.set(-2.5, 1.4, 0);
-  cab.castShadow = true;
-  g.add(cab);
-
-  // Cab windshield
-  const wind = new THREE.Mesh(new THREE.BoxGeometry(0.05, 1.0, 2.5), windowMat);
-  wind.position.set(-3.55, 1.9, 0);
-  g.add(wind);
-
-  // Serving window (opens to one side)
-  const serv = new THREE.Mesh(new THREE.BoxGeometry(3.5, 1.0, 0.05), windowMat);
-  serv.position.set(0.5, 2.4, 1.6);
-  g.add(serv);
-
-  // Canopy
-  const canopy = new THREE.Mesh(
-    new THREE.BoxGeometry(3.6, 0.1, 1.2),
-    new THREE.MeshStandardMaterial({ color: 0xfff4d0, roughness: 0.8, flatShading: true })
-  );
-  canopy.position.set(0.5, 3.1, 2.3);
-  canopy.rotation.x = -0.2;
-  canopy.castShadow = true;
-  g.add(canopy);
-
-  // Wheels
-  for (const [wx, wz] of [[-2.5, -1.5], [-2.5, 1.5], [1.5, -1.5], [1.5, 1.5]]) {
-    const w = new THREE.Mesh(new THREE.CylinderGeometry(0.5, 0.5, 0.3, 14), darkMat);
-    w.rotation.z = Math.PI / 2;
-    w.position.set(wx, 0.5, wz);
-    g.add(w);
-  }
-
-  // Roof sign
-  const sign = new THREE.Mesh(
-    new THREE.BoxGeometry(4, 0.7, 0.15),
-    new THREE.MeshStandardMaterial({
-      color: 0xfff4d0,
-      emissive: 0xffe066,
-      emissiveIntensity: 0.4,
-      roughness: 0.5,
-    })
-  );
-  sign.position.set(0.5, 3.8, 1);
-  sign.rotation.x = -0.15;
-  g.add(sign);
-
-  return g;
 }
 
 // =================================================================
@@ -440,7 +206,7 @@ export class KidGaggle {
     for (const c of centers) {
       const gaggleSize = 4 + Math.floor(Math.random() * 3);
       for (let i = 0; i < gaggleSize; i++) {
-        const k = makeKid();
+        const k = buildKid();
         k.position.copy(c);
         k.position.x += (Math.random() - 0.5) * 8;
         k.position.z += (Math.random() - 0.5) * 8;
@@ -460,63 +226,87 @@ export class KidGaggle {
     }
   }
 
-  update(dt) {
+  // dt: frame delta. bubbles/zerble are optional — when present, kids go
+  // gaga for bubbles (steer toward the nearest one) and the whole gaggle
+  // slowly drifts toward wherever Zerble is so they don't get stuck at
+  // their birth anchor once he's wandered off.
+  update(dt, bubbles, zerble) {
+    // Collect live bubble positions once per frame so we don't iterate the
+    // whole pool inside every kid's loop.
+    const bubblePositions = [];
+    if (bubbles) bubbles.forEachAlive((b) => bubblePositions.push(b.pos));
+
+    // Kid gaggles slowly drift their anchor toward Zerble so they actually
+    // follow him around the festival instead of marooning at their spawn.
+    if (zerble) {
+      // Each gaggle anchor is shared by reference across its kids — but to
+      // keep things simple here we lerp each kid's anchor individually.
+      for (const k of this.kids) {
+        k.userData.center.x += (zerble.position.x - k.userData.center.x) * Math.min(1, dt * 0.25);
+        k.userData.center.z += (zerble.position.z - k.userData.center.z) * Math.min(1, dt * 0.25);
+      }
+    }
+
+    const BUBBLE_ATTRACT_RANGE = 9;        // start chasing a bubble within this
+    const BUBBLE_GRAB_RANGE = 0.7;         // close enough to "play with" it
+    const BUBBLE_ATTRACT_SPEED = 4.2;      // sprint speed when chasing
+
     for (let i = 0; i < this.kids.length; i++) {
       const k = this.kids[i];
 
-      k.userData.turnTimer -= dt;
-      if (k.userData.turnTimer <= 0) {
-        k.userData.heading += (Math.random() - 0.5) * 1.8;
-        k.userData.turnTimer = 0.5 + Math.random() * 1.5;
+      // ---- Find nearest live bubble (if any) ----
+      let chaseDx = 0, chaseDz = 0, chaseD = Infinity;
+      for (const bp of bubblePositions) {
+        const dx = bp.x - k.position.x;
+        const dz = bp.z - k.position.z;
+        const d = Math.hypot(dx, dz);
+        if (d < chaseD && d < BUBBLE_ATTRACT_RANGE) {
+          chaseD = d; chaseDx = dx; chaseDz = dz;
+        }
       }
 
-      const dx = Math.sin(k.userData.heading);
-      const dz = -Math.cos(k.userData.heading);
-      k.position.x += dx * k.userData.speed * dt;
-      k.position.z += dz * k.userData.speed * dt;
+      if (chaseD < BUBBLE_ATTRACT_RANGE && chaseD > BUBBLE_GRAB_RANGE) {
+        // Chase the bubble! Set heading toward it and sprint.
+        const inv = 1 / (chaseD || 1);
+        // userData.heading uses: dx = sin(h), dz = -cos(h)  →  h = atan2(dx, -dz)
+        k.userData.heading = Math.atan2(chaseDx * inv, -chaseDz * inv);
+        k.userData.turnTimer = 0.4 + Math.random() * 0.4;
+        const stepSpeed = BUBBLE_ATTRACT_SPEED;
+        k.position.x += Math.sin(k.userData.heading) * stepSpeed * dt;
+        k.position.z += -Math.cos(k.userData.heading) * stepSpeed * dt;
+      } else {
+        // Default wander behavior with periodic course changes
+        k.userData.turnTimer -= dt;
+        if (k.userData.turnTimer <= 0) {
+          k.userData.heading += (Math.random() - 0.5) * 1.8;
+          k.userData.turnTimer = 0.5 + Math.random() * 1.5;
+        }
 
-      // Stay within ~12m of their gaggle center
-      const cx = k.position.x - k.userData.center.x;
-      const cz = k.position.z - k.userData.center.z;
-      const cd = Math.hypot(cx, cz);
-      if (cd > 12) {
-        // Steer back toward center
-        k.userData.heading = Math.atan2(-cx, -cz) + (Math.random() - 0.5) * 0.4;
+        const dx = Math.sin(k.userData.heading);
+        const dz = -Math.cos(k.userData.heading);
+        k.position.x += dx * k.userData.speed * dt;
+        k.position.z += dz * k.userData.speed * dt;
+
+        // Stay within ~12m of their gaggle center
+        const cx = k.position.x - k.userData.center.x;
+        const cz = k.position.z - k.userData.center.z;
+        const cd = Math.hypot(cx, cz);
+        if (cd > 12) {
+          k.userData.heading = Math.atan2(-cx, -cz) + (Math.random() - 0.5) * 0.4;
+        }
       }
 
       k.rotation.y = k.userData.heading;
 
-      // Lil hop
-      const t = performance.now() * 0.012 + i;
-      k.children[0].position.y = 0.55 + Math.abs(Math.sin(t * 2)) * 0.15;
+      // Lil hop — bouncier when chasing a bubble (they're excited)
+      const bouncy = chaseD < BUBBLE_ATTRACT_RANGE ? 0.22 : 0.15;
+      const tMs = performance.now() * 0.012 + i;
+      k.children[0].position.y = 0.55 + Math.abs(Math.sin(tMs * 2)) * bouncy;
 
       this.colliders[i].position.copy(k.position);
       this.colliders[i].position.y = 0.6;
     }
   }
-}
-
-function makeKid() {
-  const g = new THREE.Group();
-
-  const shirtColor = new THREE.Color().setHSL(Math.random(), 0.7, 0.6).getHex();
-  const body = new THREE.Mesh(
-    new THREE.CapsuleGeometry(0.22, 0.55, 4, 8),
-    new THREE.MeshStandardMaterial({ color: shirtColor, roughness: 0.85, flatShading: true })
-  );
-  body.position.y = 0.55;
-  body.castShadow = true;
-  g.add(body);
-
-  const head = new THREE.Mesh(
-    new THREE.IcosahedronGeometry(0.22, 1),
-    new THREE.MeshStandardMaterial({ color: 0xe6c098, roughness: 0.9, flatShading: true })
-  );
-  head.position.y = 1.15;
-  head.castShadow = true;
-  g.add(head);
-
-  return g;
 }
 
 // =================================================================
@@ -532,7 +322,7 @@ export class Wooks {
 
     const WOOK_COUNT = 7;
     for (let i = 0; i < WOOK_COUNT; i++) {
-      const w = makeWook();
+      const w = buildWook();
       // Drift in slow circles around random anchor points
       const ang = Math.random() * TAU;
       const rad = 40 + Math.random() * 80;
@@ -573,152 +363,9 @@ export class Wooks {
   }
 }
 
-function makeWook() {
-  const g = new THREE.Group();
-
-  // Tie-dye body: a tall capsule with hue-shifting color (we approximate via patches of different colored boxes layered)
-  const wookGroup = new THREE.Group();
-  const colors = [0xff6f9c, 0xffd28a, 0x6fcf6a, 0x66d9ff, 0xb285ff];
-
-  const body = new THREE.Mesh(
-    new THREE.CapsuleGeometry(0.45, 1.4, 4, 8),
-    new THREE.MeshStandardMaterial({
-      color: colors[Math.floor(Math.random() * colors.length)],
-      roughness: 0.95,
-      flatShading: true,
-    })
-  );
-  body.position.y = 1.1;
-  body.castShadow = true;
-  wookGroup.add(body);
-
-  // Tie-dye splotches (small flat decals as boxes)
-  for (let i = 0; i < 4; i++) {
-    const splotch = new THREE.Mesh(
-      new THREE.BoxGeometry(0.4, 0.4, 0.02),
-      new THREE.MeshStandardMaterial({
-        color: colors[Math.floor(Math.random() * colors.length)],
-        roughness: 0.95,
-      })
-    );
-    const a = Math.random() * TAU;
-    splotch.position.set(Math.cos(a) * 0.45, 0.5 + Math.random() * 1.4, Math.sin(a) * 0.45);
-    splotch.lookAt(splotch.position.clone().multiplyScalar(2));
-    wookGroup.add(splotch);
-  }
-
-  // Head with long hair
-  const head = new THREE.Mesh(
-    new THREE.IcosahedronGeometry(0.3, 1),
-    new THREE.MeshStandardMaterial({ color: 0xe6c098, roughness: 0.9, flatShading: true })
-  );
-  head.position.y = 2.15;
-  head.castShadow = true;
-  wookGroup.add(head);
-
-  // Thick dreadlocks — chunky multi-segment cylinders with knobby joints
-  const hairColor = 0x5a3a1a;
-  const dreadMat = new THREE.MeshStandardMaterial({ color: hairColor, roughness: 1, flatShading: true });
-  const dreadHighlightMat = new THREE.MeshStandardMaterial({
-    color: 0x7a5630, roughness: 1, flatShading: true,
-  });
-  const dreadCount = 10;
-  for (let i = 0; i < dreadCount; i++) {
-    const ang = (i / dreadCount) * TAU + (Math.random() - 0.5) * 0.25;
-    // Outer side of the head; inner ones in front are shorter so they hang behind/sides
-    const back = Math.cos(ang) < 0; // back of head
-    const len = back ? 1.4 + Math.random() * 0.5 : 0.9 + Math.random() * 0.5;
-    const segments = 4 + Math.floor(Math.random() * 2);
-    const segLen = len / segments;
-
-    // Each dreadlock starts at the scalp and grows downward in chunky segments
-    const baseAng = ang;
-    const baseR = 0.28;
-    const baseX = Math.cos(baseAng) * baseR;
-    const baseZ = Math.sin(baseAng) * baseR;
-    // Slight outward droop — dreads hang slightly away from the head
-    const droopX = baseX * 0.15;
-    const droopZ = baseZ * 0.15;
-
-    let prevX = baseX;
-    let prevZ = baseZ;
-    let yTop = 2.05;
-    for (let s = 0; s < segments; s++) {
-      const sX = baseX + droopX * (s + 1);
-      const sZ = baseZ + droopZ * (s + 1);
-      const r = 0.12 + (Math.random() - 0.5) * 0.04 - s * 0.005; // taper slightly toward the tip
-      const segH = segLen * (0.85 + Math.random() * 0.3);
-      const seg = new THREE.Mesh(
-        new THREE.CylinderGeometry(r, r * 0.95, segH, 6),
-        s % 2 === 0 ? dreadMat : dreadHighlightMat
-      );
-      const cx = (prevX + sX) / 2;
-      const cz = (prevZ + sZ) / 2;
-      seg.position.set(cx, yTop - segH / 2, cz);
-      // Rotate the segment so it tilts outward with the droop
-      const tiltX = Math.atan2(sX - prevX, segH);
-      const tiltZ = Math.atan2(sZ - prevZ, segH);
-      seg.rotation.x = -tiltZ;
-      seg.rotation.z = tiltX;
-      seg.castShadow = true;
-      wookGroup.add(seg);
-
-      // Knobby joint between segments
-      if (s < segments - 1) {
-        const knob = new THREE.Mesh(
-          new THREE.IcosahedronGeometry(r * 1.25, 0),
-          dreadMat
-        );
-        knob.position.set(sX, yTop - segH, sZ);
-        wookGroup.add(knob);
-      }
-
-      yTop -= segH;
-      prevX = sX;
-      prevZ = sZ;
-    }
-  }
-
-  // Bucket hat
-  const hat = new THREE.Mesh(
-    new THREE.CylinderGeometry(0.4, 0.4, 0.18, 14),
-    new THREE.MeshStandardMaterial({ color: 0xc77dff, roughness: 0.8 })
-  );
-  hat.position.y = 2.4;
-  wookGroup.add(hat);
-  const brim = new THREE.Mesh(
-    new THREE.CylinderGeometry(0.55, 0.55, 0.05, 14),
-    new THREE.MeshStandardMaterial({ color: 0xc77dff, roughness: 0.8 })
-  );
-  brim.position.y = 2.32;
-  wookGroup.add(brim);
-
-  g.add(wookGroup);
-  return g;
-}
-
 // =================================================================
 // Helpers
 // =================================================================
-
-function makeSimpleNPC(shirtHex, skinHex) {
-  const g = new THREE.Group();
-  const body = new THREE.Mesh(
-    new THREE.CapsuleGeometry(0.32, 1.0, 4, 8),
-    new THREE.MeshStandardMaterial({ color: shirtHex, roughness: 0.9, flatShading: true })
-  );
-  body.position.y = 0.85;
-  body.castShadow = true;
-  g.add(body);
-  const head = new THREE.Mesh(
-    new THREE.IcosahedronGeometry(0.28, 1),
-    new THREE.MeshStandardMaterial({ color: skinHex, roughness: 0.9, flatShading: true })
-  );
-  head.position.y = 1.65;
-  head.castShadow = true;
-  g.add(head);
-  return g;
-}
 
 function pathLength(path) {
   let total = 0;

@@ -78,11 +78,26 @@ export const Sound = {
   attachStageMusic(x, y, z, seed, style = 'jam') {
     if (!ctx) {
       // Deferred handle — Sound.init will adopt a real music instance into
-      // this same object once the AudioContext exists.
+      // this same object once the AudioContext exists. Position updates that
+      // arrive before adoption (e.g. a moving brass band) are remembered so
+      // the adopted panner starts in the right spot.
       const handle = {
         _real: null,
         cancelled: false,
-        _adopt(real) { this._real = real; },
+        _pendingX: x, _pendingY: y, _pendingZ: z,
+        _adopt(real) {
+          this._real = real;
+          if (real && real.setPosition) {
+            real.setPosition(this._pendingX, this._pendingY, this._pendingZ);
+          }
+        },
+        setPosition(nx, ny, nz) {
+          if (this._real && this._real.setPosition) {
+            this._real.setPosition(nx, ny, nz);
+          } else {
+            this._pendingX = nx; this._pendingY = ny; this._pendingZ = nz;
+          }
+        },
         stop() {
           if (this._real) this._real.stop();
           else this.cancelled = true;
@@ -389,11 +404,36 @@ function playHonk(ctx, dest) {
   else playBicycleBell(ctx, dest);
 }
 
-// Squeeze-bulb / "ooga" clown horn: reedy sawtooth tone that drops in pitch
-// across the squeeze, with a soft mid-attack so it reads as a rubber bulb.
+// Squeeze-bulb / "ooga" clown horn: reedy rubber-bulb tone with a high-
+// passed noise "click" transient at the moment of squeeze, then a sawtooth +
+// triangle pair through a soft-distortion WaveShaper to give it the
+// nasal/reedy character of a real rubber bulb (not a fart).
 function playClownBulb(ctx, dest) {
   const t = ctx.currentTime;
-  // Two parallel oscillators (saw + square) for a reedy timbre
+
+  // ---- 1) Click transient: ~5ms high-passed white-noise burst ---------
+  const clickDur = 0.005;
+  const sampleCount = Math.max(1, Math.floor(ctx.sampleRate * (clickDur + 0.02)));
+  const clickBuf = ctx.createBuffer(1, sampleCount, ctx.sampleRate);
+  const ch = clickBuf.getChannelData(0);
+  for (let i = 0; i < sampleCount; i++) ch[i] = Math.random() * 2 - 1;
+  const clickSrc = ctx.createBufferSource();
+  clickSrc.buffer = clickBuf;
+  const clickHpf = ctx.createBiquadFilter();
+  clickHpf.type = 'highpass';
+  clickHpf.frequency.value = 2200;
+  clickHpf.Q.value = 0.8;
+  const clickEnv = ctx.createGain();
+  clickEnv.gain.setValueAtTime(0.0001, t);
+  clickEnv.gain.exponentialRampToValueAtTime(0.45, t + 0.001);
+  clickEnv.gain.exponentialRampToValueAtTime(0.0001, t + clickDur);
+  clickSrc.connect(clickHpf).connect(clickEnv).connect(dest);
+  clickSrc.start(t);
+  clickSrc.stop(t + clickDur + 0.01);
+
+  // ---- 2) Body of the honk: tri + saw through a reedy WaveShaper -------
+  // The triangle (replaces the previous square) gives a softer, more
+  // rubbery fundamental than a square wave's hard edge.
   const env = ctx.createGain();
   env.gain.setValueAtTime(0.0001, t);
   env.gain.exponentialRampToValueAtTime(0.32, t + 0.04);
@@ -405,81 +445,99 @@ function playClownBulb(ctx, dest) {
   sawOsc.type = 'sawtooth';
   sawOsc.frequency.setValueAtTime(380, t);
   sawOsc.frequency.exponentialRampToValueAtTime(260, t + 0.30);
-  const sqrOsc = ctx.createOscillator();
-  sqrOsc.type = 'square';
-  sqrOsc.frequency.setValueAtTime(190, t);
-  sqrOsc.frequency.exponentialRampToValueAtTime(130, t + 0.30);
+  const triOsc = ctx.createOscillator();
+  triOsc.type = 'triangle';
+  triOsc.frequency.setValueAtTime(190, t);
+  triOsc.frequency.exponentialRampToValueAtTime(130, t + 0.30);
 
-  // Bandpass filter to give it that "horn body" resonance
+  // Bandpass to give it a "horn body" formant.
   const bpf = ctx.createBiquadFilter();
   bpf.type = 'bandpass';
   bpf.frequency.value = 750;
   bpf.Q.value = 1.2;
 
-  sawOsc.connect(bpf);
-  sqrOsc.connect(bpf);
+  // Soft-saturation WaveShaper — adds odd harmonics for the reedy bite.
+  const shaper = ctx.createWaveShaper();
+  shaper.curve = makeReedCurve(2.4, 1024);
+  shaper.oversample = '2x';
+
+  sawOsc.connect(shaper);
+  triOsc.connect(shaper);
+  shaper.connect(bpf);
   bpf.connect(env);
 
   sawOsc.start();
-  sqrOsc.start();
+  triOsc.start();
   sawOsc.stop(t + 0.45);
-  sqrOsc.stop(t + 0.45);
+  triOsc.stop(t + 0.45);
 }
 
-// Bicycle bell: short high "ding" with a sine carrier modulated by another
-// sine to give it that metallic ring + a fast decay.
+// Subtle distortion curve — a softer cousin of the engine's tanh curve,
+// tuned to round off peaks just enough to add reedy harmonics without
+// turning into buzzy fuzz.
+function makeReedCurve(drive, samples) {
+  const c = new Float32Array(samples);
+  for (let i = 0; i < samples; i++) {
+    const x = (i / (samples - 1)) * 2 - 1;
+    // Soft asymmetric clip — produces the nasal bias of a real horn reed.
+    c[i] = Math.tanh(x * drive + 0.18 * x * x) / Math.tanh(drive + 0.18);
+  }
+  return c;
+}
+
+// Bicycle bell: FM-synthesised metallic ring with a sharp "strike" transient.
+// The modulator runs at a NON-integer multiple of the carrier (~√2) so the
+// resulting partials are inharmonic — the secret to a real bell's clang
+// instead of a musical tone. A high-pass filter pulls out the muddy lows,
+// and a very short high-amplitude gain envelope creates the strike impact
+// before the long ringing release.
 function playBicycleBell(ctx, dest) {
-  const t = ctx.currentTime;
-
-  // Carrier — high pitch, ~2.4 kHz
-  const carrier = ctx.createOscillator();
-  carrier.type = 'sine';
-  carrier.frequency.value = 2400;
-
-  // Modulator — adds the metallic shimmer
-  const modulator = ctx.createOscillator();
-  modulator.type = 'sine';
-  modulator.frequency.value = 870;
-  const modGain = ctx.createGain();
-  modGain.gain.value = 380;
-  modulator.connect(modGain).connect(carrier.frequency);
-
-  // Envelope — sharp attack, ~0.6s ringing decay
-  const env = ctx.createGain();
-  env.gain.setValueAtTime(0.0001, t);
-  env.gain.exponentialRampToValueAtTime(0.45, t + 0.005);
-  env.gain.exponentialRampToValueAtTime(0.18, t + 0.06);
-  env.gain.exponentialRampToValueAtTime(0.0001, t + 0.65);
-
-  carrier.connect(env).connect(dest);
-  carrier.start();
-  modulator.start();
-  carrier.stop(t + 0.7);
-  modulator.stop(t + 0.7);
-
-  // Quick double-ring (two strikes ~0.18s apart) for the classic bell feel
+  ringOnce(ctx, dest, ctx.currentTime, 2400, /*strikeGain=*/0.6, /*releaseGain=*/0.22);
+  // Classic double-ring — quieter second strike ~180ms later.
   setTimeout(() => {
     if (!ctx || ctx.state === 'closed') return;
-    const t2 = ctx.currentTime;
-    const env2 = ctx.createGain();
-    env2.gain.setValueAtTime(0.0001, t2);
-    env2.gain.exponentialRampToValueAtTime(0.30, t2 + 0.004);
-    env2.gain.exponentialRampToValueAtTime(0.0001, t2 + 0.45);
-    const c2 = ctx.createOscillator();
-    c2.type = 'sine';
-    c2.frequency.value = 2400;
-    const m2 = ctx.createOscillator();
-    m2.type = 'sine';
-    m2.frequency.value = 870;
-    const mg2 = ctx.createGain();
-    mg2.gain.value = 380;
-    m2.connect(mg2).connect(c2.frequency);
-    c2.connect(env2).connect(dest);
-    c2.start();
-    m2.start();
-    c2.stop(t2 + 0.5);
-    m2.stop(t2 + 0.5);
+    ringOnce(ctx, dest, ctx.currentTime, 2400, 0.45, 0.16);
   }, 180);
+}
+
+function ringOnce(ctx, dest, t, carrierHz, strikeGain, releaseGain) {
+  // ---- Carrier + modulator (FM synthesis, inharmonic ratio) ----------
+  const carrier = ctx.createOscillator();
+  carrier.type = 'sine';
+  carrier.frequency.value = carrierHz;
+
+  const modulator = ctx.createOscillator();
+  modulator.type = 'sine';
+  // √2 ≈ 1.4142 — a deliberately non-integer ratio produces inharmonic
+  // sidebands that read as "metal struck" rather than a clean musical note.
+  modulator.frequency.value = carrierHz * 1.4142;
+  const modGain = ctx.createGain();
+  // Modulation index falls off slightly across the ring so the partials
+  // settle into a purer sine as the bell rings out.
+  modGain.gain.setValueAtTime(carrierHz * 0.28, t);
+  modGain.gain.exponentialRampToValueAtTime(carrierHz * 0.10, t + 0.4);
+  modulator.connect(modGain).connect(carrier.frequency);
+
+  // ---- High-pass filter: cut the muddy low fundamental ----------------
+  const hpf = ctx.createBiquadFilter();
+  hpf.type = 'highpass';
+  hpf.frequency.value = 1200;
+  hpf.Q.value = 0.6;
+
+  // ---- Two-stage envelope: sharp strike → long release ----------------
+  // The strike is a 2ms high-amplitude transient that gives the "tink"
+  // impact; the release tail rings for ~0.65s.
+  const env = ctx.createGain();
+  env.gain.setValueAtTime(0.0001, t);
+  env.gain.exponentialRampToValueAtTime(strikeGain, t + 0.002);   // strike
+  env.gain.exponentialRampToValueAtTime(releaseGain, t + 0.025);  // settle
+  env.gain.exponentialRampToValueAtTime(0.0001, t + 0.65);        // ringout
+
+  carrier.connect(hpf).connect(env).connect(dest);
+  carrier.start(t);
+  modulator.start(t);
+  carrier.stop(t + 0.7);
+  modulator.stop(t + 0.7);
 }
 
 // ---------- Spatial stage music ----------
@@ -492,12 +550,26 @@ function playBicycleBell(ctx, dest) {
 // care which engine is running underneath.
 function createStageMusic(ctx, dest, x, y, z, seed, style = 'jam') {
   const panner = createStagePanner(ctx, dest, x, y, z);
+  let handle;
   switch (style) {
-    case 'brass':  return brassStage(ctx, panner, seed);
-    case 'drum':   return drumStage(ctx, panner, seed);
+    case 'brass':       handle = brassStage(ctx, panner, seed); break;
+    case 'drum':        handle = drumStage(ctx, panner, seed); break;
+    case 'second_line': handle = secondLineStage(ctx, panner, seed); break;
     case 'jam':
-    default:       return jamStage(ctx, panner, seed);
+    default:            handle = jamStage(ctx, panner, seed); break;
   }
+  // Universal position setter so callers (e.g. the marching brass band) can
+  // move the source around the world each frame.
+  handle.setPosition = (nx, ny, nz) => {
+    if (panner.positionX) {
+      panner.positionX.setTargetAtTime(nx, ctx.currentTime, 0.02);
+      panner.positionY.setTargetAtTime(ny, ctx.currentTime, 0.02);
+      panner.positionZ.setTargetAtTime(nz, ctx.currentTime, 0.02);
+    } else if (panner.setPosition) {
+      panner.setPosition(nx, ny, nz);
+    }
+  };
+  return handle;
 }
 
 function createStagePanner(ctx, dest, x, y, z) {
@@ -670,6 +742,164 @@ function brassStage(ctx, panner, seed) {
       try { sawOsc.stop(); } catch (e) {}
       try { sqrOsc.stop(); } catch (e) {}
       try { tuba.stop(); } catch (e) {}
+      try { panner.disconnect(); } catch (e) {}
+    },
+  };
+}
+
+// ----- SECOND-LINE BRASS BAND ----------------------------------------------
+// Marching New Orleans groove that follows the band around the world. Built
+// from a tuba walking bass + a snare-driven second-line pattern + two horn
+// voices doing simple call-and-response phrases in mixolydian. The schedule
+// runs on 16th-note ticks so the snare can land its trademark off-beat
+// rolls between the kicks.
+function secondLineStage(ctx, panner, seed) {
+  const rng = mulberry32(seed >>> 0);
+  const baseFreq = 220 * Math.pow(2, Math.floor(rng() * 7 - 3) / 12);   // A3 ± ~quarter octave
+  const tempo = 102 + Math.floor(rng() * 14);
+  const beat = 60 / tempo;
+  const tick = beat / 4;          // 16th-note grid
+
+  // ---- Voices ----
+  // Two brass voices: a lead horn (trumpet) + a counter horn (trombone).
+  const leadOsc = ctx.createOscillator(); leadOsc.type = 'sawtooth';
+  const leadSqr = ctx.createOscillator(); leadSqr.type = 'square';
+  const leadMix = ctx.createGain(); leadMix.gain.value = 0;
+  const leadBpf = ctx.createBiquadFilter();
+  leadBpf.type = 'bandpass'; leadBpf.frequency.value = 1500; leadBpf.Q.value = 1.5;
+  leadOsc.connect(leadMix); leadSqr.connect(leadMix);
+  leadMix.connect(leadBpf).connect(panner);
+  leadOsc.start(); leadSqr.start();
+
+  const counterOsc = ctx.createOscillator(); counterOsc.type = 'sawtooth';
+  const counterMix = ctx.createGain(); counterMix.gain.value = 0;
+  const counterBpf = ctx.createBiquadFilter();
+  counterBpf.type = 'bandpass'; counterBpf.frequency.value = 900; counterBpf.Q.value = 1.2;
+  counterOsc.connect(counterMix).connect(counterBpf).connect(panner);
+  counterOsc.start();
+
+  // Tuba walking bass — square through low-pass.
+  const tubaOsc = ctx.createOscillator(); tubaOsc.type = 'square';
+  const tubaLpf = ctx.createBiquadFilter();
+  tubaLpf.type = 'lowpass'; tubaLpf.frequency.value = 280;
+  const tubaGain = ctx.createGain(); tubaGain.gain.value = 0;
+  tubaOsc.connect(tubaLpf).connect(tubaGain).connect(panner);
+  tubaOsc.start();
+
+  // Kick drum — short sine sweep.
+  const kickOsc = ctx.createOscillator(); kickOsc.type = 'sine';
+  const kickGain = ctx.createGain(); kickGain.gain.value = 0;
+  kickOsc.connect(kickGain).connect(panner);
+  kickOsc.start();
+
+  // Snare — short noise burst through a band-pass with envelope. To keep
+  // GC churn down, we build one looping noise buffer and gate it with a
+  // gain node each hit.
+  const noiseBuf = ctx.createBuffer(1, ctx.sampleRate * 0.5, ctx.sampleRate);
+  const nch = noiseBuf.getChannelData(0);
+  for (let i = 0; i < nch.length; i++) nch[i] = Math.random() * 2 - 1;
+  const snareSrc = ctx.createBufferSource();
+  snareSrc.buffer = noiseBuf;
+  snareSrc.loop = true;
+  const snareBpf = ctx.createBiquadFilter();
+  snareBpf.type = 'bandpass'; snareBpf.frequency.value = 1800; snareBpf.Q.value = 1.6;
+  const snareGain = ctx.createGain(); snareGain.gain.value = 0;
+  snareSrc.connect(snareBpf).connect(snareGain).connect(panner);
+  snareSrc.start();
+
+  // ---- Patterns ----
+  // 16 ticks per bar (4 beats × 4 sixteenths). Numbers are tick positions.
+  const KICK_TICKS = [0, 8];                              // kick on 1 and 3
+  const SNARE_TICKS = [
+    { tick: 4,  vol: 0.30 },   // backbeat 2
+    { tick: 6,  vol: 0.10 },   // ghost
+    { tick: 7,  vol: 0.20 },   // pickup to 3
+    { tick: 12, vol: 0.30 },   // backbeat 4
+    { tick: 13, vol: 0.12 },   // grace
+    { tick: 14, vol: 0.18 },   // roll
+    { tick: 15, vol: 0.22 },   // pickup to 1
+  ];
+  // Tuba walks I → V → bVII → IV (a mixolydian standard). Two notes per beat.
+  const TUBA_RATIOS = [1.0, 1.0, 1.5, 1.5, 16/9, 16/9, 4/3, 4/3];
+  const SCALE = SCALE_MIXO;
+  // Lead riff: 16 melodic indices (-1 = rest), in scale-degree positions.
+  const LEAD = [4, -1, 5, 4, -1, 2, -1, 1,  4, 5, 6, 5, 4, 2, 1, -1];
+  // Counter horn: sparser, lower octave.
+  const COUNTER = [-1, -1, 1, -1, -1, 2, -1, -1, -1, -1, 4, -1, 2, 1, -1, -1];
+
+  let nextTick = ctx.currentTime + 0.15;
+  let tickIdx = 0;
+  function schedule() {
+    const horizon = ctx.currentTime + 0.6;
+    while (nextTick < horizon) {
+      const t = nextTick;
+      const bt = tickIdx % 16;
+
+      // Kick
+      if (KICK_TICKS.includes(bt)) {
+        kickOsc.frequency.setValueAtTime(105, t);
+        kickOsc.frequency.exponentialRampToValueAtTime(45, t + 0.10);
+        kickGain.gain.cancelScheduledValues(t);
+        kickGain.gain.setValueAtTime(0.0001, t);
+        kickGain.gain.exponentialRampToValueAtTime(0.42, t + 0.005);
+        kickGain.gain.exponentialRampToValueAtTime(0.0001, t + 0.20);
+      }
+      // Snare
+      for (const s of SNARE_TICKS) {
+        if (s.tick === bt) {
+          snareGain.gain.cancelScheduledValues(t);
+          snareGain.gain.setValueAtTime(0.0001, t);
+          snareGain.gain.exponentialRampToValueAtTime(s.vol, t + 0.002);
+          snareGain.gain.exponentialRampToValueAtTime(0.0001, t + 0.08);
+        }
+      }
+      // Tuba on every other tick (8th notes)
+      if (bt % 2 === 0) {
+        const ratio = TUBA_RATIOS[(bt / 2) % TUBA_RATIOS.length];
+        tubaOsc.frequency.setValueAtTime(baseFreq * 0.5 * ratio, t);
+        tubaGain.gain.cancelScheduledValues(t);
+        tubaGain.gain.setValueAtTime(0.0001, t);
+        tubaGain.gain.exponentialRampToValueAtTime(0.30, t + 0.02);
+        tubaGain.gain.exponentialRampToValueAtTime(0.0001, t + beat * 0.55);
+      }
+      // Lead horn riff
+      const leadIdx = LEAD[bt];
+      if (leadIdx >= 0) {
+        const f = baseFreq * SCALE[leadIdx % SCALE.length];
+        leadOsc.frequency.setValueAtTime(f * 1.004, t);
+        leadSqr.frequency.setValueAtTime(f * 0.996, t);
+        leadMix.gain.cancelScheduledValues(t);
+        leadMix.gain.setValueAtTime(0.0001, t);
+        leadMix.gain.exponentialRampToValueAtTime(0.18, t + 0.015);
+        leadMix.gain.exponentialRampToValueAtTime(0.0001, t + tick * 2.6);
+      }
+      // Counter horn (lower)
+      const counterIdx = COUNTER[bt];
+      if (counterIdx >= 0) {
+        const f = baseFreq * 0.5 * SCALE[counterIdx % SCALE.length];
+        counterOsc.frequency.setValueAtTime(f, t);
+        counterMix.gain.cancelScheduledValues(t);
+        counterMix.gain.setValueAtTime(0.0001, t);
+        counterMix.gain.exponentialRampToValueAtTime(0.14, t + 0.02);
+        counterMix.gain.exponentialRampToValueAtTime(0.0001, t + tick * 3);
+      }
+
+      nextTick += tick;
+      tickIdx++;
+    }
+  }
+  schedule();
+  const intervalId = setInterval(schedule, 160);
+  return {
+    panner,
+    stop() {
+      clearInterval(intervalId);
+      try { leadOsc.stop(); } catch (e) {}
+      try { leadSqr.stop(); } catch (e) {}
+      try { counterOsc.stop(); } catch (e) {}
+      try { tubaOsc.stop(); } catch (e) {}
+      try { kickOsc.stop(); } catch (e) {}
+      try { snareSrc.stop(); } catch (e) {}
       try { panner.disconnect(); } catch (e) {}
     },
   };

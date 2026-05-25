@@ -9,8 +9,8 @@ import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
 import { Input } from './input.js';
 import { Touch } from './touch.js';
 import { HUD } from './hud.js';
-import { buildWorld, updateWorld } from './world.js';
-import { updateStagePerformers } from './chunks.js';
+import { buildWorld, updateWorld, getTimeOfDay } from './world.js';
+import { updateStagePerformers, updateStageLightShow, stageLightLenses } from './chunks.js';
 import { Zerble } from './zerble.js';
 import { Bubbles } from './bubbles.js';
 import { Smiles } from './smiles.js';
@@ -166,7 +166,9 @@ function tick() {
 
 function tickBody(dt) {
   if (running) {
-    zerble.update(dt, Input);
+    const tod = getTimeOfDay();
+    const nightness = tod ? tod.nightness : 0;
+    zerble.update(dt, Input, nightness);
     Sound.setEngineSpeed(zerble.speed);
 
     if (Input.consumePressed('SPACE') && zerble.canHonk()) {
@@ -186,14 +188,16 @@ function tickBody(dt) {
 
     puppets.update(dt);
     band.update(dt);
-    kids.update(dt);
+    kids.update(dt, bubbles, zerble);
     wooks.update(dt);
     lurleen.update(dt, zerble.position);
     if (!lurleenMet && lurleen.state === 'aware') {
       lurleenMet = true;
       HUD.toast('You found Lurleen! 💗', 3500);
     }
-    updateStagePerformers(performance.now() * 0.001);
+    const nowS = performance.now() * 0.001;
+    updateStagePerformers(nowS);
+    updateStageLightShow(nowS, nightness);
 
     // Procedural world expands around Zerble.
     updateWorld(zerble.position, dt);
@@ -237,6 +241,10 @@ function tickBody(dt) {
         HUD.flashHit();
         HUD.toast(toastForKind(hit.kind), 1400);
         Sound.playCollision(hit.kind);
+      } else if (hit && hit.notify) {
+        // Non-damaging but worth surfacing — e.g. Zerble bumps into Lurleen.
+        HUD.toast(toastForKind(hit.kind), 1400);
+        Sound.playSoftBump();
       }
     }
 
@@ -302,8 +310,12 @@ function resolveCollision(zerble, colliders) {
       if (c.kind === 'person' && c.npc) {
         crowd.onZerbleHit(c.npc, tox * inv, toz * inv);
       }
-      // If c.damage is 0 (e.g. fleeing NPC), treat as non-damaging.
-      return { damaging: c.damage > 0, damage: c.damage, kind: c.kind };
+      // Damage > 0 means "deduct smiles". Damage 0 entries (e.g. Lurleen, a
+      // fleeing NPC) still need the bounce we just applied, plus a toast/SFX
+      // for the named ones — return `notify` so the caller can react.
+      const damaging = c.damage > 0;
+      const notify = !damaging && (c.kind === 'lurleen');
+      return { damaging, damage: c.damage, kind: c.kind, notify };
     }
 
     // Non-damaging contact: nudge Zerble out of overlap, kill any small approach speed.
@@ -362,7 +374,10 @@ if (window.visualViewport) {
   window.visualViewport.addEventListener('resize', handleResize);
 }
 
-window.__game = { camera, zerble, scene, renderer, crowd, registry, chaseCam, lurleen };
+window.__game = {
+  camera, zerble, scene, renderer, crowd, registry, chaseCam, lurleen,
+  getTimeOfDay,
+};
 
 installDebug({
   scene, camera, renderer,

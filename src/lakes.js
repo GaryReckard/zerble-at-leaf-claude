@@ -12,6 +12,7 @@
 import * as THREE from 'three';
 import { registry } from './registry.js';
 import { hash2, mulberry32 } from './rng.js';
+import { buildCanoe } from './models/canoe.js';
 
 const LAKE_CELL = 320;
 const LAKE_DENSITY = 0.45;       // ~45% of macrocells get a lake
@@ -268,7 +269,7 @@ function buildLake(scene, mcx, mcz, rng) {
 function createLakeCanoe(parentGroup, lakeCx, lakeCz, lakeR, rng) {
   const canoeGroup = new THREE.Group();
   canoeGroup.name = 'canoe';
-  buildCanoeMesh(canoeGroup, rng);
+  buildCanoe(canoeGroup, rng);
   // Start at a random point well inside the lake.
   const ang = rng() * Math.PI * 2;
   const r = lakeR * 0.4;
@@ -341,93 +342,9 @@ function updateCanoe(canoe, dt) {
   canoe.group.rotation.z = Math.cos(canoe.bobPhase * 0.5) * 0.04;
 }
 
-// Builds the canoe + paddler meshes at the group's origin. Long axis along Z.
-function buildCanoeMesh(group, rng = Math.random) {
-  const woodMat = new THREE.MeshStandardMaterial({
-    color: 0x8b5a2b, roughness: 0.95, flatShading: true,
-  });
-  const insideMat = new THREE.MeshStandardMaterial({
-    color: 0xd4a874, roughness: 0.95, flatShading: true,
-  });
-
-  // Hull
-  const hull = new THREE.Mesh(new THREE.BoxGeometry(0.95, 0.4, 4.0), woodMat);
-  hull.position.y = 0.2;
-  hull.castShadow = true;
-  hull.receiveShadow = true;
-  group.add(hull);
-
-  // Pointed bow + stern
-  for (const ez of [-2.0, 2.0]) {
-    const tip = new THREE.Mesh(new THREE.ConeGeometry(0.48, 1.0, 6), woodMat);
-    tip.rotation.x = ez < 0 ? Math.PI / 2 : -Math.PI / 2;
-    tip.position.set(0, 0.2, ez);
-    tip.castShadow = true;
-    group.add(tip);
-  }
-
-  // Inside floor (slightly raised, lighter wood)
-  const floor = new THREE.Mesh(new THREE.BoxGeometry(0.7, 0.05, 3.6), insideMat);
-  floor.position.y = 0.40;
-  group.add(floor);
-
-  // Two thwarts (seat planks)
-  for (const ez of [-0.7, 0.7]) {
-    const seat = new THREE.Mesh(new THREE.BoxGeometry(0.85, 0.06, 0.18), insideMat);
-    seat.position.set(0, 0.50, ez);
-    group.add(seat);
-  }
-
-  // 1-2 paddlers — always at least the front seat occupied.
-  const shirts = [0x66d9ff, 0xff6f9c, 0xffd28a, 0x6fcf6a, 0xb285ff, 0xff8a5b];
-  const seatPositions = [-0.7, 0.7];
-  // Decide rear-seat occupancy first; front is always taken.
-  const rearOccupied = rng() < 0.55;
-  for (const ez of seatPositions) {
-    if (ez > 0 && !rearOccupied) continue;
-
-    const shirt = shirts[Math.floor(rng() * shirts.length)];
-    const body = new THREE.Mesh(
-      new THREE.CapsuleGeometry(0.18, 0.55, 4, 6),
-      new THREE.MeshStandardMaterial({ color: shirt, roughness: 0.85, flatShading: true }),
-    );
-    body.position.set(0, 0.85, ez);
-    body.castShadow = true;
-    group.add(body);
-
-    const head = new THREE.Mesh(
-      new THREE.IcosahedronGeometry(0.20, 1),
-      new THREE.MeshStandardMaterial({ color: 0xe6c098, roughness: 0.9, flatShading: true }),
-    );
-    head.position.set(0, 1.30, ez);
-    head.castShadow = true;
-    group.add(head);
-
-    // Paddle — handle + blade, tilted to one side as if mid-stroke
-    const paddleSide = ez < 0 ? -1 : 1;     // alternating sides per seat
-    const paddle = new THREE.Group();
-    const paddleHandle = new THREE.Mesh(
-      new THREE.CylinderGeometry(0.03, 0.03, 1.4, 6),
-      new THREE.MeshStandardMaterial({ color: 0x6a4a2a, roughness: 0.95, flatShading: true }),
-    );
-    paddleHandle.position.y = 0;
-    paddle.add(paddleHandle);
-    const paddleBlade = new THREE.Mesh(
-      new THREE.BoxGeometry(0.28, 0.04, 0.45),
-      new THREE.MeshStandardMaterial({ color: 0x8b6f47, roughness: 0.95, flatShading: true }),
-    );
-    paddleBlade.position.y = -0.75;
-    paddle.add(paddleBlade);
-
-    paddle.position.set(paddleSide * 0.55, 0.85, ez);
-    paddle.rotation.z = paddleSide * -0.6;
-    group.add(paddle);
-  }
-}
-
 // Sandbox helper — same builder, with a sensible default rng.
 export function _buildCanoeMeshForSandbox(group, rng = Math.random) {
-  buildCanoeMesh(group, rng);
+  buildCanoe(group, rng);
 }
 
 // Ring of overlapping sphere colliders around a lake. The cart's outer radius

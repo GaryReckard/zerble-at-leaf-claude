@@ -42,12 +42,15 @@
         h.endsWith('.local') || /^10\./.test(h) || /^192\.168\./.test(h);
       const v = isLocal ? '?v=' + Date.now() : '';
       const mods = ['zerble','lurleen','bubbles','smiles','registry','rng','perf','sound','chunks','crowd','lakes'];
+      const models = ['canoe','hammock','tent','tentStage','foodTruck','tree','heart','stage','performer',
+        'entranceArch','leafBanner','puppet','bandMember','parasolMarshal','kid','wook'];
       const base = new URL('./src/', document.baseURI).href;
       const imports = {
         'three': 'https://unpkg.com/three@0.160.0/build/three.module.js',
         'three/addons/': 'https://unpkg.com/three@0.160.0/examples/jsm/',
       };
       for (const m of mods) imports[base + m + '.js'] = base + m + '.js' + v;
+      for (const m of models) imports[base + 'models/' + m + '.js'] = base + 'models/' + m + '.js' + v;
       const im = document.createElement('script');
       im.type = 'importmap';
       im.textContent = JSON.stringify({ imports });
@@ -62,13 +65,44 @@
     <h1>Entity Sandbox</h1>
     <label for="entity">Entity</label>
     <select id="entity">
-      <option value="zerble">Zerble</option>
-      <option value="lurleen">Lurleen</option>
-      <option value="lurleen_zerble">Zerble + Lurleen (side by side)</option>
-      <option value="hammock">Hammock</option>
-      <option value="heart">Heart particle</option>
-      <option value="canoe">Canoe</option>
-      <option value="lake">Lake (mini)</option>
+      <optgroup label="Carts">
+        <option value="zerble">Zerble</option>
+        <option value="lurleen">Lurleen</option>
+        <option value="lurleen_zerble">Zerble + Lurleen (side by side)</option>
+      </optgroup>
+      <optgroup label="Festival props">
+        <option value="hammock">Hammock</option>
+        <option value="tent">Vendor tent</option>
+        <option value="food_truck">Food truck</option>
+        <option value="tree">Tree</option>
+        <option value="entrance_arch">Entrance arch</option>
+        <option value="stage_main">Main stage (with band)</option>
+        <option value="stage_side">Side stage (with band)</option>
+        <option value="tent_stage">Tent stage (big white tent)</option>
+        <option value="canoe">Canoe</option>
+        <option value="lake">Lake (mini)</option>
+      </optgroup>
+      <optgroup label="People">
+        <option value="puppet">Puppet (parade)</option>
+        <option value="puppet_lineup">Puppet lineup (3)</option>
+        <option value="band_member_trumpet">Band member — trumpet</option>
+        <option value="band_member_tuba">Band member — tuba</option>
+        <option value="band_member_sax">Band member — sax</option>
+        <option value="band_member_drum">Band member — drum</option>
+        <option value="band_member_trombone">Band member — trombone</option>
+        <option value="parasol_marshal">Parasol grand marshal</option>
+        <option value="brass_band">Brass band formation</option>
+        <option value="kid">Kid</option>
+        <option value="wook">Wook</option>
+        <option value="performer_lead_vocal">Performer — lead vocal</option>
+        <option value="performer_guitar">Performer — guitar</option>
+        <option value="performer_bass">Performer — bass</option>
+        <option value="performer_drum">Performer — drum kit</option>
+        <option value="performer_sax">Performer — sax</option>
+      </optgroup>
+      <optgroup label="Particles">
+        <option value="heart">Heart particle</option>
+      </optgroup>
     </select>
     <div class="row">
       <button id="reset-cam">Reset camera</button>
@@ -86,6 +120,19 @@
     import { Lurleen, createHeartGeometry } from './src/lurleen.js';
     import { buildHammockStandalone } from './src/chunks.js';
     import { _buildCanoeMeshForSandbox } from './src/lakes.js';
+    import { buildTent } from './src/models/tent.js';
+    import { buildFoodTruck } from './src/models/foodTruck.js';
+    import { buildTree } from './src/models/tree.js';
+    import { buildEntranceArch } from './src/models/entranceArch.js';
+    import { leafBannerTextures } from './src/models/leafBanner.js';
+    import { buildStage, placeBandOnStage } from './src/models/stage.js';
+    import { buildTentStage } from './src/models/tentStage.js';
+    import { buildPuppet } from './src/models/puppet.js';
+    import { buildBandMember } from './src/models/bandMember.js';
+    import { buildParasolMarshal } from './src/models/parasolMarshal.js';
+    import { buildKid } from './src/models/kid.js';
+    import { buildWook } from './src/models/wook.js';
+    import { buildPerformer } from './src/models/performer.js';
 
     const canvas = document.getElementById('canvas');
     const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
@@ -259,15 +306,18 @@
         }
         case 'lurleen': {
           const l = new Lurleen(scene);
-          l.position.set(0, 0, 0);
-          l.root.position.set(0, 0, 0);
+          // CRITICAL: setSpawnAt updates her wander home too, otherwise she'd
+          // immediately drive toward her hard-coded (240, 260) spawn point.
+          l.setSpawnAt(0, 0);
           entityRoot = l.root;
           currentEntity = l;
           // Drive her with a "Zerble" position that's just out of sight so she
           // wanders in place without entering aware/follow.
-          const fakeZerbleFar = new THREE.Vector3(200, 0, 200);
+          const fakeZerbleFar = new THREE.Vector3(2000, 0, 2000);
           updateFn = (dt) => l.update(dt, fakeZerbleFar);
-          cam.target.set(0, 1.6, 0);
+          cam.target.set(0, 2.5, 0);
+          cam.dist = 8;
+          applyCam();
           break;
         }
         case 'lurleen_zerble': {
@@ -276,19 +326,16 @@
           z.root.position.set(-3, 0, 0);
           scene.add(z.root);     // Zerble's constructor doesn't add to scene; do it here.
           const l = new Lurleen(scene);   // Lurleen.constructor adds her root + heart group already.
-          l.position.set(3, 0, 0);
-          l.root.position.set(3, 0, 0);
-          // entityRoot is just a sentinel for clearEntity's old behavior — the
-          // aggressive scene cleanup handles both roots now.
+          l.setSpawnAt(3, 0);
           entityRoot = z.root;
           currentEntity = { z, l };
           const mockInput = { throttle: 0, steer: 0, boost: false, isDown: () => false, consumePressed: () => false };
           updateFn = (dt) => {
             try { z.update(dt, mockInput); } catch (_) {}
-            l.update(dt, new THREE.Vector3(200, 0, 200));
+            l.update(dt, new THREE.Vector3(2000, 0, 2000));
           };
           cam.dist = 14;
-          cam.target.set(0, 1.4, 0);
+          cam.target.set(0, 2, 0);
           applyCam();
           break;
         }
@@ -344,6 +391,218 @@
           entityRoot = water;
           cam.target.set(0, 0, 0);
           cam.dist = 18;
+          applyCam();
+          break;
+        }
+        case 'tent': {
+          const g = buildTent(Math.random);
+          scene.add(g);
+          entityRoot = g;
+          cam.target.set(0, 1.5, 0);
+          cam.dist = 9;
+          applyCam();
+          break;
+        }
+        case 'food_truck': {
+          const g = buildFoodTruck(Math.random);
+          scene.add(g);
+          entityRoot = g;
+          cam.target.set(0, 2, 0);
+          cam.dist = 14;
+          applyCam();
+          break;
+        }
+        case 'tree': {
+          const g = buildTree(Math.random);
+          scene.add(g);
+          entityRoot = g;
+          cam.target.set(0, 3, 0);
+          cam.dist = 12;
+          applyCam();
+          break;
+        }
+        case 'entrance_arch': {
+          const tex = leafBannerTextures('#fff4d0', '#ff6f9c', '#ffe066');
+          const g = buildEntranceArch(tex);
+          scene.add(g);
+          entityRoot = g;
+          cam.target.set(0, 6, 0);
+          cam.dist = 18;
+          applyCam();
+          break;
+        }
+        case 'tent_stage': {
+          const tex = leafBannerTextures('#fff4d0', '#6fcf6a', '#ffd28a');
+          const t = buildTentStage({ rng: Math.random, leafTexture: tex });
+          scene.add(t.group);
+          entityRoot = t.group;
+          cam.target.set(0, 4, 0);
+          cam.dist = 38;
+          applyCam();
+          break;
+        }
+        case 'stage_main':
+        case 'stage_side': {
+          const isMain = name === 'stage_main';
+          const tex = isMain ? leafBannerTextures('#fff4d0', '#6fcf6a', '#ffd28a') : null;
+          const stage = buildStage({ isMain, leafTexture: tex, rng: Math.random });
+          scene.add(stage.group);
+          const instruments = isMain
+            ? ['lead_vocal', 'guitar', 'guitar', 'bass', 'drum', 'sax']
+            : ['lead_vocal', 'guitar', 'drum'];
+          placeBandOnStage(stage.group, instruments, {
+            deckWidth: stage.deckWidth, deckDepth: stage.deckDepth,
+            deckHeight: stage.deckHeight, rng: Math.random,
+          });
+          entityRoot = stage.group;
+          cam.target.set(0, 4, 0);
+          cam.dist = isMain ? 26 : 18;
+          applyCam();
+          break;
+        }
+        case 'puppet': {
+          const g = buildPuppet(Math.random() * 6);
+          scene.add(g);
+          entityRoot = g;
+          // Re-create the puppet's per-frame bob so it looks alive in sandbox.
+          const startMs = performance.now();
+          updateFn = () => {
+            const t = (performance.now() - startMs) * 0.002;
+            g.children[0].position.y = 4 + Math.sin(t * 4) * 0.25;
+            g.children[0].rotation.z = Math.sin(t * 2) * 0.08;
+          };
+          cam.target.set(0, 3, 0);
+          cam.dist = 12;
+          applyCam();
+          break;
+        }
+        case 'puppet_lineup': {
+          const startMs = performance.now();
+          const puppets = [];
+          for (let i = 0; i < 3; i++) {
+            const g = buildPuppet(i);
+            g.position.x = (i - 1) * 4;
+            scene.add(g);
+            puppets.push(g);
+          }
+          entityRoot = puppets[1];
+          updateFn = () => {
+            const t = (performance.now() - startMs) * 0.002;
+            puppets.forEach((g, i) => {
+              g.children[0].position.y = 4 + Math.sin(t * 4 + i) * 0.25;
+              g.children[0].rotation.z = Math.sin(t * 2 + i) * 0.08;
+            });
+          };
+          cam.target.set(0, 3, 0);
+          cam.dist = 16;
+          applyCam();
+          break;
+        }
+        case 'band_member_trumpet':
+        case 'band_member_tuba':
+        case 'band_member_sax':
+        case 'band_member_drum':
+        case 'band_member_trombone': {
+          const inst = name.replace('band_member_', '');
+          const g = buildBandMember(inst);
+          scene.add(g);
+          entityRoot = g;
+          // Marching bob like the real BrassBand does
+          const startMs = performance.now();
+          updateFn = () => {
+            const t = (performance.now() - startMs) * 0.004;
+            g.children[0].position.y = 0.85 + Math.abs(Math.sin(t * 2)) * 0.08;
+          };
+          cam.target.set(0, 1.5, 0);
+          cam.dist = 5;
+          applyCam();
+          break;
+        }
+        case 'parasol_marshal': {
+          const g = buildParasolMarshal();
+          scene.add(g);
+          entityRoot = g;
+          const startMs = performance.now();
+          updateFn = (dt) => {
+            const tMs = (performance.now() - startMs) * 0.004;
+            g.children[0].position.y = 0.85 + Math.abs(Math.sin(tMs * 2)) * 0.08;
+            if (g.userData.parasol) g.userData.parasol.rotation.y += dt * 2.4;
+          };
+          cam.target.set(0, 2, 0);
+          cam.dist = 6;
+          applyCam();
+          break;
+        }
+        case 'brass_band': {
+          // Match the in-game formation including the parasol marshal up front.
+          const formation = [
+            [0, 1.6, 'parasol'],
+            [-1.4, 0, 'trumpet'], [1.4, 0, 'trumpet'],
+            [0, -1.0, 'sax'],
+            [-2.6, -2.2, 'trombone'], [0, -2.4, 'tuba'], [2.6, -2.2, 'drum'],
+          ];
+          const members = [];
+          for (const [ox, oz, inst] of formation) {
+            const m = inst === 'parasol' ? buildParasolMarshal() : buildBandMember(inst);
+            m.position.set(ox, 0, oz);
+            scene.add(m);
+            members.push(m);
+          }
+          entityRoot = members[0];
+          const startMs = performance.now();
+          updateFn = (dt) => {
+            const tMs = (performance.now() - startMs) * 0.004;
+            members.forEach((m, i) => {
+              m.children[0].position.y = 0.85 + Math.abs(Math.sin(tMs * 2 + i)) * 0.08;
+              if (m.userData.parasol) m.userData.parasol.rotation.y += dt * 2.4;
+            });
+          };
+          cam.target.set(0, 1.8, -1.0);
+          cam.dist = 12;
+          applyCam();
+          break;
+        }
+        case 'kid': {
+          const g = buildKid(Math.random);
+          scene.add(g);
+          entityRoot = g;
+          const startMs = performance.now();
+          updateFn = () => {
+            const t = (performance.now() - startMs) * 0.012;
+            g.children[0].position.y = 0.55 + Math.abs(Math.sin(t * 2)) * 0.15;
+          };
+          cam.target.set(0, 0.8, 0);
+          cam.dist = 4;
+          applyCam();
+          break;
+        }
+        case 'wook': {
+          const g = buildWook(Math.random);
+          scene.add(g);
+          entityRoot = g;
+          // Sway like the real Wooks do
+          const startMs = performance.now();
+          updateFn = () => {
+            const t = (performance.now() - startMs) * 0.002;
+            g.children[0].rotation.z = Math.sin(t) * 0.15;
+            g.children[0].rotation.x = Math.cos(t * 0.7) * 0.08;
+          };
+          cam.target.set(0, 1.5, 0);
+          cam.dist = 5;
+          applyCam();
+          break;
+        }
+        case 'performer_lead_vocal':
+        case 'performer_guitar':
+        case 'performer_bass':
+        case 'performer_drum':
+        case 'performer_sax': {
+          const inst = name.replace('performer_', '');
+          const g = buildPerformer(inst, Math.random);
+          scene.add(g);
+          entityRoot = g;
+          cam.target.set(0, 1.2, 0);
+          cam.dist = 5;
           applyCam();
           break;
         }

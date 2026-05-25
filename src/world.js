@@ -6,6 +6,7 @@ import { buildMountains } from './mountains.js';
 import { ChunkManager } from './chunks.js';
 import { LakeManager } from './lakes.js';
 import { terrainHeight } from './rng.js';
+import { TimeOfDay } from './timeOfDay.js';
 
 const SKY_TOP = 0x6fb6e8;
 const SKY_BOTTOM = 0xffd0a8;
@@ -25,14 +26,27 @@ let groundMesh = null;
 let mountainsGroup = null;
 let skyMesh = null;
 let sun = null;
+let hemi = null;
+let ambient = null;
 let _scene = null;
+let timeOfDay = null;
+
+export function getTimeOfDay() {
+  return timeOfDay;
+}
 
 export function buildWorld(scene, crowd) {
   _scene = scene;
   skyMesh = buildSky(scene);
-  sun = buildLightsAndFog(scene);
+  const lights = buildLightsAndFog(scene);
+  sun = lights.sun;
+  hemi = lights.hemi;
+  ambient = lights.ambient;
   groundMesh = buildGround(scene);
   mountainsGroup = buildMountains(scene);
+
+  timeOfDay = new TimeOfDay(scene);
+  timeOfDay.attach({ sky: skyMesh, sun, hemi, ambient });
 
   // Lakes must materialize BEFORE the initial chunk pass — they register
   // footprints + colliders that chunks consult to avoid placing paths and
@@ -60,6 +74,7 @@ export function updateWorld(playerPos, dt = 0.016) {
   // Lakes update first (same reason as boot: chunks consult lake footprints).
   if (lakeManager) lakeManager.update(_scene, playerPos, dt);
   if (chunkManager) chunkManager.update(playerPos);
+  if (timeOfDay) timeOfDay.update(dt);
   // Keep the sky dome, ground plane and mountain ring centered on the player
   // so the world feels infinite — chunks at fixed world coords slide past,
   // but the backdrops always look the same distance away.
@@ -80,9 +95,16 @@ export function updateWorld(playerPos, dt = 0.016) {
   }
   if (mountainsGroup) mountainsGroup.position.set(playerPos.x, 0, playerPos.z);
   // Keep the sun's shadow frustum centered on the player too, so shadows
-  // continue to render no matter how far Zerble drives.
+  // continue to render no matter how far Zerble drives. The TimeOfDay system
+  // owns the *offset* (sun arc + below-horizon at night); we only translate
+  // that offset to the player's position so the shadow camera stays on top
+  // of where the action is.
   if (sun) {
-    sun.position.set(playerPos.x + 80, 130, playerPos.z + 60);
+    // TimeOfDay sets sun.position to the WORLD offset relative to origin —
+    // add the player position so the sun stays at that bearing relative to
+    // them rather than at world (0,0).
+    sun.position.x += playerPos.x;
+    sun.position.z += playerPos.z;
     sun.target.position.set(playerPos.x, 0, playerPos.z);
     sun.target.updateMatrixWorld();
   }
@@ -160,8 +182,9 @@ function buildLightsAndFog(scene) {
   scene.add(sun);
   scene.add(sun.target);
 
-  scene.add(new THREE.AmbientLight(0xffffff, 0.15));
-  return sun;
+  const ambient = new THREE.AmbientLight(0xffffff, 0.15);
+  scene.add(ambient);
+  return { sun, hemi, ambient };
 }
 
 function buildGround(scene) {

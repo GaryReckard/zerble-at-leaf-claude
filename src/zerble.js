@@ -251,23 +251,27 @@ export class Zerble {
 
     // ----- Eyes — big globes with VISIBLE black pupils in front of blue irises -----
     this.eyes = [];
+    // Collect sclera materials so the day/night system can boost emissive at night.
+    this._eyeGlowMats = [];
     for (const ex of [-0.78, 0.78]) {
       const eye = new THREE.Group();
       eye.position.set(ex, 2.15, -1.95);
 
       // Sclera — slightly smaller than before
+      const scleraMat = new THREE.MeshStandardMaterial({
+        color: 0xffffff,
+        emissive: COLOR_EYE_GLOW,
+        emissiveIntensity: 0.5,
+        roughness: 0.25,
+        flatShading: false,
+      });
       const sclera = new THREE.Mesh(
         new THREE.IcosahedronGeometry(0.7, 2),
-        new THREE.MeshStandardMaterial({
-          color: 0xffffff,
-          emissive: COLOR_EYE_GLOW,
-          emissiveIntensity: 0.5,
-          roughness: 0.25,
-          flatShading: false,
-        })
+        scleraMat,
       );
       sclera.castShadow = false;
       eye.add(sclera);
+      this._eyeGlowMats.push(scleraMat);
 
       // Iris — sits at -0.45 with radius 0.4 (so front face is at z=-0.85)
       const iris = new THREE.Mesh(
@@ -310,7 +314,7 @@ export class Zerble {
 
     // ----- LED headlight bar — a row of warm-yellow lamps across the front bumper -----
     // (Used to be drawn as "teeth" — repurposed per the cart's actual headlight strip.)
-    const headlightMat = new THREE.MeshStandardMaterial({
+    this._headlightMat = new THREE.MeshStandardMaterial({
       color: 0xfff0c4,
       emissive: 0xffe28a,
       emissiveIntensity: 1.2,
@@ -325,10 +329,27 @@ export class Zerble {
     this.root.add(chromeStrip);
     // Four warm-yellow lamps along the strip
     for (const tx of [-0.55, -0.18, 0.18, 0.55]) {
-      const lamp = new THREE.Mesh(new THREE.BoxGeometry(0.22, 0.16, 0.06), headlightMat);
+      const lamp = new THREE.Mesh(new THREE.BoxGeometry(0.22, 0.16, 0.06), this._headlightMat);
       lamp.position.set(tx, 0.78, -2.15);
       this.root.add(lamp);
     }
+
+    // ----- Night-only headlight cones — two SpotLights firing forward -----
+    // Off during the day (intensity ramps with nightness). Targets sit a few
+    // meters ahead so the cones spread out on the ground.
+    this._headlightLights = [];
+    for (const tx of [-0.4, 0.4]) {
+      const light = new THREE.SpotLight(0xffeac4, 0, 28, Math.PI / 6, 0.45, 1.0);
+      light.position.set(tx, 0.95, -2.0);
+      const target = new THREE.Object3D();
+      target.position.set(tx * 1.5, 0, -8);   // shine a few meters ahead
+      this.root.add(target);
+      light.target = target;
+      // Shadows on the headlights would tank perf; the moonlit ambient is fine.
+      this.root.add(light);
+      this._headlightLights.push(light);
+    }
+
 
     // ----- Bubble machine — sits ON the curved top of the oh-shit bar, pointing BACKWARDS -----
     const bm = new THREE.Mesh(
@@ -632,7 +653,7 @@ export class Zerble {
 
   // ---------- UPDATE ----------
 
-  update(dt, input) {
+  update(dt, input, nightness = 0) {
     // ----- Drive -----
     const throttle = input.throttle;
     const steer = input.steer;
@@ -717,6 +738,27 @@ export class Zerble {
 
     // ----- Pulse nozzle ring -----
     this._nozzleRing.material.emissiveIntensity = 1.4 + Math.sin(t * 6) * 0.5;
+
+    // ----- Headlights + eyes glow when it gets dark -----
+    // nightness 0 → headlights off, eyes at 0.5 emissive (baseline).
+    // nightness 1 → headlights blazing, eyes glow at 2.5x baseline.
+    const headlightIntensity = THREE.MathUtils.smoothstep(nightness, 0.25, 0.8) * 3.2;
+    if (this._headlightLights) {
+      for (const l of this._headlightLights) l.intensity = headlightIntensity;
+    }
+    if (this._headlightMat) {
+      // The lamp lenses themselves get a brighter emissive at night so they
+      // read as actual bulbs even from behind the cart.
+      this._headlightMat.emissiveIntensity = 1.2 + nightness * 2.4;
+    }
+    if (this._eyeGlowMats) {
+      // The bloom pass blows the sclera out to pure white if we crank the
+      // emissive too hard — keep the night boost gentle so it reads as a
+      // glow rather than headlights.
+      for (const m of this._eyeGlowMats) {
+        m.emissiveIntensity = 0.5 + nightness * 0.6;
+      }
+    }
 
     // ----- Tick timers -----
     if (this.invulnLeft > 0) this.invulnLeft -= dt;

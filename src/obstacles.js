@@ -417,8 +417,9 @@ export class Wooks {
 
     for (let i = 0; i < this.wooks.length; i++) {
       const w = this.wooks[i];
+      const isApproaching = (i === approachIdx && zerblePos);
 
-      if (i === approachIdx && zerblePos) {
+      if (isApproaching) {
         // Walk toward Zerble. Stop ~1.5m short so we don't standing-on-his-head.
         const dx = zerblePos.x - w.position.x;
         const dz = zerblePos.z - w.position.z;
@@ -447,6 +448,13 @@ export class Wooks {
 
       this.colliders[i].position.copy(w.position);
       this.colliders[i].position.y = 1;
+      // The wook walking up to dose Zerble is trying to GET close — its
+      // collider would otherwise shove Zerble away (wook 0.9m + zerble 1.9m =
+      // 2.8m minimum separation, which prevents the 2.5m proximity trigger
+      // from ever firing). Mark this frame's approaching wook as passive so
+      // the main collision resolver skips it.
+      this.colliders[i].passive = isApproaching;
+      this.colliders[i].damage = isApproaching ? 0 : 5;
     }
   }
 }

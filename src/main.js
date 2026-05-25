@@ -318,6 +318,10 @@ function resolveCollision(zerble, colliders) {
   const velZ = fz * zerble.speed;
 
   for (const c of colliders) {
+    // Passive colliders (e.g. the wook walking up to dose Zerble) are visible
+    // but don't push Zerble or deal damage — otherwise their physical radius
+    // would prevent Zerble from being inside the proximity trigger range.
+    if (c.passive) continue;
     const tox = c.position.x - zerble.position.x;
     const toz = c.position.z - zerble.position.z;
     const d = Math.hypot(tox, toz);

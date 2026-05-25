@@ -321,6 +321,8 @@ function toastForKind(kind) {
     case 'arch': return 'Mind the arch.';
     case 'lamppost': return 'Bonked a lamppost.';
     case 'drum_circle': return 'You crashed the drum circle!';
+    case 'lake_edge': return 'Splash! Carts don\'t float.';
+    case 'island': return 'Tiny island, busy day.';
     default: return 'Ouch.';
   }
 }

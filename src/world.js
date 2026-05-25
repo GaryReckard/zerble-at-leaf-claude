@@ -37,13 +37,35 @@ export function buildWorld(scene, crowd) {
   return { chunkManager };
 }
 
+// Track ground "world center" so we can re-sample terrain heights at world
+// coords whenever the player moves a noticeable amount. Without this, the
+// terrain hills were locked to the ground's local geometry — they translated
+// with the player and occluded fixed-world chunk paths ("the green ground
+// swallows the path as you move").
+let _groundLastResampleX = NaN;
+let _groundLastResampleZ = NaN;
+const GROUND_RESAMPLE_THRESHOLD = 40; // re-derive heights when player moves > 40m
+
 export function updateWorld(playerPos) {
   if (chunkManager) chunkManager.update(playerPos);
   // Keep the sky dome, ground plane and mountain ring centered on the player
   // so the world feels infinite — chunks at fixed world coords slide past,
   // but the backdrops always look the same distance away.
   if (skyMesh) skyMesh.position.set(playerPos.x, 0, playerPos.z);
-  if (groundMesh) groundMesh.position.set(playerPos.x, 0, playerPos.z);
+  if (groundMesh) {
+    groundMesh.position.set(playerPos.x, 0, playerPos.z);
+    // Re-sample terrain heights using WORLD coords so hills stay put as the
+    // player drives across them. Throttled to avoid per-frame attribute work.
+    if (
+      isNaN(_groundLastResampleX) ||
+      Math.abs(playerPos.x - _groundLastResampleX) > GROUND_RESAMPLE_THRESHOLD ||
+      Math.abs(playerPos.z - _groundLastResampleZ) > GROUND_RESAMPLE_THRESHOLD
+    ) {
+      resampleGroundHeights(groundMesh, playerPos.x, playerPos.z);
+      _groundLastResampleX = playerPos.x;
+      _groundLastResampleZ = playerPos.z;
+    }
+  }
   if (mountainsGroup) mountainsGroup.position.set(playerPos.x, 0, playerPos.z);
   // Keep the sun's shadow frustum centered on the player too, so shadows
   // continue to render no matter how far Zerble drives.
@@ -52,6 +74,19 @@ export function updateWorld(playerPos) {
     sun.target.position.set(playerPos.x, 0, playerPos.z);
     sun.target.updateMatrixWorld();
   }
+}
+
+function resampleGroundHeights(mesh, originX, originZ) {
+  const geo = mesh.geometry;
+  const pos = geo.attributes.position;
+  const centerOffset = terrainHeight(originX, originZ);
+  for (let i = 0; i < pos.count; i++) {
+    const lx = pos.getX(i);
+    const lz = pos.getZ(i);
+    pos.setY(i, terrainHeight(originX + lx, originZ + lz) - centerOffset);
+  }
+  pos.needsUpdate = true;
+  // Normals stay close enough at this scale; recomputing them every 40m hurts perf.
 }
 
 // ---------------- internals ----------------

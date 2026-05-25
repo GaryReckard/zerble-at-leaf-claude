@@ -18,6 +18,12 @@ let musicBus = null;     // shared bus for stage music sources (so we can balanc
 let engineNodes = null;
 let initialized = false;
 
+// Stage music attachment is sometimes requested BEFORE Sound.init() runs —
+// the initial chunks (including the main stage at 0,0) generate during world
+// boot, but Sound.init must wait for a user gesture (Start tap on iOS). We
+// queue those requests here and drain them once the AudioContext exists.
+const _pendingStages = [];
+
 export const Sound = {
   // Must be called from a user gesture (Start button click). Safe to call again.
   init() {
@@ -40,6 +46,14 @@ export const Sound = {
 
     engineNodes = createEngine(ctx, masterGain);
     initialized = true;
+
+    // Drain any stage music attachments that were queued during world boot.
+    const queued = _pendingStages.splice(0);
+    for (const q of queued) {
+      if (q.handle.cancelled) continue;
+      const real = createStageMusic(ctx, musicBus, q.x, q.y, q.z, q.seed, q.style);
+      q.handle._adopt(real);
+    }
   },
 
   // iOS Safari auto-suspends the AudioContext when the tab is hidden / the
@@ -59,10 +73,25 @@ export const Sound = {
   },
 
   // ---- Spatial stage music ----
-
-  attachStageMusic(x, y, z, seed) {
-    if (!ctx) return null;
-    return createStageMusic(ctx, musicBus, x, y, z, seed);
+  // `style` picks the synth + pattern personality: 'jam' (main stage),
+  // 'brass' (side stage), 'drum' (drum circle). Unknown styles default to jam.
+  attachStageMusic(x, y, z, seed, style = 'jam') {
+    if (!ctx) {
+      // Deferred handle — Sound.init will adopt a real music instance into
+      // this same object once the AudioContext exists.
+      const handle = {
+        _real: null,
+        cancelled: false,
+        _adopt(real) { this._real = real; },
+        stop() {
+          if (this._real) this._real.stop();
+          else this.cancelled = true;
+        },
+      };
+      _pendingStages.push({ x, y, z, seed, style, handle });
+      return handle;
+    }
+    return createStageMusic(ctx, musicBus, x, y, z, seed, style);
   },
 
   detachStageMusic(handle) {
@@ -371,33 +400,29 @@ function playHonk(ctx, dest) {
 
 // ---------- Spatial stage music ----------
 
-// Picks a key + tempo + pattern from the seed and runs a self-scheduling loop on
-// a PannerNode placed at the stage. Each stage's music is unique-ish and decays
-// with distance via HRTF panning.
-function createStageMusic(ctx, dest, x, y, z, seed) {
-  const rng = mulberry32(seed >>> 0);
+// Picks a key + tempo + pattern from the seed and runs a self-scheduling loop
+// on a PannerNode placed at the stage. `style` picks the synth personality —
+// jam-band, brass-led, or drum-only.
+//
+// Each style returns the same handle shape ({ panner, stop }) so callers don't
+// care which engine is running underneath.
+function createStageMusic(ctx, dest, x, y, z, seed, style = 'jam') {
+  const panner = createStagePanner(ctx, dest, x, y, z);
+  switch (style) {
+    case 'brass':  return brassStage(ctx, panner, seed);
+    case 'drum':   return drumStage(ctx, panner, seed);
+    case 'jam':
+    default:       return jamStage(ctx, panner, seed);
+  }
+}
 
-  // Pick a key (chromatic offset in semitones) and tempo
-  const semis = Math.floor(rng() * 12);
-  const baseFreq = 196 * Math.pow(2, semis / 12); // ~G3 ± an octave
-  const tempo = 96 + Math.floor(rng() * 36);
-  const beat = 60 / tempo;
-
-  // Major-pentatonic-ish scale ratios — sounds pleasant in any key
-  const scale = [1, 9 / 8, 5 / 4, 3 / 2, 5 / 3, 2, 9 / 4];
-
-  // Random melody (8 notes) + random bass (4 notes)
-  const melody = new Array(8).fill(0).map(() => baseFreq * scale[Math.floor(rng() * scale.length)]);
-  const bass = new Array(4).fill(0).map(() => baseFreq * 0.5 * scale[Math.floor(rng() * 4)]);
-
-  // ---- Panner: positional in 3D. Tuned so each stage carries clearly across
-  // its surrounding chunk before fading. ----
+function createStagePanner(ctx, dest, x, y, z) {
   const panner = ctx.createPanner();
   panner.panningModel = 'HRTF';
   panner.distanceModel = 'inverse';
-  panner.refDistance = 14;     // stays at full volume up to this distance
+  panner.refDistance = 14;
   panner.maxDistance = 140;
-  panner.rolloffFactor = 1.1;  // gentler falloff = audible from farther
+  panner.rolloffFactor = 1.1;
   if (panner.positionX) {
     panner.positionX.value = x;
     panner.positionY.value = y;
@@ -406,86 +431,238 @@ function createStageMusic(ctx, dest, x, y, z, seed) {
     panner.setPosition(x, y, z);
   }
   panner.connect(dest);
+  return panner;
+}
 
-  // ---- Lead oscillator (triangle: warm melodic tone) ----
+// Major pentatonic — pleasant in any key, won't clash with neighboring stages.
+const SCALE_PENT = [1, 9 / 8, 5 / 4, 3 / 2, 5 / 3, 2, 9 / 4];
+// Mixolydian-ish — flat-seventh adds a slightly hornier feel.
+const SCALE_MIXO = [1, 9 / 8, 5 / 4, 4 / 3, 3 / 2, 5 / 3, 16 / 9, 2];
+
+// ----- JAM-BAND GROOVE (main stage) ----------------------------------------
+// Warm triangle lead, saw bass, sub-kick, sustained chord pad, longer melody.
+function jamStage(ctx, panner, seed) {
+  const rng = mulberry32(seed >>> 0);
+  const baseFreq = 174 * Math.pow(2, Math.floor(rng() * 12) / 12); // ~F3 ± octave
+  const tempo = 86 + Math.floor(rng() * 18);
+  const beat = 60 / tempo;
+  const melody = new Array(16).fill(0).map(() => baseFreq * SCALE_PENT[Math.floor(rng() * SCALE_PENT.length)]);
+  const bass = new Array(8).fill(0).map(() => baseFreq * 0.5 * SCALE_PENT[Math.floor(rng() * 4)]);
+
   const lead = ctx.createOscillator();
   lead.type = 'triangle';
-  lead.frequency.value = melody[0];
-  const leadGain = ctx.createGain();
-  leadGain.gain.value = 0;
-  lead.connect(leadGain).connect(panner);
-  lead.start();
+  const leadGain = ctx.createGain(); leadGain.gain.value = 0;
+  lead.connect(leadGain).connect(panner); lead.start();
 
-  // ---- Bass oscillator (saw + low-pass: gives that PA-system thump) ----
-  const bassOsc = ctx.createOscillator();
-  bassOsc.type = 'sawtooth';
-  bassOsc.frequency.value = bass[0];
-  const bassLpf = ctx.createBiquadFilter();
-  bassLpf.type = 'lowpass';
-  bassLpf.frequency.value = 380;
-  const bassGain = ctx.createGain();
-  bassGain.gain.value = 0;
-  bassOsc.connect(bassLpf).connect(bassGain).connect(panner);
-  bassOsc.start();
+  // Second harmonic layer an octave up for a richer "two-guitarist" feel.
+  const harm = ctx.createOscillator();
+  harm.type = 'sine';
+  const harmGain = ctx.createGain(); harmGain.gain.value = 0;
+  harm.connect(harmGain).connect(panner); harm.start();
 
-  // ---- Drum kick: a sub-bass oscillator we re-pluck per beat ----
-  const kick = ctx.createOscillator();
-  kick.type = 'sine';
-  kick.frequency.value = 50;
-  const kickGain = ctx.createGain();
-  kickGain.gain.value = 0;
-  kick.connect(kickGain).connect(panner);
-  kick.start();
+  const bassOsc = ctx.createOscillator(); bassOsc.type = 'sawtooth';
+  const bassLpf = ctx.createBiquadFilter(); bassLpf.type = 'lowpass'; bassLpf.frequency.value = 380;
+  const bassGain = ctx.createGain(); bassGain.gain.value = 0;
+  bassOsc.connect(bassLpf).connect(bassGain).connect(panner); bassOsc.start();
 
-  // ---- Scheduler: queues ~0.6s of notes every 0.2s ----
-  let nextNoteTime = ctx.currentTime + 0.15;
+  const kick = ctx.createOscillator(); kick.type = 'sine';
+  const kickGain = ctx.createGain(); kickGain.gain.value = 0;
+  kick.connect(kickGain).connect(panner); kick.start();
+
+  let nextNote = ctx.currentTime + 0.15;
   let beatIdx = 0;
-
   function schedule() {
     const horizon = ctx.currentTime + 0.6;
-    while (nextNoteTime < horizon) {
-      const t = nextNoteTime;
-
-      // Melody note (each beat)
+    while (nextNote < horizon) {
+      const t = nextNote;
       const m = melody[beatIdx % melody.length];
       lead.frequency.setValueAtTime(m, t);
       leadGain.gain.cancelScheduledValues(t);
       leadGain.gain.setValueAtTime(0.0001, t);
-      leadGain.gain.exponentialRampToValueAtTime(0.28, t + 0.015);
+      leadGain.gain.exponentialRampToValueAtTime(0.24, t + 0.015);
       leadGain.gain.exponentialRampToValueAtTime(0.0001, t + beat * 0.85);
-
-      // Bass note (every other beat)
+      // Harmonic an octave up on accent beats
+      if (beatIdx % 4 === 0) {
+        harm.frequency.setValueAtTime(m * 2, t);
+        harmGain.gain.cancelScheduledValues(t);
+        harmGain.gain.setValueAtTime(0.0001, t);
+        harmGain.gain.exponentialRampToValueAtTime(0.08, t + 0.02);
+        harmGain.gain.exponentialRampToValueAtTime(0.0001, t + beat * 1.7);
+      }
       if (beatIdx % 2 === 0) {
         const b = bass[Math.floor(beatIdx / 2) % bass.length];
         bassOsc.frequency.setValueAtTime(b, t);
         bassGain.gain.cancelScheduledValues(t);
         bassGain.gain.setValueAtTime(0.0001, t);
-        bassGain.gain.exponentialRampToValueAtTime(0.34, t + 0.02);
+        bassGain.gain.exponentialRampToValueAtTime(0.30, t + 0.02);
         bassGain.gain.exponentialRampToValueAtTime(0.0001, t + beat * 1.8);
       }
-
-      // Kick: every beat — short pitch sweep
       kick.frequency.setValueAtTime(110, t);
       kick.frequency.exponentialRampToValueAtTime(40, t + 0.08);
       kickGain.gain.cancelScheduledValues(t);
       kickGain.gain.setValueAtTime(0.0001, t);
       kickGain.gain.exponentialRampToValueAtTime(0.5, t + 0.005);
       kickGain.gain.exponentialRampToValueAtTime(0.0001, t + 0.18);
-
-      nextNoteTime += beat;
+      nextNote += beat;
       beatIdx++;
     }
   }
   schedule();
   const intervalId = setInterval(schedule, 200);
-
   return {
     panner,
     stop() {
       clearInterval(intervalId);
       try { lead.stop(); } catch (e) {}
+      try { harm.stop(); } catch (e) {}
       try { bassOsc.stop(); } catch (e) {}
       try { kick.stop(); } catch (e) {}
+      try { panner.disconnect(); } catch (e) {}
+    },
+  };
+}
+
+// ----- BRASS / HORN-LED (side stages) --------------------------------------
+// Square + saw lead through a band-pass filter — gives that buzzy horn timbre.
+// Faster tempo, mixolydian, staccato accents, no sub-bass kick.
+function brassStage(ctx, panner, seed) {
+  const rng = mulberry32(seed >>> 0);
+  const baseFreq = 233 * Math.pow(2, Math.floor(rng() * 12) / 12); // Bb3 ± octave
+  const tempo = 116 + Math.floor(rng() * 24);
+  const beat = 60 / tempo;
+  const melody = new Array(8).fill(0).map(() => baseFreq * SCALE_MIXO[Math.floor(rng() * SCALE_MIXO.length)]);
+  const bass = new Array(4).fill(0).map(() => baseFreq * 0.5 * SCALE_MIXO[Math.floor(rng() * 4)]);
+
+  // Two-osc "horn" — saw + square detuned slightly through a bandpass.
+  const sawOsc = ctx.createOscillator(); sawOsc.type = 'sawtooth';
+  const sqrOsc = ctx.createOscillator(); sqrOsc.type = 'square';
+  const hornMix = ctx.createGain(); hornMix.gain.value = 0;
+  const hornBpf = ctx.createBiquadFilter();
+  hornBpf.type = 'bandpass'; hornBpf.frequency.value = 1400; hornBpf.Q.value = 1.6;
+  sawOsc.connect(hornMix); sqrOsc.connect(hornMix);
+  hornMix.connect(hornBpf).connect(panner);
+  sawOsc.start(); sqrOsc.start();
+
+  // Tuba-ish bass: square + low-pass.
+  const tuba = ctx.createOscillator(); tuba.type = 'square';
+  const tubaLpf = ctx.createBiquadFilter(); tubaLpf.type = 'lowpass'; tubaLpf.frequency.value = 320;
+  const tubaGain = ctx.createGain(); tubaGain.gain.value = 0;
+  tuba.connect(tubaLpf).connect(tubaGain).connect(panner); tuba.start();
+
+  let nextNote = ctx.currentTime + 0.15;
+  let beatIdx = 0;
+  function schedule() {
+    const horizon = ctx.currentTime + 0.6;
+    while (nextNote < horizon) {
+      const t = nextNote;
+      const m = melody[beatIdx % melody.length];
+      // Detune the two oscs ~7 cents for chorus.
+      sawOsc.frequency.setValueAtTime(m * 1.004, t);
+      sqrOsc.frequency.setValueAtTime(m * 0.996, t);
+      hornMix.gain.cancelScheduledValues(t);
+      hornMix.gain.setValueAtTime(0.0001, t);
+      hornMix.gain.exponentialRampToValueAtTime(0.20, t + 0.012);
+      // Staccato decay — short bursts.
+      hornMix.gain.exponentialRampToValueAtTime(0.0001, t + beat * 0.55);
+      // Tuba on the downbeats only.
+      if (beatIdx % 2 === 0) {
+        const b = bass[Math.floor(beatIdx / 2) % bass.length];
+        tuba.frequency.setValueAtTime(b, t);
+        tubaGain.gain.cancelScheduledValues(t);
+        tubaGain.gain.setValueAtTime(0.0001, t);
+        tubaGain.gain.exponentialRampToValueAtTime(0.32, t + 0.025);
+        tubaGain.gain.exponentialRampToValueAtTime(0.0001, t + beat * 1.4);
+      }
+      nextNote += beat;
+      beatIdx++;
+    }
+  }
+  schedule();
+  const intervalId = setInterval(schedule, 200);
+  return {
+    panner,
+    stop() {
+      clearInterval(intervalId);
+      try { sawOsc.stop(); } catch (e) {}
+      try { sqrOsc.stop(); } catch (e) {}
+      try { tuba.stop(); } catch (e) {}
+      try { panner.disconnect(); } catch (e) {}
+    },
+  };
+}
+
+// ----- DRUM CIRCLE (polyrhythmic drums, no melody) -------------------------
+// Two toms in a 3:4 cross-rhythm, plus a heartbeat-like kick. The seed picks
+// tempo + which tom plays the 3-pattern vs the 4-pattern.
+function drumStage(ctx, panner, seed) {
+  const rng = mulberry32(seed >>> 0);
+  const tempo = 70 + Math.floor(rng() * 22);
+  const beat = 60 / tempo;
+  // Tick = 1/12th of a measure (LCM of 3 and 4).
+  const tick = beat / 3;
+  const tom1Freq = 150 + Math.floor(rng() * 40);   // higher tom
+  const tom2Freq = 88 + Math.floor(rng() * 22);    // lower tom
+
+  // Drums are pitch-swept sine oscillators that we re-pluck per hit.
+  const kick = ctx.createOscillator(); kick.type = 'sine';
+  const kickGain = ctx.createGain(); kickGain.gain.value = 0;
+  kick.connect(kickGain).connect(panner); kick.start();
+
+  const tom1 = ctx.createOscillator(); tom1.type = 'sine';
+  const tom1Gain = ctx.createGain(); tom1Gain.gain.value = 0;
+  tom1.connect(tom1Gain).connect(panner); tom1.start();
+
+  const tom2 = ctx.createOscillator(); tom2.type = 'sine';
+  const tom2Gain = ctx.createGain(); tom2Gain.gain.value = 0;
+  tom2.connect(tom2Gain).connect(panner); tom2.start();
+
+  let nextTick = ctx.currentTime + 0.15;
+  let tickIdx = 0;
+  function schedule() {
+    const horizon = ctx.currentTime + 0.6;
+    while (nextTick < horizon) {
+      const t = nextTick;
+      const measureTick = tickIdx % 12;
+      // Kick: 1 and 7 (every half measure).
+      if (measureTick === 0 || measureTick === 6) {
+        kick.frequency.setValueAtTime(95, t);
+        kick.frequency.exponentialRampToValueAtTime(45, t + 0.10);
+        kickGain.gain.cancelScheduledValues(t);
+        kickGain.gain.setValueAtTime(0.0001, t);
+        kickGain.gain.exponentialRampToValueAtTime(0.48, t + 0.005);
+        kickGain.gain.exponentialRampToValueAtTime(0.0001, t + 0.20);
+      }
+      // Tom1 on the 3-pattern (every 4 ticks)
+      if (measureTick % 4 === 0) {
+        tom1.frequency.setValueAtTime(tom1Freq * 1.2, t);
+        tom1.frequency.exponentialRampToValueAtTime(tom1Freq, t + 0.06);
+        tom1Gain.gain.cancelScheduledValues(t);
+        tom1Gain.gain.setValueAtTime(0.0001, t);
+        tom1Gain.gain.exponentialRampToValueAtTime(0.34, t + 0.005);
+        tom1Gain.gain.exponentialRampToValueAtTime(0.0001, t + 0.16);
+      }
+      // Tom2 on the 4-pattern (every 3 ticks)
+      if (measureTick % 3 === 0) {
+        tom2.frequency.setValueAtTime(tom2Freq * 1.2, t);
+        tom2.frequency.exponentialRampToValueAtTime(tom2Freq, t + 0.07);
+        tom2Gain.gain.cancelScheduledValues(t);
+        tom2Gain.gain.setValueAtTime(0.0001, t);
+        tom2Gain.gain.exponentialRampToValueAtTime(0.30, t + 0.005);
+        tom2Gain.gain.exponentialRampToValueAtTime(0.0001, t + 0.18);
+      }
+      nextTick += tick;
+      tickIdx++;
+    }
+  }
+  schedule();
+  const intervalId = setInterval(schedule, 180);
+  return {
+    panner,
+    stop() {
+      clearInterval(intervalId);
+      try { kick.stop(); } catch (e) {}
+      try { tom1.stop(); } catch (e) {}
+      try { tom2.stop(); } catch (e) {}
       try { panner.disconnect(); } catch (e) {}
     },
   };

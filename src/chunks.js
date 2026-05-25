@@ -117,6 +117,7 @@ export class ChunkManager {
 
     const ctx = {
       cx, cz, key,
+      theme,
       cxWorld: cx * CHUNK_SIZE,
       czWorld: cz * CHUNK_SIZE,
       rng: mulberry32(hash2(cx, cz)),
@@ -157,24 +158,27 @@ function pickTheme(cx, cz) {
   const r = rng();
 
   if (dist <= 1.5) {
-    if (r < 0.35) return 'side_stage';
-    if (r < 0.55) return 'food_plaza';
-    if (r < 0.80) return 'vendor_row';
-    if (r < 0.92) return 'drum_circle';
+    if (r < 0.32) return 'side_stage';
+    if (r < 0.50) return 'food_plaza';
+    if (r < 0.72) return 'vendor_row';
+    if (r < 0.84) return 'drum_circle';
+    if (r < 0.90) return 'lake';     // 6% near center — rare but possible
     return 'grove';
   }
   if (dist <= 3.5) {
-    if (r < 0.20) return 'side_stage';
-    if (r < 0.35) return 'food_plaza';
-    if (r < 0.55) return 'vendor_row';
-    if (r < 0.70) return 'drum_circle';
+    if (r < 0.18) return 'side_stage';
+    if (r < 0.32) return 'food_plaza';
+    if (r < 0.50) return 'vendor_row';
+    if (r < 0.62) return 'drum_circle';
+    if (r < 0.76) return 'lake';     // 14% mid ring
     if (r < 0.90) return 'grove';
     return 'open_lawn';
   }
   // Outer rings — peaceful
   if (r < 0.10) return 'drum_circle';
-  if (r < 0.30) return 'vendor_row';
-  if (r < 0.65) return 'grove';
+  if (r < 0.28) return 'vendor_row';
+  if (r < 0.45) return 'lake';       // 17% outer
+  if (r < 0.70) return 'grove';
   return 'open_lawn';
 }
 
@@ -186,6 +190,7 @@ const THEME_PROPS = {
   drum_circle: { treeDensity: 0.4,  ambientCrowd: 12 },
   grove:       { treeDensity: 1.0,  ambientCrowd: 7 },
   open_lawn:   { treeDensity: 0.2,  ambientCrowd: 8 },
+  lake:        { treeDensity: 0.35, ambientCrowd: 5 },  // a few people lounging at the shore
 };
 
 const THEME_BUILDERS = {
@@ -196,43 +201,59 @@ const THEME_BUILDERS = {
   drum_circle: buildDrumCircle,
   grove: buildGrove,
   open_lawn: buildOpenLawn,
+  lake: buildLake,
 };
 
 // ---------- Path placement ----------
 
 function placePaths(ctx) {
-  // Two perpendicular dirt strips through the chunk center — connect with neighbors
-  // automatically because every chunk does the same thing.
+  // Two dirt trails through the chunk — they enter/exit at the chunk's edge
+  // midpoints (so they always connect with neighbors) but wiggle in between
+  // so they don't read as a perfect grid. Each chunk's wiggle is seeded by
+  // (cx, cz) so it's deterministic + consistent on reload.
+  //
+  // Lake-themed chunks skip paths entirely — the causeway IS the path.
+  if (ctx.theme === 'lake') return;
+
   const pathColor = 0xb89570;
   const mat = new THREE.MeshStandardMaterial({
     color: pathColor,
     roughness: 1,
     metalness: 0,
+    // polygonOffset pulls the path "toward camera" in depth so it draws on top
+    // of the ground even when the terrain has tiny variations. depthWrite off
+    // prevents the path from blocking decals stacked above it.
+    polygonOffset: true,
+    polygonOffsetFactor: -2,
+    polygonOffsetUnits: -2,
     depthWrite: false,
   });
 
-  const widthA = 5;
-  const lenA = CHUNK_SIZE + 2;
+  // E-W trail: enters at (cxWorld - chunk/2, czWorld), exits at (cxWorld + chunk/2, czWorld)
+  const ewMesh = buildCurvedPath(
+    ctx.cxWorld - CHUNK_SIZE / 2 - 1, ctx.czWorld,
+    ctx.cxWorld + CHUNK_SIZE / 2 + 1, ctx.czWorld,
+    5,   // width
+    ctx.rng,
+    mat,
+  );
+  ctx.group.add(ewMesh);
 
-  // E-W strip
-  const ew = new THREE.Mesh(new THREE.PlaneGeometry(lenA, widthA), mat);
-  ew.rotation.x = -Math.PI / 2;
-  ew.position.set(ctx.cxWorld, 0.04, ctx.czWorld);
-  ew.receiveShadow = true;
-  ctx.group.add(ew);
+  // N-S trail
+  const nsMesh = buildCurvedPath(
+    ctx.cxWorld, ctx.czWorld - CHUNK_SIZE / 2 - 1,
+    ctx.cxWorld, ctx.czWorld + CHUNK_SIZE / 2 + 1,
+    5,
+    ctx.rng,
+    mat,
+  );
+  ctx.group.add(nsMesh);
 
-  // N-S strip
-  const ns = new THREE.Mesh(new THREE.PlaneGeometry(widthA, lenA), mat);
-  ns.rotation.x = -Math.PI / 2;
-  ns.position.set(ctx.cxWorld, 0.04, ctx.czWorld);
-  ns.receiveShadow = true;
-  ctx.group.add(ns);
-
-  // A small dirt pad at the intersection
+  // A small dirt pad at the intersection — kept circular as a visual anchor.
   const padGeo = new THREE.CircleGeometry(5, 16);
   const pad = new THREE.Mesh(padGeo, mat);
   pad.rotation.x = -Math.PI / 2;
-  pad.position.set(ctx.cxWorld, 0.05, ctx.czWorld);
+  pad.position.set(ctx.cxWorld, 0.06, ctx.czWorld);
   ctx.group.add(pad);
 
   // Register path waypoints for NPCs (chunk-local + 4 edge points)
@@ -243,6 +264,67 @@ function placePaths(ctx) {
     attractor: { radius: 6, weight: 0.5 },
     chunkKey: ctx.key,
   });
+}
+
+// Builds a flat ribbon mesh from (x1,z1) to (x2,z2) that follows a gentle
+// curve. The curve is a Catmull-Rom through jittered interior control points
+// (deterministic via the passed rng), and the ribbon has constant width with
+// edges offset perpendicular to the local tangent. Lying flat at y=0.06.
+function buildCurvedPath(x1, z1, x2, z2, width, rng, material) {
+  const segments = 16;
+  const halfW = width / 2;
+
+  // Build control points: start, 3 jittered interior, end.
+  const lineLen = Math.hypot(x2 - x1, z2 - z1);
+  const tangent = { x: (x2 - x1) / lineLen, z: (z2 - z1) / lineLen };
+  const perpendicular = { x: -tangent.z, z: tangent.x };
+  const maxOffset = Math.min(width * 1.5, lineLen * 0.10); // wiggle amplitude
+
+  const ctrl = [{ x: x1, z: z1 }];
+  for (let i = 1; i <= 3; i++) {
+    const t = i / 4;
+    const baseX = x1 + tangent.x * lineLen * t;
+    const baseZ = z1 + tangent.z * lineLen * t;
+    const off = (rng() - 0.5) * 2 * maxOffset;
+    ctrl.push({ x: baseX + perpendicular.x * off, z: baseZ + perpendicular.z * off });
+  }
+  ctrl.push({ x: x2, z: z2 });
+
+  const curve = new THREE.CatmullRomCurve3(
+    ctrl.map((p) => new THREE.Vector3(p.x, 0, p.z)),
+    false,
+    'catmullrom',
+    0.5,
+  );
+
+  // Build ribbon: for each step along the curve, emit two vertices offset
+  // perpendicularly by ±halfW.
+  const verts = [];
+  const indices = [];
+  for (let i = 0; i <= segments; i++) {
+    const t = i / segments;
+    const p = curve.getPoint(t);
+    const tg = curve.getTangent(t);
+    // Perpendicular in XZ plane (rotate tangent 90° around Y).
+    const px = -tg.z;
+    const pz = tg.x;
+    verts.push(p.x + px * halfW, 0, p.z + pz * halfW); // left
+    verts.push(p.x - px * halfW, 0, p.z - pz * halfW); // right
+  }
+  for (let i = 0; i < segments; i++) {
+    const a = i * 2, b = i * 2 + 1, c = (i + 1) * 2, d = (i + 1) * 2 + 1;
+    indices.push(a, c, b);
+    indices.push(b, c, d);
+  }
+  const geom = new THREE.BufferGeometry();
+  geom.setAttribute('position', new THREE.Float32BufferAttribute(verts, 3));
+  geom.setIndex(indices);
+  geom.computeVertexNormals();
+
+  const mesh = new THREE.Mesh(geom, material);
+  mesh.position.y = 0.06;
+  mesh.receiveShadow = true;
+  return mesh;
 }
 
 // ---------- Tree scattering ----------
@@ -431,6 +513,12 @@ function buildDrumCircle(ctx) {
     attractor: { radius: 12, weight: 2.2 },
     chunkKey: ctx.key,
   });
+
+  // Polyrhythmic drum music, anchored at the fire pit. Lower pan height than
+  // stages so it feels grounded.
+  const drumSeed = hash2(ctx.cx * 13 + 7, ctx.cz * 17 + 11);
+  const handle = Sound.attachStageMusic(x, 1, z, drumSeed, 'drum');
+  if (handle) stageMusic.push({ handle, chunkKey: ctx.key });
 }
 
 function buildGrove(ctx) {
@@ -469,6 +557,190 @@ function buildOpenLawn(ctx) {
       position: new THREE.Vector3(x, 0, z),
       footprint: 0,
       attractor: { radius: 3, weight: 0.4 },
+      chunkKey: ctx.key,
+    });
+  }
+}
+
+// Big lake + island + grassy causeway + smaller lake + peninsula. Composite
+// landmark: the causeway is a strip of grass that cuts through the big lake
+// and bridges to the smaller lake. The cart can drive across the causeway
+// but bumps off the water edge (ring of sphere colliders). NPCs avoid the
+// lake interior via a single big footprint per lake body.
+function buildLake(ctx) {
+  const rng = ctx.rng;
+  const cx = ctx.cxWorld;
+  const cz = ctx.czWorld;
+
+  // Big lake, slightly south of chunk center.
+  const bigR = 22 + rng() * 4;
+  const bigCx = cx + (rng() - 0.5) * 6;
+  const bigCz = cz - 10 + (rng() - 0.5) * 6;
+
+  // Smaller lake to the north-east, just past the big lake.
+  const smallR = 9 + rng() * 3;
+  const smallCx = cx + 14 + (rng() - 0.5) * 4;
+  const smallCz = cz + 22 + (rng() - 0.5) * 4;
+
+  // Causeway: a grassy strip running N-S through the east edge of the big
+  // lake, continuing up to the small lake. Constant 6m wide.
+  const causewayHalfW = 3;
+  const causewayX = (smallCx + bigCx) * 0.5;
+
+  // Peninsula direction (small lake): finger pointing inward from the east shore.
+  const peninsulaAngle = Math.PI;            // points west into the small lake
+  const peninsulaLen = smallR * 0.65;
+
+  // ----- Water meshes -----
+  const waterMat = new THREE.MeshStandardMaterial({
+    color: 0x4d96d6,
+    emissive: 0x1a3550,
+    emissiveIntensity: 0.25,
+    roughness: 0.3,
+    metalness: 0.05,
+    transparent: true,
+    opacity: 0.85,
+    flatShading: true,
+    polygonOffset: true,
+    polygonOffsetFactor: -1,
+    polygonOffsetUnits: -1,
+    depthWrite: false,
+  });
+
+  const bigWater = new THREE.Mesh(new THREE.CircleGeometry(bigR, 40), waterMat);
+  bigWater.rotation.x = -Math.PI / 2;
+  bigWater.position.set(bigCx, 0.08, bigCz);
+  bigWater.receiveShadow = true;
+  ctx.group.add(bigWater);
+
+  const smallWater = new THREE.Mesh(new THREE.CircleGeometry(smallR, 28), waterMat);
+  smallWater.rotation.x = -Math.PI / 2;
+  smallWater.position.set(smallCx, 0.08, smallCz);
+  smallWater.receiveShadow = true;
+  ctx.group.add(smallWater);
+
+  const grassMat = new THREE.MeshStandardMaterial({
+    color: 0x82c277,
+    roughness: 0.95,
+    flatShading: true,
+  });
+
+  // ----- Island in big lake -----
+  const islandR = 3.5 + rng() * 1.5;
+  const islandX = bigCx + (rng() - 0.5) * 4;
+  const islandZ = bigCz + (rng() - 0.5) * 4;
+  const island = new THREE.Mesh(new THREE.CircleGeometry(islandR, 20), grassMat);
+  island.rotation.x = -Math.PI / 2;
+  island.position.set(islandX, 0.12, islandZ);
+  island.receiveShadow = true;
+  ctx.group.add(island);
+
+  // A tree on the island
+  const trunkMat = new THREE.MeshStandardMaterial({ color: 0x6a4a2a, roughness: 0.95, flatShading: true });
+  const leafMat = new THREE.MeshStandardMaterial({ color: 0x5fa55d, roughness: 0.95, flatShading: true });
+  const trunk = new THREE.Mesh(new THREE.CylinderGeometry(0.35, 0.5, 3.6, 8), trunkMat);
+  trunk.position.set(islandX, 1.8, islandZ);
+  trunk.castShadow = true;
+  ctx.group.add(trunk);
+  const leaf = new THREE.Mesh(new THREE.IcosahedronGeometry(1.6 + rng() * 0.4, 1), leafMat);
+  leaf.position.set(islandX, 3.9, islandZ);
+  leaf.castShadow = true;
+  ctx.group.add(leaf);
+
+  // ----- Causeway -----
+  const causeway = new THREE.Mesh(
+    new THREE.PlaneGeometry(causewayHalfW * 2, CHUNK_SIZE + 2),
+    grassMat,
+  );
+  causeway.rotation.x = -Math.PI / 2;
+  causeway.position.set(causewayX, 0.11, cz);
+  causeway.receiveShadow = true;
+  ctx.group.add(causeway);
+
+  // ----- Peninsula -----
+  const pCx = smallCx + Math.cos(peninsulaAngle) * peninsulaLen * 0.5;
+  const pCz = smallCz + Math.sin(peninsulaAngle) * peninsulaLen * 0.5;
+  const peninsula = new THREE.Mesh(
+    new THREE.PlaneGeometry(2.6, peninsulaLen),
+    grassMat,
+  );
+  peninsula.rotation.x = -Math.PI / 2;
+  peninsula.rotation.z = -peninsulaAngle + Math.PI / 2;
+  peninsula.position.set(pCx, 0.13, pCz);
+  ctx.group.add(peninsula);
+
+  // ----- NPC avoidance: one big footprint per water body (keeps trees +
+  //       wandering NPCs out of the water) -----
+  registry.add({
+    kind: 'lake',
+    position: new THREE.Vector3(bigCx, 0, bigCz),
+    footprint: bigR,
+    chunkKey: ctx.key,
+  });
+  registry.add({
+    kind: 'lake',
+    position: new THREE.Vector3(smallCx, 0, smallCz),
+    footprint: smallR,
+    chunkKey: ctx.key,
+  });
+
+  // ----- Edge colliders: ring of overlapping spheres around each shore,
+  //       gapped where the causeway crosses (and where the peninsula
+  //       attaches to the small lake). Cart bumps off them. -----
+  addLakeRingColliders(ctx, bigCx, bigCz, bigR, causewayX, causewayHalfW, null);
+  addLakeRingColliders(ctx, smallCx, smallCz, smallR, causewayX, causewayHalfW, peninsulaAngle);
+
+  // Island gets its own collider so the cart can bonk off it (e.g. if
+  // someone manages to splash across the water somehow).
+  registry.add({
+    kind: 'island',
+    position: new THREE.Vector3(islandX, 0.5, islandZ),
+    footprint: islandR,
+    collider: { radius: islandR + 0.4, damage: 3 },
+    chunkKey: ctx.key,
+  });
+
+  // Attractor: NPCs like hanging out at the shore.
+  registry.add({
+    kind: 'shore',
+    position: new THREE.Vector3(bigCx + bigR + 4, 0, bigCz),
+    footprint: 0,
+    attractor: { radius: 10, weight: 1.4 },
+    chunkKey: ctx.key,
+  });
+}
+
+// Place sphere colliders ringing the lake's shore. Skip a band of angles
+// where the causeway crosses (so the cart can drive through) and optionally
+// another band where the peninsula attaches (so we don't double-collide).
+function addLakeRingColliders(ctx, lcx, lcz, lakeR, causewayX, causewayHalfW, peninsulaAngle) {
+  const sphereR = 2.5;
+  const ringR = lakeR - sphereR * 0.4;     // slight inset so spheres sit at water edge
+  const circumference = 2 * Math.PI * ringR;
+  const step = sphereR * 1.4;
+  const n = Math.max(8, Math.ceil(circumference / step));
+
+  for (let i = 0; i < n; i++) {
+    const ang = (i / n) * Math.PI * 2;
+    const px = lcx + Math.cos(ang) * ringR;
+    const pz = lcz + Math.sin(ang) * ringR;
+    // Causeway gap: skip when the collider would sit inside the causeway strip.
+    if (Math.abs(px - causewayX) < causewayHalfW + sphereR * 0.6) continue;
+    // Peninsula attachment gap (small lake only): skip a small arc.
+    if (peninsulaAngle != null) {
+      let dAng = ang - peninsulaAngle;
+      while (dAng > Math.PI) dAng -= Math.PI * 2;
+      while (dAng < -Math.PI) dAng += Math.PI * 2;
+      if (Math.abs(dAng) < 0.35) continue;
+    }
+    registry.add({
+      kind: 'lake_edge',
+      position: new THREE.Vector3(px, 0.5, pz),
+      // footprint = 0 so NPCs don't try to dodge each individual edge sphere
+      // (the central `lake` footprint already handles avoidance).
+      footprint: 0,
+      // Gentle bump — water is more "stay out" than "ouch".
+      collider: { radius: sphereR, damage: 1 },
       chunkKey: ctx.key,
     });
   }
@@ -571,17 +843,26 @@ function buildStage(ctx, x, z, isMain) {
     ctx.group.add(lampLens);
   }
 
-  // ----- Colliders: overlapping spheres covering the full footprint -----
-  // Stage deck rectangle is w x d. We tile spheres so Zerble can't get through from any side.
-  const sphereStep = 4;
-  const sphereR = 3.0;
+  // ----- Colliders: spheres INSCRIBED in the deck rectangle -----
+  // Previously: spheres at the deck corners with radius 3 extended ~3m past
+  // the visible deck edge — Zerble would "hit" empty grass beside the stage.
+  // Now: sphere centers are pulled in by `sphereR` so the union of spheres
+  // matches the deck outline exactly, with overlap inside.
+  const sphereR = 2.5;
   const collDamage = isMain ? 14 : 9;
-  for (let xx = -w / 2; xx <= w / 2 + 0.1; xx += sphereStep) {
-    for (let zz = -d / 2; zz <= d / 2 + 0.1; zz += sphereStep) {
+  const innerW = Math.max(0.001, w - sphereR * 2);
+  const innerD = Math.max(0.001, d - sphereR * 2);
+  // Use spacing of ~3.5m so spheres overlap (radius 2.5 → 5m diameter, 1.5m overlap).
+  const cols = Math.max(2, Math.ceil(innerW / 3.5) + 1);
+  const rows = Math.max(2, Math.ceil(innerD / 3.5) + 1);
+  for (let cc = 0; cc < cols; cc++) {
+    for (let rr = 0; rr < rows; rr++) {
+      const lx = -innerW / 2 + (cc / (cols - 1)) * innerW;
+      const lz = -innerD / 2 + (rr / (rows - 1)) * innerD;
       registry.add({
         kind: 'stage',
-        position: new THREE.Vector3(x + xx, 1, z + zz),
-        footprint: 3.2,
+        position: new THREE.Vector3(x + lx, 1, z + lz),
+        footprint: sphereR,
         collider: { radius: sphereR, damage: collDamage },
         chunkKey: ctx.key,
       });
@@ -600,7 +881,7 @@ function buildStage(ctx, x, z, isMain) {
   // ----- Spatial music for this stage -----
   // Seed mixes chunk coords + stage flag so main vs side stages get distinct music.
   const musicSeed = hash2(ctx.cx * 7 + (isMain ? 1 : 2), ctx.cz * 11 + (isMain ? 3 : 5));
-  const handle = Sound.attachStageMusic(x, 4, z, musicSeed);
+  const handle = Sound.attachStageMusic(x, 4, z, musicSeed, isMain ? 'jam' : 'brass');
   if (handle) stageMusic.push({ handle, chunkKey: ctx.key });
 
   // ----- The band on stage -----

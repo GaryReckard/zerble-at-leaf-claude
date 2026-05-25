@@ -162,7 +162,7 @@ export const Trip = {
   },
 
   // Timing / proximity settings
-  duration:            30,
+  duration:            180,        // 3-minute trip by default — wooks deal good shit
   fadeIn:              1.5,
   fadeOut:             3.0,
   cooldown:            5,

@@ -211,7 +211,7 @@ function tickBody(dt) {
     puppets.update(dt);
     band.update(dt);
     kids.update(dt, bubbles, zerble);
-    wooks.update(dt);
+    wooks.update(dt, zerble.position, Math.abs(zerble.speed));
     // Collect wook world positions for proximity detection
     const _wookPositions = wooks.wooks.map(w => w.position);
     Trip.update(dt, zerble.position, Math.abs(zerble.speed), _wookPositions);

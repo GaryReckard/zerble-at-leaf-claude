@@ -489,7 +489,7 @@ function buildTripPanel() {
   el.appendChild(timingLabel);
 
   const timingDefs = [
-    { key: 'duration',           label: 'Duration (s)',       min: 5,   max: 120, step: 1   },
+    { key: 'duration',           label: 'Duration (s)',       min: 5,   max: 300, step: 1   },
     { key: 'fadeIn',             label: 'Fade in (s)',        min: 0,   max: 5,   step: 0.1 },
     { key: 'fadeOut',            label: 'Fade out (s)',       min: 0,   max: 10,  step: 0.1 },
     { key: 'proximityThreshold', label: 'Proximity (m)',      min: 1,   max: 10,  step: 0.1 },

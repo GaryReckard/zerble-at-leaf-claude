@@ -392,17 +392,55 @@ export class Wooks {
     }
   }
 
-  update(dt) {
+  // Wooks normally drift in slow circles around fixed anchors. But if Zerble
+  // parks within DETECTION_RANGE, the closest wook breaks formation and walks
+  // straight to him — he's about to dose the driver. zerblePos/zerbleSpeed
+  // are optional; if omitted, wooks only do their default orbit (sandbox case).
+  update(dt, zerblePos, zerbleSpeed) {
+    const DETECTION_RANGE = 25;     // wooks notice a stopped Zerble within this
+    const APPROACH_SPEED  = 1.8;    // m/s when walking up to the driver
+    const REST_SPEED      = 0.5;    // |zerble.speed| below this counts as stopped
+
+    // Pick the wook that should approach: closest to Zerble, if Zerble is at rest
+    // and within detection range. -1 means no one is approaching this frame.
+    let approachIdx = -1;
+    if (zerblePos && zerbleSpeed != null && zerbleSpeed < REST_SPEED) {
+      let bestD2 = DETECTION_RANGE * DETECTION_RANGE;
+      for (let i = 0; i < this.wooks.length; i++) {
+        const w = this.wooks[i];
+        const dx = w.position.x - zerblePos.x;
+        const dz = w.position.z - zerblePos.z;
+        const d2 = dx * dx + dz * dz;
+        if (d2 < bestD2) { bestD2 = d2; approachIdx = i; }
+      }
+    }
+
     for (let i = 0; i < this.wooks.length; i++) {
       const w = this.wooks[i];
-      w.userData.phase += w.userData.speed * dt;
-      const a = w.userData.anchor;
-      const px = a.x + Math.cos(w.userData.phase) * w.userData.radius;
-      const pz = a.z + Math.sin(w.userData.phase * 0.7) * w.userData.radius;
-      w.position.set(px, 0, pz);
-      w.rotation.y = -w.userData.phase + Math.PI;
 
-      // Sway
+      if (i === approachIdx && zerblePos) {
+        // Walk toward Zerble. Stop ~1.5m short so we don't standing-on-his-head.
+        const dx = zerblePos.x - w.position.x;
+        const dz = zerblePos.z - w.position.z;
+        const d = Math.hypot(dx, dz);
+        if (d > 1.5) {
+          const inv = 1 / (d || 1);
+          w.position.x += dx * inv * APPROACH_SPEED * dt;
+          w.position.z += dz * inv * APPROACH_SPEED * dt;
+        }
+        // Face Zerble — local -z is forward
+        w.rotation.y = Math.atan2(-dx, -dz);
+      } else {
+        // Default behavior: orbit the anchor
+        w.userData.phase += w.userData.speed * dt;
+        const a = w.userData.anchor;
+        const px = a.x + Math.cos(w.userData.phase) * w.userData.radius;
+        const pz = a.z + Math.sin(w.userData.phase * 0.7) * w.userData.radius;
+        w.position.set(px, 0, pz);
+        w.rotation.y = -w.userData.phase + Math.PI;
+      }
+
+      // Sway (applies to everyone — including the creep walking up to you)
       const t = performance.now() * 0.002 + i;
       w.children[0].rotation.z = Math.sin(t) * 0.15;
       w.children[0].rotation.x = Math.cos(t * 0.7) * 0.08;

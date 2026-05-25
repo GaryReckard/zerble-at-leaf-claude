@@ -72,6 +72,7 @@
       </optgroup>
       <optgroup label="Festival props">
         <option value="hammock">Hammock</option>
+        <option value="hammock_with_npc">Hammock + person (lounging)</option>
         <option value="tent">Vendor tent</option>
         <option value="food_truck">Food truck</option>
         <option value="tree">Tree</option>
@@ -123,6 +124,8 @@
     import { Zerble } from './src/zerble.js';
     import { Lurleen, createHeartGeometry } from './src/lurleen.js';
     import { buildHammockStandalone } from './src/chunks.js';
+    import { buildHammock as buildHammockRaw } from './src/models/hammock.js';
+    import { buildSimpleNPC } from './src/models/puppet.js';
     import { _buildCanoeMeshForSandbox, buildLake } from './src/lakes.js';
 import { mulberry32 } from './src/rng.js';
     import { buildTent } from './src/models/tent.js';
@@ -364,6 +367,30 @@ import { mulberry32 } from './src/rng.js';
           scene.add(g);
           entityRoot = g;
           cam.target.set(0, 1.0, 0);
+          break;
+        }
+        case 'hammock_with_npc': {
+          // Build a hammock at origin and drop a lounging NPC at the seat. This
+          // exercises the same buildHammock() the chunks use, so if the npc's
+          // y/yaw look wrong here they'll look wrong in-game too.
+          const { group: hammockGroup, seatPos, yaw } = buildHammockRaw(0, 0, Math.random);
+          // Build a body, sit it at the seat, recline it slightly so it doesn't
+          // look like the NPC is standing inside the hammock.
+          const body = buildSimpleNPC(0x6fcf6a, 0xe6c098);
+          // crowd.js renders riding NPCs with feet at "seatY - 1.05" so the
+          // capsule torso (baked at body-local y=1.0) sits at seatY - 0.05.
+          // Mirror that here so this preview matches game appearance.
+          body.position.set(seatPos.x, seatPos.y - 1.05, seatPos.z);
+          body.rotation.y = yaw + Math.PI / 2;  // align spine with hammock rope axis
+          body.rotation.x = -0.15;              // lean back into the sag
+          const root = new THREE.Group();
+          root.add(hammockGroup);
+          root.add(body);
+          scene.add(root);
+          entityRoot = root;
+          cam.target.set(0, seatPos.y, 0);
+          cam.dist = 6;
+          applyCam();
           break;
         }
         case 'heart': {

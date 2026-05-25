@@ -467,10 +467,12 @@ export class Crowd {
       case 'idle': {
         // Occasionally try to claim a nearby unoccupied hammock. Tired/sociable
         // NPCs are slightly more likely to nap; skittish ones almost never.
+        // (Bumped from 0.05 to 0.4 — at the old rate Gary never saw anyone in
+        // a hammock across a full play session.)
         if (
           npc.skittish < 0.5 &&
           npc.stateTimer < 5 &&
-          Math.random() < dt * 0.05
+          Math.random() < dt * 0.4
         ) {
           const claimed = this._tryClaimHammock(npc);
           if (claimed) break;
@@ -899,11 +901,13 @@ export class Crowd {
   // ----- Hammock riding -----
 
   _tryClaimHammock(npc) {
-    // Find the nearest unoccupied hammock within 30m.
+    // Find the nearest unoccupied hammock within 60m. (Was 30m — too tight for
+    // sparse hammock spawn density; NPCs would idle near a chunk boundary and
+    // never spot the hammock one chunk over.)
     const ids = registry.byKind.get('hammock');
     if (!ids) return false;
     let best = null;
-    let bestD2 = 30 * 30;
+    let bestD2 = 60 * 60;
     for (const id of ids) {
       const e = registry.entries.get(id);
       if (!e || !e.hammock || e.hammock.occupied) continue;

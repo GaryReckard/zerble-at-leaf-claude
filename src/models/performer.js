@@ -102,12 +102,16 @@ export function buildPerformer(instrument, rng = Math.random) {
     guitarBody.position.set(0.15, 1.0, -0.35);
     guitarBody.rotation.z = -0.4;
     g.add(guitarBody);
-    const neck = new THREE.Mesh(new THREE.BoxGeometry(0.09, 1.0, 0.09), wood);
-    neck.position.set(-0.55, 1.25, -0.45);
+    // Neck — HORIZONTAL shaft along x, sticking out from the body's upper end.
+    // Long axis is x (1.0), thin on y + z (0.09). rotation.z tilts it the same
+    // direction as the body so the whole instrument reads as one rigid object.
+    const neck = new THREE.Mesh(new THREE.BoxGeometry(1.0, 0.09, 0.09), wood);
+    neck.position.set(-0.45, 1.30, -0.4);
     neck.rotation.z = -0.4;
     g.add(neck);
-    const head2 = new THREE.Mesh(new THREE.BoxGeometry(0.18, 0.18, 0.06), wood);
-    head2.position.set(-0.95, 1.45, -0.5);
+    // Headstock at the far end of the neck.
+    const head2 = new THREE.Mesh(new THREE.BoxGeometry(0.20, 0.18, 0.06), wood);
+    head2.position.set(-0.95, 1.40, -0.42);
     head2.rotation.z = -0.4;
     g.add(head2);
   } else if (instrument === 'bass') {
@@ -118,8 +122,9 @@ export function buildPerformer(instrument, rng = Math.random) {
     bassBody.position.set(0.1, 0.9, -0.35);
     bassBody.rotation.z = -0.35;
     g.add(bassBody);
-    const neck = new THREE.Mesh(new THREE.BoxGeometry(0.1, 1.2, 0.1), wood);
-    neck.position.set(-0.6, 1.2, -0.45);
+    // Neck — horizontal shaft along x (was vertical, which read as a flagpole).
+    const neck = new THREE.Mesh(new THREE.BoxGeometry(1.2, 0.10, 0.10), wood);
+    neck.position.set(-0.55, 1.25, -0.40);
     neck.rotation.z = -0.35;
     g.add(neck);
   } else if (instrument === 'drum') {

@@ -17,6 +17,7 @@
 //     away (avoids parking-near-crowd farming) AND a small time cooldown.
 
 import * as THREE from 'three';
+import { BufferGeometryUtils } from 'three/addons/utils/BufferGeometryUtils.js';
 import { registry } from './registry.js';
 import { PERF } from './perf.js';
 import { CHUNK_SIZE } from './chunks.js';
@@ -73,42 +74,80 @@ export class Crowd {
   }
 
   _buildInstanced() {
-    const bodyGeo = new THREE.CapsuleGeometry(0.32, 1.0, 4, 8);
-    const headGeo = new THREE.IcosahedronGeometry(0.28, 1);
+    // ---- Legs: two cylinders merged, offsets baked into geometry ----
+    const legL = new THREE.CylinderGeometry(0.10, 0.10, 0.65, 6);
+    legL.translate(-0.12, 0.325, 0);
+    const legR = new THREE.CylinderGeometry(0.10, 0.10, 0.65, 6);
+    legR.translate(0.12, 0.325, 0);
+    const legsGeo = BufferGeometryUtils.mergeGeometries([legL, legR]);
+    legL.dispose(); legR.dispose();
 
-    const bodyMat = new THREE.MeshStandardMaterial({ roughness: 0.85, flatShading: true });
-    const headMat = new THREE.MeshStandardMaterial({ color: 0xe6c098, roughness: 0.9, flatShading: true });
+    // ---- Shoes: two boxes merged, offsets baked in ----
+    const shoeL = new THREE.BoxGeometry(0.16, 0.07, 0.24);
+    shoeL.translate(-0.12, 0.035, -0.06);
+    const shoeR = new THREE.BoxGeometry(0.16, 0.07, 0.24);
+    shoeR.translate(0.12, 0.035, -0.06);
+    const shoesGeo = BufferGeometryUtils.mergeGeometries([shoeL, shoeR]);
+    shoeL.dispose(); shoeR.dispose();
 
-    this.bodyMesh = new THREE.InstancedMesh(bodyGeo, bodyMat, MAX_NPCS);
-    this.headMesh = new THREE.InstancedMesh(headGeo, headMat, MAX_NPCS);
+    // ---- Body (torso): capsule centered at y=1.0 ----
+    const bodyGeo = new THREE.CapsuleGeometry(0.26, 0.55, 3, 6);
+    bodyGeo.translate(0, 1.0, 0);
+
+    // ---- Arms: two single-segment capsules merged, shoulders at (±0.30, 1.10, 0) ----
+    const armL = new THREE.CapsuleGeometry(0.075, 0.5, 3, 6);
+    armL.translate(-0.30, 1.10, 0);
+    const armR = new THREE.CapsuleGeometry(0.075, 0.5, 3, 6);
+    armR.translate(0.30, 1.10, 0);
+    const armsGeo = BufferGeometryUtils.mergeGeometries([armL, armR]);
+    armL.dispose(); armR.dispose();
+
+    // ---- Head: icosahedron at y=1.65 ----
+    const headGeo = new THREE.IcosahedronGeometry(0.26, 1);
+    headGeo.translate(0, 1.65, 0);
+
+    // ---- Materials ----
+    const legsMat  = new THREE.MeshStandardMaterial({ color: 0x223a5c, roughness: 0.92, flatShading: true });
+    const shoesMat = new THREE.MeshStandardMaterial({ color: 0x111111, roughness: 0.8,  flatShading: true });
+    const bodyMat  = new THREE.MeshStandardMaterial({ roughness: 0.85, flatShading: true });
+    const armsMat  = new THREE.MeshStandardMaterial({ roughness: 0.85, flatShading: true });
+    const headMat  = new THREE.MeshStandardMaterial({ color: 0xe6c098, roughness: 0.9,  flatShading: true });
+
+    // ---- InstancedMeshes ----
+    this.legsMesh  = new THREE.InstancedMesh(legsGeo,  legsMat,  MAX_NPCS);
+    this.shoesMesh = new THREE.InstancedMesh(shoesGeo, shoesMat, MAX_NPCS);
+    this.bodyMesh  = new THREE.InstancedMesh(bodyGeo,  bodyMat,  MAX_NPCS);
+    this.armsMesh  = new THREE.InstancedMesh(armsGeo,  armsMat,  MAX_NPCS);
+    this.headMesh  = new THREE.InstancedMesh(headGeo,  headMat,  MAX_NPCS);
+
+    // Per-NPC shirt color shared between body and arms (sleeves).
     this.bodyMesh.instanceColor = new THREE.InstancedBufferAttribute(new Float32Array(MAX_NPCS * 3), 3);
-    this.bodyMesh.castShadow = PERF.shadows;
-    this.headMesh.castShadow = PERF.shadows;
-    this.bodyMesh.count = MAX_NPCS;
-    this.headMesh.count = MAX_NPCS;
+    this.armsMesh.instanceColor = new THREE.InstancedBufferAttribute(new Float32Array(MAX_NPCS * 3), 3);
+
     // InstancedMesh frustum culling uses a bounding sphere that's computed once
     // and cached — it does NOT auto-expand when instance matrices move. As
     // Zerble drives far from spawn, the cached sphere falls behind the camera
     // and the entire crowd vanishes (while game logic keeps running →
     // invisible collisions, invisible smiles). Bubbles already disables
     // culling for the same reason. One drawcall per mesh either way.
-    this.bodyMesh.frustumCulled = false;
-    this.headMesh.frustumCulled = false;
+    const allMeshes = [this.legsMesh, this.shoesMesh, this.bodyMesh, this.armsMesh, this.headMesh];
+    for (const m of allMeshes) {
+      m.castShadow = PERF.shadows;
+      m.frustumCulled = false;
+      m.count = MAX_NPCS;
+    }
 
     this.group = new THREE.Group();
     this.group.name = 'Crowd';
-    this.group.add(this.bodyMesh);
-    this.group.add(this.headMesh);
+    for (const m of allMeshes) this.group.add(m);
 
-    // Hide all slots initially.
+    // Hide all slots initially (zero-scale matrix = invisible).
     const zero = new THREE.Matrix4().makeScale(0, 0, 0);
     for (let i = 0; i < MAX_NPCS; i++) {
-      this.bodyMesh.setMatrixAt(i, zero);
-      this.headMesh.setMatrixAt(i, zero);
+      for (const m of allMeshes) m.setMatrixAt(i, zero);
       this.free.push(i);
     }
-    this.bodyMesh.instanceMatrix.needsUpdate = true;
-    this.headMesh.instanceMatrix.needsUpdate = true;
+    for (const m of allMeshes) m.instanceMatrix.needsUpdate = true;
 
     // Reusables — must be DISTINCT Vector3 instances; reusing one for both
     // position and scale args of Matrix4.compose() silently corrupts position.
@@ -194,10 +233,12 @@ export class Crowd {
     // Track the highest-ever slot index so we can narrow draw count each frame.
     if (idx > this._maxIdx) this._maxIdx = idx;
 
-    // Color
+    // Color — shirt applied to both body (torso) and arms (sleeves) so they match.
     const c = new THREE.Color(shirt);
     this.bodyMesh.instanceColor.setXYZ(idx, c.r, c.g, c.b);
     this.bodyMesh.instanceColor.needsUpdate = true;
+    this.armsMesh.instanceColor.setXYZ(idx, c.r, c.g, c.b);
+    this.armsMesh.instanceColor.needsUpdate = true;
 
     // Initial transform
     this._writeMatrices(npc);
@@ -247,7 +288,10 @@ export class Crowd {
             if (g.members.length === 0) this.groups.delete(npc.groupId);
           }
         }
+        this.legsMesh.setMatrixAt(npc.idx, zero);
+        this.shoesMesh.setMatrixAt(npc.idx, zero);
         this.bodyMesh.setMatrixAt(npc.idx, zero);
+        this.armsMesh.setMatrixAt(npc.idx, zero);
         this.headMesh.setMatrixAt(npc.idx, zero);
         this.free.push(npc.idx);
         freed++;
@@ -257,7 +301,10 @@ export class Crowd {
     }
     if (freed > 0) {
       this.npcs = kept;
+      this.legsMesh.instanceMatrix.needsUpdate = true;
+      this.shoesMesh.instanceMatrix.needsUpdate = true;
       this.bodyMesh.instanceMatrix.needsUpdate = true;
+      this.armsMesh.instanceMatrix.needsUpdate = true;
       this.headMesh.instanceMatrix.needsUpdate = true;
     }
   }
@@ -290,7 +337,10 @@ export class Crowd {
       });
     }
 
+    this.legsMesh.instanceMatrix.needsUpdate = true;
+    this.shoesMesh.instanceMatrix.needsUpdate = true;
     this.bodyMesh.instanceMatrix.needsUpdate = true;
+    this.armsMesh.instanceMatrix.needsUpdate = true;
     this.headMesh.instanceMatrix.needsUpdate = true;
     // Narrow draw count to the highest slot ever written + 1. Slots above
     // _maxIdx are untouched (zero matrix from init) and never drawn. Slots
@@ -298,7 +348,10 @@ export class Crowd {
     // zero-scale matrix so the GPU skips them at near-zero cost.
     const drawCount = this._maxIdx + 1;
     if (drawCount < MAX_NPCS) {
+      this.legsMesh.count = drawCount;
+      this.shoesMesh.count = drawCount;
       this.bodyMesh.count = drawCount;
+      this.armsMesh.count = drawCount;
       this.headMesh.count = drawCount;
     }
   }
@@ -622,17 +675,24 @@ export class Crowd {
       ? Math.sin(npc.bob * 2) * 0.05 * (npc.dance - 0.5)
       : 0;
 
-    let bodyY, headY;
+    // All 5 meshes share one matrix. The matrix's Y = "feet level" for this NPC.
+    // Each geometry has its part offset baked in (legs at y≈0.325, torso at y=1.0,
+    // arms at y=1.10, head at y=1.65, shoes at y≈0.035). Scale is applied uniformly
+    // via compose() so the whole figure scales together from the feet origin.
+    //
+    // Special states: riding/hammock npcs are lifted off the ground. We derive the
+    // feet-equivalent Y from the seat/hammock world height so the torso (baked at +1.0)
+    // lands at the right visual position.
+    //   - riding:        torso should sit at ≈ seatY - 0.05  →  feet Y = seatY - 1.05
+    //   - hammock_riding: torso should sit at ≈ hammockY - 0.1 →  feet Y = hammockY - 1.1
+    //   - normal:        feet at ground (npc.pos.y = 0 always from behavior code)
+    let feetY;
     if (npc.state === 'riding' && npc.seatY != null) {
-      bodyY = npc.seatY - 0.05 + bobY;
-      headY = npc.seatY + 0.7 + bobY;
+      feetY = npc.seatY - 1.05 + bobY;
     } else if (npc.state === 'hammock_riding' && npc.hammockY != null) {
-      // Lounging in the hammock: body sits deep in the sling, head pokes up.
-      bodyY = npc.hammockY - 0.1 + bobY;
-      headY = npc.hammockY + 0.55 + bobY;
+      feetY = npc.hammockY - 1.1 + bobY;
     } else {
-      bodyY = 0.85 * npc.scale + bobY;
-      headY = 1.65 * npc.scale + bobY;
+      feetY = bobY; // feet on the ground; npc.pos.y is always 0
     }
 
     // CRITICAL: position and scale must be DISTINCT Vector3 instances.
@@ -641,7 +701,7 @@ export class Crowd {
     const posV = this._tmpV;
     const scaleV = this._tmpV2;
 
-    posV.set(npc.pos.x, bodyY, npc.pos.z);
+    posV.set(npc.pos.x, feetY, npc.pos.z);
     scaleV.set(npc.scale, npc.scale, npc.scale);
     m.compose(posV, quat, scaleV);
     if (danceTilt) {
@@ -649,11 +709,12 @@ export class Crowd {
       this._tmpDanceMat.makeRotationZ(danceTilt);
       m.multiply(this._tmpDanceMat);
     }
-    this.bodyMesh.setMatrixAt(npc.idx, m);
 
-    posV.set(npc.pos.x, headY, npc.pos.z);
-    scaleV.set(npc.scale, npc.scale, npc.scale);
-    m.compose(posV, quat, scaleV);
+    // Write the same transform to all 5 meshes — per-part offsets live in geometry.
+    this.legsMesh.setMatrixAt(npc.idx, m);
+    this.shoesMesh.setMatrixAt(npc.idx, m);
+    this.bodyMesh.setMatrixAt(npc.idx, m);
+    this.armsMesh.setMatrixAt(npc.idx, m);
     this.headMesh.setMatrixAt(npc.idx, m);
   }
 

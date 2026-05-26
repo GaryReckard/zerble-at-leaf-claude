@@ -469,6 +469,32 @@ function buildApronCook(rng = Math.random) {
   return g;
 }
 
+// ==================== Shared materials + geometries ====================
+//
+// Per the threejs-materials skill ("same material = batched draw calls")
+// and threejs-geometry skill ("reuse geometries"). Every Sugar Shack
+// previously created ~20 fresh MeshStandardMaterials and many duplicate
+// geometries. Hoisting the static ones here means N shacks share ONE
+// allocation and three.js can batch their draws.
+const SHACK_MATS = {
+  wood:         new THREE.MeshStandardMaterial({ color: 0x5a3920, roughness: 0.78, flatShading: true }),
+  darkWood:     new THREE.MeshStandardMaterial({ color: 0x6b513a, roughness: 0.7,  flatShading: true }),
+  dark:         new THREE.MeshStandardMaterial({ color: 0x1c1c1c, roughness: 0.5,  metalness: 0.4,  flatShading: true }),
+  chrome:       new THREE.MeshStandardMaterial({ color: 0xc8c8c8, roughness: 0.35, metalness: 0.75, flatShading: true }),
+  bulb:         new THREE.MeshStandardMaterial({ color: 0xfff6c0, emissive: 0xffe066, emissiveIntensity: 2.6, roughness: 0.2 }),
+  white:        new THREE.MeshStandardMaterial({ color: 0xfff8eb, roughness: 0.88, flatShading: true, side: THREE.DoubleSide }),
+  tentPole:     new THREE.MeshStandardMaterial({ color: 0xe5e0d0, roughness: 0.7,  flatShading: true }),
+  facadePole:   new THREE.MeshStandardMaterial({ color: 0x6b513a, roughness: 0.75, flatShading: true }),
+  counterBoard: new THREE.MeshStandardMaterial({ color: 0xc8b896, roughness: 0.85, flatShading: true }),
+  counterTop:   new THREE.MeshStandardMaterial({ color: 0x6b513a, roughness: 0.6,  flatShading: true }),
+  station:      new THREE.MeshStandardMaterial({ color: 0xa9adb0, roughness: 0.4,  metalness: 0.55, flatShading: true }),
+  grillTop:     new THREE.MeshStandardMaterial({ color: 0x1c1c1c, roughness: 0.55, flatShading: true }),
+  supply:       new THREE.MeshStandardMaterial({ color: 0xd4c8a8, roughness: 0.8,  flatShading: true }),
+  stringBulb:   new THREE.MeshStandardMaterial({ color: 0xfff0c0, emissive: 0xffe066, emissiveIntensity: 1.2, roughness: 0.4 }),
+};
+const STRING_BULB_GEO = new THREE.SphereGeometry(0.07, 8, 6);
+const SUPPLY_CAN_GEO  = new THREE.CylinderGeometry(0.12, 0.12, 0.32, 12);
+
 // Light bracket — a TRIANGULAR FRAME (two wooden poles, not a solid plate)
 // projecting forward from the banner side, meeting at an apex point in
 // front. A chrome work light hangs at the apex, dome opening facing back
@@ -495,18 +521,11 @@ function buildLightBracket(bannerHeight, side) {
   // Both end up aiming inward toward the banner center.
   const AIM_ANGLE = side * (Math.PI / 4.5);
 
-  const woodMat = new THREE.MeshStandardMaterial({
-    color: 0x5a3920, roughness: 0.78, flatShading: true,
-  });
-  const darkMat = new THREE.MeshStandardMaterial({
-    color: 0x1c1c1c, roughness: 0.5, metalness: 0.4, flatShading: true,
-  });
-  const chromeMat = new THREE.MeshStandardMaterial({
-    color: 0xc8c8c8, roughness: 0.35, metalness: 0.75, flatShading: true,
-  });
-  const bulbMat = new THREE.MeshStandardMaterial({
-    color: 0xfff6c0, emissive: 0xffe066, emissiveIntensity: 2.6, roughness: 0.2,
-  });
+  // Shared materials (one allocation per process, see SHACK_MATS above).
+  const woodMat   = SHACK_MATS.wood;
+  const darkMat   = SHACK_MATS.dark;
+  const chromeMat = SHACK_MATS.chrome;
+  const bulbMat   = SHACK_MATS.bulb;
 
   // Helper — build a cylindrical pole between two Vector3 endpoints.
   const upY = new THREE.Vector3(0, 1, 0);
@@ -519,7 +538,10 @@ function buildLightBracket(bannerHeight, side) {
     );
     mesh.position.copy(start).addScaledVector(vec, 0.5);
     mesh.quaternion.setFromUnitVectors(upY, vec.clone().normalize());
-    mesh.castShadow = true;
+    // No castShadow on these thin bracket poles — the shadow contribution
+    // is invisible at their scale, and skipping the shadow-map render for
+    // them is one of the cheap wins from the threejs-lighting skill's
+    // "selective shadows" guidance (small objects often don't need to cast).
     return mesh;
   }
 
@@ -539,17 +561,15 @@ function buildLightBracket(bannerHeight, side) {
 
   const head = new THREE.Mesh(new THREE.BoxGeometry(0.08, 0.07, 0.10), darkMat);
   head.position.set(0, 0, -0.02);
-  head.castShadow = true;
   fixture.add(head);
 
   // Dome opens along the fixture's local -Z (after the inward rotation,
-  // that's "inward + back at the sign").
+  // that's "inward + back at the sign"). Small chrome detail — no shadow.
   const dome = new THREE.Mesh(
     new THREE.ConeGeometry(0.11, 0.20, 16), chromeMat,
   );
   dome.rotation.x = Math.PI / 2;
   dome.position.set(0, 0, -0.16);
-  dome.castShadow = true;
   fixture.add(dome);
 
   const bulb = new THREE.Mesh(new THREE.SphereGeometry(0.05, 12, 10), bulbMat);
@@ -605,7 +625,10 @@ function buildSignedBoard(width, height, depth, frontTex, edgeColor, opts = {}) 
     new THREE.BoxGeometry(width, height, depth),
     [edgeMat, edgeMat, edgeMat, edgeMat, frontMat, edgeMat],
   );
-  mesh.castShadow = true;
+  // Signed boards are thin flat planes facing the customer — the cast
+  // shadow on the ground is a tiny dark line that doesn't read at game
+  // scale. Skip the shadow-map render for them (selective shadows, per
+  // threejs-lighting skill).
   return mesh;
 }
 
@@ -642,25 +665,21 @@ export function buildSugarShack(rng = Math.random) {
   const g = new THREE.Group();
   g.userData.kind = 'sugarShack';
 
-  const whiteMat = new THREE.MeshStandardMaterial({
-    color: 0xfff8eb, roughness: 0.88, flatShading: true, side: THREE.DoubleSide,
-  });
-  const poleMat = new THREE.MeshStandardMaterial({
-    color: 0xe5e0d0, roughness: 0.7, flatShading: true,
-  });
-  const facadePoleMat = new THREE.MeshStandardMaterial({
-    color: 0x6b513a, roughness: 0.75, flatShading: true,
-  });
+  // Shared across all shacks; see SHACK_MATS at module top.
+  const whiteMat      = SHACK_MATS.white;
+  const poleMat       = SHACK_MATS.tentPole;
+  const facadePoleMat = SHACK_MATS.facadePole;
 
   // ---------------------- TENT (behind the facade) ----------------------
 
   // Corner + mid poles along the long sides + back ridge support.
+  // No castShadow on the poles — they're 16cm thin and their shadow
+  // contribution under the tent canopy is invisible.
   const POLE_T = 0.16;
   for (const sz of [-DEPTH / 2, 0, DEPTH / 2]) {
     for (const sx of [-WIDTH / 2, WIDTH / 2]) {
       const pole = new THREE.Mesh(new THREE.BoxGeometry(POLE_T, WALL_H, POLE_T), poleMat);
       pole.position.set(sx, WALL_H / 2, sz);
-      pole.castShadow = true;
       g.add(pole);
     }
   }
@@ -669,7 +688,6 @@ export function buildSugarShack(rng = Math.random) {
     poleMat,
   );
   ridgePost.position.set(0, PEAK_H / 2, -DEPTH / 2);
-  ridgePost.castShadow = true;
   g.add(ridgePost);
 
   // Long-side walls.
@@ -718,7 +736,7 @@ export function buildSugarShack(rng = Math.random) {
       facadePoleMat,
     );
     post.position.set(sx, FACADE_HEIGHT / 2, FACADE_Z);
-    post.castShadow = true;
+    // Slim post — skip shadow casting.
     g.add(post);
   }
 
@@ -791,15 +809,17 @@ export function buildSugarShack(rng = Math.random) {
   // ---- Counter (inside the tent, behind the menu plank) ----
   const counter = new THREE.Mesh(
     new THREE.BoxGeometry(WIDTH - 0.4, COUNTER_H, COUNTER_D),
-    new THREE.MeshStandardMaterial({ color: 0xc8b896, roughness: 0.85, flatShading: true }),
+    SHACK_MATS.counterBoard,
   );
   counter.position.set(0, COUNTER_H / 2, DEPTH / 2 - COUNTER_D / 2);
-  counter.castShadow = true;
+  // Counter sits inside the tent — its cast shadow falls onto the tent
+  // floor (which the sun-light barely reaches anyway). Keep receiveShadow
+  // so the tent roof's shadow lands on it; skip castShadow.
   counter.receiveShadow = true;
   g.add(counter);
   const counterTop = new THREE.Mesh(
     new THREE.BoxGeometry(WIDTH - 0.3, 0.08, COUNTER_D + 0.1),
-    new THREE.MeshStandardMaterial({ color: 0x6b513a, roughness: 0.6, flatShading: true }),
+    SHACK_MATS.counterTop,
   );
   counterTop.position.set(0, COUNTER_H + 0.04, DEPTH / 2 - COUNTER_D / 2);
   g.add(counterTop);
@@ -819,12 +839,8 @@ export function buildSugarShack(rng = Math.random) {
   // Stations line both long walls so the center stays clear as a worker
   // walkway. Each station's long axis runs along Z (parallel to the wall),
   // so the cooking surface faces inward toward the walkway.
-  const stationMat = new THREE.MeshStandardMaterial({
-    color: 0xa9adb0, roughness: 0.4, metalness: 0.55, flatShading: true,
-  });
-  const grillTopMat = new THREE.MeshStandardMaterial({
-    color: 0x1c1c1c, roughness: 0.55, flatShading: true,
-  });
+  const stationMat  = SHACK_MATS.station;
+  const grillTopMat = SHACK_MATS.grillTop;
   const STATION_W = 0.85;    // X — depth-from-wall
   const STATION_H = 1.0;     // Y
   const STATION_L = 1.4;     // Z — long axis along the wall
@@ -839,7 +855,7 @@ export function buildSugarShack(rng = Math.random) {
         stationMat,
       );
       station.position.set(sx, STATION_H / 2, sz);
-      station.castShadow = true;
+      // Inside the tent — cast shadow is hidden by the tent shadow anyway.
       g.add(station);
       const top = new THREE.Mesh(
         new THREE.BoxGeometry(STATION_W - 0.1, 0.08, STATION_L - 0.1),
@@ -850,12 +866,10 @@ export function buildSugarShack(rng = Math.random) {
     }
   }
   // Supplies / cans sitting on the back of the counter — workers reach over
-  // for these as they take orders.
-  const supplyMat = new THREE.MeshStandardMaterial({
-    color: 0xd4c8a8, roughness: 0.8, flatShading: true,
-  });
+  // for these as they take orders. All 5 cans per shack share the same
+  // cylinder geometry + material (shared module-level constants).
   for (let i = 0; i < 5; i++) {
-    const can = new THREE.Mesh(new THREE.CylinderGeometry(0.12, 0.12, 0.32, 12), supplyMat);
+    const can = new THREE.Mesh(SUPPLY_CAN_GEO, SHACK_MATS.supply);
     can.position.set(-1.0 + i * 0.25, COUNTER_H + 0.24, DEPTH / 2 - COUNTER_D + 0.15);
     g.add(can);
   }
@@ -875,15 +889,14 @@ export function buildSugarShack(rng = Math.random) {
   g.add(cook);
 
   // ---- String lights along each long tent eave ----
-  const bulbMat = new THREE.MeshStandardMaterial({
-    color: 0xfff0c0, emissive: 0xffe066, emissiveIntensity: 1.2, roughness: 0.4,
-  });
+  // All 20 bulbs share the same sphere geometry + emissive material
+  // (module-level constants). Same draw call gets batched on the GPU.
   const lightCount = 10;
   for (let i = 0; i < lightCount; i++) {
     const t = (i + 0.5) / lightCount;
     const z = -DEPTH / 2 + DEPTH * t;
     for (const sx of [-WIDTH / 2 + 0.05, WIDTH / 2 - 0.05]) {
-      const bulb = new THREE.Mesh(new THREE.SphereGeometry(0.07, 8, 6), bulbMat);
+      const bulb = new THREE.Mesh(STRING_BULB_GEO, SHACK_MATS.stringBulb);
       bulb.position.set(sx, WALL_H - 0.05, z);
       g.add(bulb);
       // Fancy-lights opt-in: real PointLight per bulb. Each is tiny —

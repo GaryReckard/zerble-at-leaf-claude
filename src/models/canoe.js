@@ -26,7 +26,7 @@ export function buildCanoe(group, rng = Math.random) {
     const tip = new THREE.Mesh(new THREE.ConeGeometry(0.48, 1.0, 6), woodMat);
     tip.rotation.x = ez < 0 ? -Math.PI / 2 : Math.PI / 2;
     tip.position.set(0, 0.2, ez);
-    tip.castShadow = true;
+    // Canoe tip — small cone, hull casts the main canoe shadow.
     group.add(tip);
   }
 
@@ -63,7 +63,7 @@ export function buildCanoe(group, rng = Math.random) {
       new THREE.MeshStandardMaterial({ color: 0xe6c098, roughness: 0.9, flatShading: true }),
     );
     head.position.set(0, 1.30, ez);
-    head.castShadow = true;
+    // Paddler head — body already casts shadow.
     group.add(head);
 
     // Paddle — handle + blade, tilted to one side as if mid-stroke

@@ -90,7 +90,7 @@ export function buildParasolMarshal() {
         flatShading: true,
       }),
     );
-    wedge.castShadow = true;
+    // Parasol wedge — too thin to cast a useful shadow.
     parasol.add(wedge);
   }
 

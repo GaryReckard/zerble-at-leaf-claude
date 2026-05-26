@@ -20,7 +20,7 @@ export function buildTent(rng = Math.random) {
   for (const [lx, lz] of [[-2, -2], [2, -2], [-2, 2], [2, 2]]) {
     const leg = new THREE.Mesh(new THREE.BoxGeometry(0.15, 2.5, 0.15), legMat);
     leg.position.set(lx, 1.25, lz);
-    leg.castShadow = true;
+    // Tent leg — 15cm slim, skip shadow casting (roof + table cast).
     g.add(leg);
   }
 

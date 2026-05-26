@@ -58,7 +58,7 @@ export function buildWook(rng = Math.random) {
     );
     lower.position.y = -0.60;
     armGroup.add(lower);
-    armGroup.castShadow = true;
+    // Skip arm shadow — body + head silhouette is enough.
     wookGroup.add(armGroup);
   }
 
@@ -143,7 +143,8 @@ export function buildWook(rng = Math.random) {
       const tiltZ = Math.atan2(sZ - prevZ, segH);
       seg.rotation.x = -tiltZ;
       seg.rotation.z = tiltX;
-      seg.castShadow = true;
+      // Dread segments — skinny cylinders, lots of them per wook. Skip
+      // shadow casting (head shadow already reads).
       wookGroup.add(seg);
 
       if (s < segments - 1) {

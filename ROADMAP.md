@@ -59,6 +59,12 @@ Markov/motif-based phrase generation so the melody actually develops instead of 
 
 - **Crowd InstancedMesh churn.** When NPCs change state, their per-instance matrix flag has to flip. Worth profiling on low-end devices to see if writes per frame are an issue.
 - **Forest tree count on low tier.** PERF tier currently scales chunk draw radius and crowd density but not forest tree density. Dense forests on mid-spec phones might benefit from a tier-gated thin-out.
+- **LOD on distant trees / tents.** Beyond ~60m the polygon detail is invisible; could swap to billboard or low-poly replacements.
+- **Frustum-based update gating.** NPCs, animatables, and stage performers tick every frame regardless of visibility. Wrap their updates in a `Frustum.containsPoint` check (cheap) to skip when off-screen.
+- **Geometry merging at chunk completion.** Once a chunk's content stops changing, `BufferGeometryUtils.mergeGeometries` could collapse it into a single mesh per material — massive draw-call reduction.
+- **Material pooling in older models.** `puppet.js`, `foodTruck.js`, `tent.js` still allocate 5–15 fresh `MeshStandardMaterial`s per build. The Sugar Shack now uses a single `SHACK_MATS` module-level cache; that pattern could be backported.
+- **Texture mipmap audit.** Confirm `generateMipmaps = true` on the larger canvas textures so distant draws sample cheap LOD levels.
+- **Light layers for the Sugar Shack work spots.** Currently every standard material in range pays the per-fragment SpotLight cost. Putting the lights on a layer that only the banner is on would cut that to ~3 affected meshes.
 
 ---
 

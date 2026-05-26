@@ -122,7 +122,7 @@ export function buildCampTent(rng = Math.random) {
     flapGeo.setIndex([0, 1, 2, 0, 2, 1]); // double-sided
     flapGeo.computeVertexNormals();
     const flap = new THREE.Mesh(flapGeo, fabric);
-    flap.castShadow = true;
+    // Tent flap is small; the parent tent already casts a clean shadow.
     group.add(flap);
   }
 
@@ -159,7 +159,7 @@ export function buildCampChair(rng = Math.random) {
     fabric,
   );
   seat.position.set(0, 0.45, 0);
-  seat.castShadow = true;
+  // Camp chair seat/back — small detail meshes, skip shadow casting.
   group.add(seat);
 
   // Back — flat slab leaning slightly back
@@ -169,7 +169,6 @@ export function buildCampChair(rng = Math.random) {
   );
   back.position.set(0, 0.7, -0.22);
   back.rotation.x = -0.12;
-  back.castShadow = true;
   group.add(back);
 
   // Arms — two short cylinders flanking the seat
@@ -215,7 +214,8 @@ export function buildChiminea(rng = Math.random) {
     );
     bulb.scale.set(1, 0.85, 1);
     bulb.position.y = 0.38;
-    bulb.castShadow = true;
+    // Chiminea body — emissive interior is the main visual; skip shadow
+    // map render (curved shape doesn't read distinctly in shadow anyway).
     group.add(bulb);
 
     // Chimney stack — narrowing cone
@@ -224,7 +224,6 @@ export function buildChiminea(rng = Math.random) {
       clay,
     );
     stack.position.y = 0.85;
-    stack.castShadow = true;
     group.add(stack);
 
     // Glowing opening — small disk facing forward
@@ -260,7 +259,7 @@ export function buildChiminea(rng = Math.random) {
     );
     stone.position.set(Math.cos(a) * ringR, 0.13, Math.sin(a) * ringR);
     stone.rotation.y = rng() * Math.PI * 2;
-    stone.castShadow = true;
+    // Firepit stones — tiny, irregular; shadow contribution is invisible.
     group.add(stone);
   }
 
@@ -302,7 +301,7 @@ export function buildTikiTorch(rng = Math.random) {
     bamboo,
   );
   pole.position.y = 0.85;
-  pole.castShadow = true;
+  // Tiki torch pole — 4cm thin bamboo, shadow contribution invisible.
   group.add(pole);
 
   // Two thin "joint" rings on the bamboo for visual interest
@@ -439,7 +438,7 @@ export function buildTapestry(rng = Math.random) {
   for (const sx of [-1, 1]) {
     const p = new THREE.Mesh(postGeo, POLE_MAT);
     p.position.set(sx * w / 2, postH / 2, 0);
-    p.castShadow = true;
+    // Tapestry posts — slim, skip shadow casting.
     group.add(p);
   }
 

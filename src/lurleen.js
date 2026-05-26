@@ -170,7 +170,7 @@ export class Lurleen {
       seatMat,
     );
     seatCushion.position.set(0, 1.40, -0.85);
-    seatCushion.castShadow = true;
+    // Seat sits inside the cart — chassis + roof cast the cart shadow.
     this.root.add(seatCushion);
 
     const seatBack = new THREE.Mesh(
@@ -178,7 +178,6 @@ export class Lurleen {
       seatMat,
     );
     seatBack.position.set(0, 1.85, -0.40);
-    seatBack.castShadow = true;
     this.root.add(seatBack);
   }
 
@@ -264,7 +263,7 @@ export class Lurleen {
       topGeo.translate(0, 0, -0.09);
       const topMesh = new THREE.Mesh(topGeo, lipMat);
       topMesh.position.y = 0.05;
-      topMesh.castShadow = true;
+      // Lip is a tiny prop; skip its shadow contribution.
       lipGroup.add(topMesh);
     }
 
@@ -293,7 +292,6 @@ export class Lurleen {
       botGeo.translate(0, 0, -0.11);
       const botMesh = new THREE.Mesh(botGeo, lipMat);
       botMesh.position.y = -0.05;
-      botMesh.castShadow = true;
       lipGroup.add(botMesh);
     }
 
@@ -514,7 +512,8 @@ export class Lurleen {
         const radius = 0.024 + Math.random() * 0.008;
         const tubeGeo = new THREE.TubeGeometry(curve, 10, radius, 4, false);
         const strand = new THREE.Mesh(tubeGeo, arcStrandMat(Math.random()));
-        strand.castShadow = true;
+        // Hundreds of tiny raffia strands per cart — skip shadow casting.
+        // Cart chassis + roof shadow already reads as Lurleen.
         this.root.add(strand);
       }
     }
@@ -557,7 +556,8 @@ export class Lurleen {
         // Mostly straight down, tiny outward bias toward the diagonal.
         strand.rotation.x = c.normZ * 0.06 + (Math.random() - 0.5) * 0.10;
         strand.rotation.z = -c.normX * 0.06 + (Math.random() - 0.5) * 0.10;
-        strand.castShadow = true;
+        // Bunch of ~70 strands per corner — skip shadow casting (the cart
+        // chassis already casts the readable shadow underneath).
         this.root.add(strand);
       }
     }

@@ -102,7 +102,7 @@ export function buildTentStage(opts = {}) {
       new THREE.CylinderGeometry(0.15, 0.18, TENT_WALL_HEIGHT, 8), ridgeMat,
     );
     pole.position.set(px, TENT_WALL_HEIGHT / 2, pz);
-    pole.castShadow = true;
+    // Slim pole — tent roof carries the silhouette.
     group.add(pole);
   }
 

@@ -4,6 +4,12 @@ All notable changes to Zerble at the Festival. Newest at top. Following [Keep a 
 
 ## [Unreleased]
 
+### Performance
+- **Shadow-cast audit.** `castShadow = true` count across the codebase dropped from 115 to 56 — cut on tent poles, sign boards, brackets, light fixtures, NPC limbs, Lurleen's raffia strands (was 280-560 per cart!), camp chairs, firepit stones, drum-circle benches, lamppost cylinders, and Zerble's smaller detail bits. Large objects (tent roofs, main walls, body capsules, banners, tree crowns, chassis) still cast.
+- **Trip post-process pass disables itself** when the envelope is at zero — saves a full-screen render every frame the player isn't tripping.
+- **Sugar Shack material + geometry pooling.** Hoisted ~20 per-build `MeshStandardMaterial` allocations to a module-level `SHACK_MATS` cache; string-light bulb sphere geometry and supply-can cylinder geometry are now shared too. Multiple shacks in view share draw calls.
+- **Tier-aware shadow map.** Sun shadow map drops from 1024×1024 → 512×512 on mid tier (low tier already had shadows off). Shadow frustum tightens from 100m to 60m on mid for sharper shadows on the smaller map.
+
 ### Added
 - **Sugar Shack vendor** modeled on Tom's Sugar Shack at LEAF. A 4×8m white gable tent with a separate signage facade in front: beige header banner ("Festival Famous / the SUGAR SHACK / Breakfast All Day + Night"), one long wooden menu plank below it with FRENCH TOAST / VEGGIE THING / VERMONT MAPLE TREATS / HOT & COLD DRINKS, white DRINKS price list on the left, white FOOD price list on the right, pink THANK YOU banner across the counter. Two triangular-frame wooden brackets (two poles meeting at an apex) project forward from the banner with chrome work lights at the apex, aimed inward to spotlight the sign — real `SpotLight`s, not emissive trickery. Two workers inside: Tom (tie-dye shirt, white/grey ponytail, beard stubble) and an apron-wearing cook. Cooking stations along the side walls; center is the worker walkway. String lights along both eaves; a single PointLight inside stands in for the cumulative glow. ~35% of food-plaza chunks swap one ring slot for a shack. *(Sandbox: "Sugar Shack" entity.)*
 - **Sandbox: Time-of-day panel.** Slider + Morning / Noon / Dusk / Midnight buttons in the entity sandbox UI, mirroring the in-game block from the backtick debug menu. The full backtick debug overlay is removed from the sandbox — the entity panel is now the entire sandbox UI.

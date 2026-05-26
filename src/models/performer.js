@@ -24,7 +24,7 @@ export function buildPerformer(instrument, rng = Math.random) {
       new THREE.CylinderGeometry(0.10, 0.10, 0.70, 8), pantsMat,
     );
     leg.position.set(lx, 0.35, 0);
-    leg.castShadow = true;
+    // Slim leg — body + head carry the silhouette.
     g.add(leg);
     const shoe = new THREE.Mesh(
       new THREE.BoxGeometry(0.16, 0.07, 0.24),
@@ -67,7 +67,7 @@ export function buildPerformer(instrument, rng = Math.random) {
     );
     lower.position.y = -0.18;         // hangs below the elbow pivot, attached
     elbow.add(lower);
-    shoulder.castShadow = true;
+    // Skip shadow on arm sub-meshes — torso/head silhouette is what reads.
     g.add(shoulder);
   }
 

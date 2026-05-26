@@ -45,7 +45,7 @@ export function buildFoodTruck(rng = Math.random) {
   );
   canopy.position.set(0.5, 3.1, 2.3);
   canopy.rotation.x = -0.2;
-  canopy.castShadow = true;
+  // Thin canopy — skip shadow casting; box + cab carry the truck silhouette.
   g.add(canopy);
 
   for (const [wx, wz] of [[-2.5, -1.5], [-2.5, 1.5], [1.5, -1.5], [1.5, 1.5]]) {

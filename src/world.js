@@ -7,6 +7,7 @@ import { ChunkManager } from './chunks.js';
 import { LakeManager } from './lakes.js';
 import { terrainHeight } from './rng.js';
 import { TimeOfDay } from './timeOfDay.js';
+import { PERF } from './perf.js';
 
 const SKY_TOP = 0x6fb6e8;
 const SKY_BOTTOM = 0xffd0a8;
@@ -347,11 +348,19 @@ function buildLightsAndFog(scene) {
 
   const sun = new THREE.DirectionalLight(SUN_COLOR, 1.35);
   sun.position.set(80, 130, 60);
-  sun.castShadow = true;
-  sun.shadow.mapSize.set(1024, 1024);
+  sun.castShadow = PERF.shadows;
+  // Tier-aware shadow map size (per threejs-lighting skill: "smaller shadow
+  // maps; 512-1024 often sufficient"). The world's sun is the only shadow
+  // caster in the scene, so map size is the lever — 512 on mid, 1024 on
+  // high. Low tier has shadows off entirely.
+  const shadowMapSize = PERF.name === 'high' ? 1024 : 512;
+  sun.shadow.mapSize.set(shadowMapSize, shadowMapSize);
   sun.shadow.camera.near = 1;
   sun.shadow.camera.far = 200;
-  const shadowD = 100;
+  // Tighter shadow frustum on mid (the chunk draw radius is smaller, so we
+  // don't need to cover the full 100m × 100m area) — gets more resolution
+  // out of the smaller map.
+  const shadowD = PERF.name === 'high' ? 100 : 60;
   sun.shadow.camera.left = -shadowD;
   sun.shadow.camera.right = shadowD;
   sun.shadow.camera.top = shadowD;

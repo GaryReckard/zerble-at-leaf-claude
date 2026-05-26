@@ -107,7 +107,7 @@ export function buildLeafDrumCircle(rng = Math.random, opts = {}) {
       Math.sin(a) * FIREPIT_RADIUS,
     );
     stone.rotation.y = rng() * Math.PI * 2;
-    stone.castShadow = true;
+    // Rim stones are small — base + fire already cast the firepit shadow.
     group.add(stone);
   }
 
@@ -143,7 +143,7 @@ export function buildLeafDrumCircle(rng = Math.random, opts = {}) {
     // (-baseZ, 0, baseX) normalised. Apply rotation via Quaternion.
     const axis = new THREE.Vector3(-baseZ, 0, baseX).normalize();
     log.quaternion.setFromAxisAngle(axis, tilt);
-    log.castShadow = true;
+    // Slim log cylinder — 8 per cone; the firepit base already casts shadow.
     logCone.add(log);
   }
   group.add(logCone);
@@ -216,7 +216,7 @@ export function buildLeafDrumCircle(rng = Math.random, opts = {}) {
       const log = new THREE.Mesh(_halfLogGeo, BENCH_LOG_MAT);
       log.position.set(cx, BENCH_Y, cz);
       log.rotation.y = -a + (Math.sin(i * 7.3 + ring) * 0.06);
-      log.castShadow = true;
+      // Half-log benches — many per circle; skip shadow casting.
       group.add(log);
 
       // Small wedge supports under each end so the log doesn't visibly

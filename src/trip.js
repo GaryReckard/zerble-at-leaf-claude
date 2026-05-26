@@ -538,5 +538,13 @@ export const Trip = {
     } else {
       this._pushConfigToUniforms();
     }
+
+    // Skip the full-screen pass entirely when the envelope is fully closed.
+    // EffectComposer still runs disabled passes' code paths but skips the
+    // GPU render, which saves a full-screen sample + write every frame the
+    // player isn't tripping. This is the threejs-postprocessing skill's
+    // "disable unused effects" guidance — each pass is a full-screen
+    // render and the cost adds up when the effect is idle 99% of the time.
+    this.pass.enabled = this._envelope > 0.001;
   },
 };

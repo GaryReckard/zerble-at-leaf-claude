@@ -102,7 +102,8 @@ export class Zerble {
       mat(COLOR_SEAT, { roughness: 0.85 })
     );
     frontSeat.position.set(0, 1.45, -0.4);
-    frontSeat.castShadow = true;
+    // Seats sit inside the cart — chassis + roof already cast the cart's
+    // silhouette shadow on the ground.
     this.root.add(frontSeat);
 
     const frontSeatBack = new THREE.Mesh(
@@ -110,7 +111,6 @@ export class Zerble {
       mat(COLOR_SEAT, { roughness: 0.85 })
     );
     frontSeatBack.position.set(0, 1.95, 0.1);
-    frontSeatBack.castShadow = true;
     this.root.add(frontSeatBack);
 
     // ----- Back bench — REAR-FACING (EZ-GO style), passengers face out the back -----
@@ -121,7 +121,6 @@ export class Zerble {
       mat(0xd7c79a, { roughness: 0.9 })   // classic beige golf-cart back bench
     );
     backSeat.position.set(0, 1.45, 1.1);
-    backSeat.castShadow = true;
     this.root.add(backSeat);
 
     const backSeatBack = new THREE.Mesh(
@@ -129,7 +128,6 @@ export class Zerble {
       mat(0xd7c79a, { roughness: 0.9 })   // classic beige golf-cart back bench
     );
     backSeatBack.position.set(0, 1.9, 0.5);  // in front of the cushion (rear-facing)
-    backSeatBack.castShadow = true;
     this.root.add(backSeatBack);
 
     // ----- Roof poles — only over the FRONT seat. Back poles come up BETWEEN
@@ -144,7 +142,7 @@ export class Zerble {
     ]) {
       const p = new THREE.Mesh(poleGeo, poleMat);
       p.position.set(x, 2.5, z);
-      p.castShadow = true;
+      // Slim roof pole — roof itself casts the shadow.
       this.root.add(p);
     }
 
@@ -163,7 +161,8 @@ export class Zerble {
       mat(0x141418, { roughness: 0.6 })
     );
     floorboard.position.set(0, 0.88, 1.4);
-    floorboard.castShadow = true;
+    // Floorboard sits low between the chassis halves — chassis already
+    // dominates the shadow; keep receive on for the bubble-machine glow.
     floorboard.receiveShadow = true;
     this.root.add(floorboard);
 
@@ -213,7 +212,7 @@ export class Zerble {
       new THREE.TubeGeometry(ohCurve, 48, 0.06, 10, false),
       mat(COLOR_FRAME, { roughness: 0.35, metalness: 0.75 })
     );
-    ohBar.castShadow = true;
+    // Thin curved bar — skip shadow casting.
     this.root.add(ohBar);
 
     // ----- Wheels -----
@@ -540,7 +539,7 @@ export class Zerble {
       new THREE.MeshStandardMaterial({ color: 0xd9a26e, roughness: 0.9, flatShading: true })
     );
     head.position.y = 0.75;
-    head.castShadow = true;
+    // Tiny driver head — body shadow already represents the driver.
     driver.add(head);
 
     // (No hat — driver goes hatless)
@@ -589,7 +588,7 @@ export class Zerble {
         new THREE.TubeGeometry(mCurve, 20, 0.04, 7, false),
         driverMustacheMat
       );
-      mTube.castShadow = true;
+      // Mustache tube on the driver — thin curl, skip shadow casting.
       driver.add(mTube);
     }
 
@@ -745,7 +744,8 @@ export class Zerble {
         const tubeR = 0.22;
         strand.position.copy(p)
               .addScaledVector(_radial, tubeR * 0.55);
-        strand.castShadow = true;
+        // Many hair-strand cones per mustache half — Zerble's main mustache
+        // tube already casts the iconic shadow. Skip these.
         tube.add(strand);
       }
 

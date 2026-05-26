@@ -160,7 +160,8 @@ export function buildSimpleNPC(shirtHex, skinHex, opts = {}) {
       pantsMat,
     );
     leg.position.set(lx, 0.32, 0);
-    leg.castShadow = true;
+    // Slim leg cylinder — skip shadow. Torso + head cast the readable
+    // NPC silhouette; legs underneath barely contribute.
     g.add(leg);
     // Shoes
     const shoe = new THREE.Mesh(
@@ -211,7 +212,8 @@ export function buildSimpleNPC(shirtHex, skinHex, opts = {}) {
     );
     lower.position.y = -0.18;        // hangs below the elbow pivot
     elbow.add(lower);
-    shoulder.castShadow = true;
+    // Skip shadow on arms — they're skinny capsules; torso/head shadow
+    // already reads as a person.
     g.add(shoulder);
   }
 

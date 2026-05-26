@@ -44,7 +44,7 @@ export function buildKid(rng = Math.random) {
   for (const lx of [-0.08, 0.08]) {
     const leg = new THREE.Mesh(legGeo, pantsMat);
     leg.position.set(lx, 0.23, 0);
-    leg.castShadow = true;
+    // Kid legs are tiny — torso/head shadow carry the silhouette.
     body.add(leg);
     // Tiny shoes
     const shoe = new THREE.Mesh(
@@ -80,7 +80,7 @@ export function buildKid(rng = Math.random) {
     armGroup.add(lower);
     armGroup.position.set(sx * 0.20, 0.72, 0);
     armGroup.rotation.z = sx * 0.08;       // slight outward splay
-    armGroup.castShadow = true;
+    // Kid arms are slim — skip shadow.
     body.add(armGroup);
   }
 

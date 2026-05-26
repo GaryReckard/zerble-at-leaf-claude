@@ -94,7 +94,7 @@ export function buildStage(opts = {}) {
         new THREE.MeshStandardMaterial({ color: 0x121212, roughness: 0.8, flatShading: true })
       );
       spk.position.set(sx, 1.4 * scale + sy * 1.45 * scale, -d / 2 + 1.2 * scale);
-      spk.castShadow = true;
+      // 6 speakers per stage; deck + banner already cast the stage shadow.
       g.add(spk);
     }
   }

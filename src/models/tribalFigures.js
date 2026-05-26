@@ -94,7 +94,7 @@ function buildTribalFigure(rng = Math.random, opts = {}) {
       legMat,
     );
     leg.position.set(lx, 0.30, 0);
-    leg.castShadow = true;
+    // Slim leg — torso/head shadow carries the silhouette.
     g.add(leg);
   }
   // No shoes — barefoot.
@@ -112,7 +112,7 @@ function buildTribalFigure(rng = Math.random, opts = {}) {
     lowerMat,
   );
   wrap.position.y = (wrapTop + wrapBot) / 2;
-  wrap.castShadow = true;
+  // Skirt wrap — torso carries the body shadow.
   g.add(wrap);
 
   // ----- Torso -----
@@ -214,7 +214,7 @@ function buildTribalFigure(rng = Math.random, opts = {}) {
     );
     wig.position.set(0, 0.06, 0.12);
     wig.scale.set(1.0, 1.05, 1.1);
-    wig.castShadow = true;
+    // Wig is right on top of the head; head shadow absorbs this one.
     hairGroup.add(wig);
 
     // Long ponytail — earlier this used a plain cone with apex up which
@@ -232,7 +232,7 @@ function buildTribalFigure(rng = Math.random, opts = {}) {
     const ponytail = new THREE.Mesh(ponytailGeo, hairMat);
     ponytail.position.set(0, -0.05, 0.22);
     ponytail.rotation.x = -0.35;             // tip swings further back
-    ponytail.castShadow = true;
+    // Skip ponytail shadow — too thin to read distinct from head shadow.
     hairGroup.add(ponytail);
   } else {
     // Black-clad: tight cropped cap that hugs the head.

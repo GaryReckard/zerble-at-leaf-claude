@@ -834,7 +834,7 @@ function buildDrumCircle(ctx) {
       new THREE.MeshStandardMaterial({ color: 0x6a6a78, roughness: 1, flatShading: true })
     );
     stone.position.set(sx, 0.3, sz);
-    stone.castShadow = true;
+    // Tiny rocks — skip shadow casting (firepit emissive does the work).
     ctx.group.add(stone);
   }
 
@@ -844,7 +844,8 @@ function buildDrumCircle(ctx) {
     new THREE.MeshStandardMaterial({ color: 0x8b5a2b, roughness: 0.9, flatShading: true })
   );
   drum.position.set(x + 3, 0.7, z + 1);
-  drum.castShadow = true;
+  // Keep the drum itself off shadow casting too — the player walks past it
+  // briefly, not worth a shadow draw per chunk.
   ctx.group.add(drum);
 
   registry.add({
@@ -1160,7 +1161,7 @@ function placePolePair(ctx, ax, az, bx, bz) {
   for (const [px, pz] of [[ax, az], [bx, bz]]) {
     const pole = new THREE.Mesh(new THREE.CylinderGeometry(0.12, 0.15, h, 8), poleMat);
     pole.position.set(px, h / 2, pz);
-    pole.castShadow = true;
+    // Slim lamppost — skip shadow casting.
     ctx.group.add(pole);
     registry.add({
       kind: 'lamppost',

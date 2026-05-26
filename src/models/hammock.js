@@ -27,7 +27,7 @@ export function buildHammock(x, z, rng = Math.random) {
       new THREE.CylinderGeometry(0.12, 0.15, 2.2, 8), postMat,
     );
     post.position.set(x + s * halfLen * cosY, 1.1, z + s * halfLen * sinY);
-    post.castShadow = true;
+    // Hammock post — sling casts the readable shadow.
     group.add(post);
   }
 

@@ -341,7 +341,18 @@ export function buildTikiTorch(rng = Math.random) {
   group.add(flame);
   const phase = rng() * Math.PI * 2;
 
-  return { group, flame, flameMat, phase, footprint: 0.25 };
+  // Fancy-lights opt-in: real PointLight at the flame. Stays off if the
+  // user hasn't opted in via the backtick menu. Animatable so the
+  // central updater can dim it during the day.
+  let flameLight = null;
+  if (PERF.fancyLights) {
+    flameLight = new THREE.PointLight(0xff8830, 0, 3.5, 1.5);
+    flameLight.position.y = 2.0;
+    flameLight.castShadow = false;
+    group.add(flameLight);
+  }
+
+  return { group, flame, flameMat, flameLight, phase, footprint: 0.25 };
 }
 
 // ---------- EZ-up canopy ----------
@@ -679,6 +690,11 @@ export function updateCampsiteProps(t, nightness, props) {
       // Mild vertical wobble on the flame mesh itself
       if (p.flame) {
         p.flame.scale.y = 1 + 0.15 * Math.sin(t * 12 + p.phase);
+      }
+      // Fancy-lights opt-in: dim the per-torch PointLight by nightness² so
+      // it's invisible at noon and flickers warmly at midnight.
+      if (p.flameLight) {
+        p.flameLight.intensity = 0.7 * (nightness * nightness) * flick;
       }
     }
     if (p.kind === 'contextLight' && p.light) {

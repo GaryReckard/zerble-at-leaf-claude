@@ -405,6 +405,51 @@ function buildPanel() {
     audioBlock.querySelector('#dbg-vol-sfx-readout').textContent = v.toFixed(2);
   });
 
+  // ----- Graphics opt-ins -----
+  // Two tiers, both off by default everywhere (the per-fragment cost of
+  // extra dynamic lights is steep on most GPUs):
+  //   Context lights = proxy PointLight per cluster (firepits, Sugar Shack
+  //                    interior + spots). Cheap-ish — one per logical
+  //                    location.
+  //   Fancy lights   = real PointLight per torch / bulb / fixture on top of
+  //                    context lights. Light count can balloon fast.
+  // Toggling persists to localStorage and prompts a reload, since lights
+  // are wired at model-build time.
+  const gfxBlock = document.createElement('div');
+  gfxBlock.style.marginTop = '8px';
+  gfxBlock.style.borderTop = '1px solid #2a4a5a';
+  gfxBlock.style.paddingTop = '6px';
+  let contextNow = false, fancyNow = false;
+  try {
+    contextNow = localStorage.getItem('zerble.contextLights') === '1';
+    fancyNow   = localStorage.getItem('zerble.fancyLights')   === '1';
+  } catch (e) {}
+  gfxBlock.innerHTML = `
+    <div style="margin-bottom:4px;opacity:0.7">Graphics</div>
+    <label style="display:flex;align-items:center;gap:6px;cursor:pointer;margin-bottom:3px">
+      <input id="dbg-context-lights" type="checkbox" ${contextNow ? 'checked' : ''} style="cursor:pointer">
+      <span style="flex:1">Context lights <span style="opacity:0.55">(firepits, Sugar Shack)</span></span>
+    </label>
+    <label style="display:flex;align-items:center;gap:6px;cursor:pointer">
+      <input id="dbg-fancy-lights" type="checkbox" ${fancyNow ? 'checked' : ''} style="cursor:pointer">
+      <span style="flex:1">Fancy lights <span style="opacity:0.55">(per-torch, per-bulb)</span></span>
+    </label>
+    <div style="opacity:0.55;font-size:10px;margin-top:3px">Reload to apply. Heavier on the GPU.</div>
+  `;
+  el.appendChild(gfxBlock);
+
+  function bindLightsToggle(id, key, label) {
+    gfxBlock.querySelector(id).addEventListener('change', (e) => {
+      const on = e.target.checked;
+      try { localStorage.setItem(key, on ? '1' : '0'); } catch (err) {}
+      if (confirm(`${label} ${on ? 'ON' : 'OFF'}. Reload now to apply?`)) {
+        location.reload();
+      }
+    });
+  }
+  bindLightsToggle('#dbg-context-lights', 'zerble.contextLights', 'Context lights');
+  bindLightsToggle('#dbg-fancy-lights',   'zerble.fancyLights',   'Fancy lights');
+
   state.panelEl = el;
 }
 

@@ -45,10 +45,6 @@ const TABLE = {
     crowdMax: 180,
     chunkLoadRadius: 1,
     chunkUnloadRadius: 2,
-    // contextLights = optional proxy PointLights at firepits / drum-circle
-    // pits / etc., one per cluster. Off on low so emissive + bloom carry the
-    // load without paying the per-fragment lighting cost on slow GPUs.
-    contextLights: false,
   },
   mid: {
     name: 'mid',
@@ -62,7 +58,6 @@ const TABLE = {
     crowdMax: 320,
     chunkLoadRadius: 2,
     chunkUnloadRadius: 3,
-    contextLights: true,
   },
   high: {
     name: 'high',
@@ -76,11 +71,32 @@ const TABLE = {
     crowdMax: 500,
     chunkLoadRadius: 2,
     chunkUnloadRadius: 3,
-    contextLights: true,
   },
 };
 
 export const PERF = TABLE[profile];
+
+// Optional lighting upgrades — both off by default at every tier. The
+// per-fragment cost of additional dynamic lights is significant on most
+// GPUs (a single Sugar Shack with all-on is 3 cluster lights + 20 per-bulb
+// lights = 23, and that's before tiki torches, drum circles, etc.). Users
+// opt in via the backtick debug menu; preference persists in localStorage
+// and is picked up at boot.
+//
+//   contextLights = proxy PointLight per cluster (campsite firepit, drum
+//                   circle, Sugar Shack interior + spots). Off → emissive +
+//                   bloom carry the visual.
+//   fancyLights   = real PointLight on every torch / bulb / fixture, on top
+//                   of contextLights. Light count can balloon fast.
+function lsBool(key) {
+  try {
+    return (typeof localStorage !== 'undefined') && localStorage.getItem(key) === '1';
+  } catch (e) {
+    return false;
+  }
+}
+PERF.contextLights = lsBool('zerble.contextLights');
+PERF.fancyLights   = lsBool('zerble.fancyLights');
 
 if (typeof console !== 'undefined') {
   console.info('[perf] profile =', PERF.name, PERF);

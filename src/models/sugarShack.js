@@ -886,6 +886,15 @@ export function buildSugarShack(rng = Math.random) {
       const bulb = new THREE.Mesh(new THREE.SphereGeometry(0.07, 8, 6), bulbMat);
       bulb.position.set(sx, WALL_H - 0.05, z);
       g.add(bulb);
+      // Fancy-lights opt-in: real PointLight per bulb. Each is tiny —
+      // short distance, low intensity — so 20 of them together approximate
+      // a soft string-light wash instead of doubling up on the proxy.
+      if (PERF.fancyLights) {
+        const bulbLight = new THREE.PointLight(0xfff0c0, 0.18, 1.6, 1.5);
+        bulbLight.position.copy(bulb.position);
+        bulbLight.castShadow = false;
+        g.add(bulbLight);
+      }
     }
   }
   // One PointLight stands in for the cumulative glow of all 20 bulbs along

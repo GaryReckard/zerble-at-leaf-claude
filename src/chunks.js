@@ -19,6 +19,7 @@ import { registry } from './registry.js';
 import { hash2, mulberry32 } from './rng.js';
 import { Sound } from './sound.js';
 import { PERF } from './perf.js';
+import { register as registerContextLight } from './contextLights.js';
 import { chunkOverlapsLake, chunkInLake } from './lakes.js';
 import { getForestAt, buildForestChunk, chunkInForest, forestAnimatables, forestDrumCircles, forestDrumMusic } from './forests.js';
 import { buildCampsite } from './models/campsite.js';
@@ -822,6 +823,7 @@ function buildDrumCircle(ctx) {
     proxy.position.set(x, 1.0, z);
     proxy.castShadow = false;
     ctx.group.add(proxy);
+    registerContextLight(proxy);
   }
 
   // Stones around fire

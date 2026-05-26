@@ -17,6 +17,7 @@
 
 import * as THREE from 'three';
 import { PERF } from '../perf.js';
+import { register as registerContextLight } from '../contextLights.js';
 
 // ---------- Shared palettes ----------
 
@@ -349,6 +350,7 @@ export function buildTikiTorch(rng = Math.random) {
     flameLight.position.y = 2.0;
     flameLight.castShadow = false;
     group.add(flameLight);
+    registerContextLight(flameLight);
   }
 
   return { group, flame, flameMat, flameLight, phase, footprint: 0.25 };
@@ -580,6 +582,9 @@ export function buildCampsite(rng = Math.random, size = 'medium') {
     // Tag this animatable so updateCampsiteProps knows to modulate the
     // intensity by nightness.
     animatables.push({ kind: 'contextLight', light: proxy, base: 1.6 });
+    // Register with the global culler so the light only ticks the
+    // fragment shader when the player is nearby.
+    registerContextLight(proxy);
   }
 
   // Helper: place a prop at polar (r, theta) and face it toward the centre.

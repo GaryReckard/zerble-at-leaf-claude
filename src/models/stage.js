@@ -11,6 +11,7 @@
 
 import * as THREE from 'three';
 import { buildPerformer } from './performer.js';
+import { register as registerContextLight } from '../contextLights.js';
 
 export function buildStage(opts = {}) {
   // `scale` (default 1.0) scales the deck dimensions + truss + speakers +
@@ -146,6 +147,10 @@ export function buildStage(opts = {}) {
     g.add(target);
     beam.target = target;
     g.add(beam);
+    // Distance-cull stage SpotLights — they're the heaviest light in the
+    // game (SpotLights are ~2× a PointLight per fragment) and a stage that
+    // isn't visible shouldn't be paying that cost.
+    registerContextLight(beam);
 
     stageBeams.push({ beam, target, baseTargetX: lx, baseTargetZ: 10 * scale, phaseOffset: i * 1.7 });
   }

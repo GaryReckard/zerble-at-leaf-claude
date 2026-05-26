@@ -21,6 +21,7 @@
 // outer bench ring (radius 6, mild damage 4).
 
 import * as THREE from 'three';
+import { register as registerContextLight } from '../contextLights.js';
 
 // Shared materials. The fire/glow materials are NOT shared — each circle gets
 // its own so they pulse on independent phases.
@@ -193,6 +194,10 @@ export function buildLeafDrumCircle(rng = Math.random, opts = {}) {
   // we already use the sun for the world's main shadow pass.
   fireLight.castShadow = false;
   group.add(fireLight);
+  // Distance-cull: the global manager turns this off when the player is
+  // > 40m away. Forest drum-circle fires can be 100m+ from the player and
+  // still contributing per-fragment lighting cost without this.
+  registerContextLight(fireLight);
 
   // ---- Three-row bench semicircle ----
   // Centreline opposite the entrance: drummers face the fire and the

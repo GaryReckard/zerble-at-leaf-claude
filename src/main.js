@@ -34,6 +34,7 @@ import { installDebug, shouldRunFrame, isGod, npcsFrozen } from './debug.js';
 import { PERF } from './perf.js';
 import { Trip } from './trip.js';
 import { Analytics } from './analytics.js';
+import * as ContextLights from './contextLights.js';
 
 const canvas = document.getElementById('game');
 
@@ -433,6 +434,12 @@ function tickBody(dt) {
     camera.position.x, camera.position.y, camera.position.z,
     _camFwd.x, _camFwd.y, _camFwd.z
   );
+
+  // Distance-cull proxy lights (campsite firepits, drum circles, Sugar
+  // Shack spots, etc). Anything past ~40m from the player is turned off
+  // so it doesn't pay the per-fragment lighting cost in the shader. Per
+  // threejs-lighting skill's "limit light count" guidance.
+  ContextLights.update(zerble.position);
 
   composer.render();
 }

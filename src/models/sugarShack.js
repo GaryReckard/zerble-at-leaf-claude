@@ -24,6 +24,7 @@
 import * as THREE from 'three';
 import { buildSimpleNPC } from './puppet.js';
 import { PERF } from '../perf.js';
+import { register as registerContextLight } from '../contextLights.js';
 
 const WIDTH = 4.0;
 const DEPTH = 8.0;
@@ -598,6 +599,9 @@ function buildLightBracket(bannerHeight, side) {
     fixture.add(spotTarget);
     spot.target = spotTarget;
     fixture.add(spot);
+    // Distance-cull from the global manager so spots ignore frames where
+    // the player is nowhere near the shack.
+    registerContextLight(spot);
   }
 
   return g;
@@ -907,6 +911,7 @@ export function buildSugarShack(rng = Math.random) {
         bulbLight.position.copy(bulb.position);
         bulbLight.castShadow = false;
         g.add(bulbLight);
+        registerContextLight(bulbLight);
       }
     }
   }
@@ -925,6 +930,7 @@ export function buildSugarShack(rng = Math.random) {
     interiorGlow.position.set(0, WALL_H - 0.3, DEPTH / 2 - 2.0);
     interiorGlow.castShadow = false;
     g.add(interiorGlow);
+    registerContextLight(interiorGlow);
   }
   // Light brackets — triangular wooden FRAMES (two poles meeting at an
   // apex point in front of the sign) at the left and right of the banner.

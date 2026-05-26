@@ -806,10 +806,8 @@ import { mulberry32 } from './src/rng.js';
               const a = benchCentre - Math.PI / 2 + t * Math.PI;
               const d = buildHandDrummer(Math.random);
               d.group.position.set(Math.cos(a) * r, 0, Math.sin(a) * r);
-              // Same convention as forests.js — figures face the fire with
-              // rotation.y = -a (the empirically-correct formula given how
-              // the tribal figure is built; see comment in forests.js).
-              d.group.rotation.y = -a;
+              // Face the fire — see comment in forests.js for the math.
+              d.group.rotation.y = Math.PI / 2 - a;
               dc.group.add(d.group);
               figures.push(d);
             }
@@ -822,13 +820,13 @@ import { mulberry32 } from './src/rng.js';
           }
           const fk = buildFirekeeper(Math.random);
           fk.group.position.set(Math.cos(facingAngle) * 4.2, 0, Math.sin(facingAngle) * 4.2);
-          fk.group.rotation.y = -facingAngle;
+          fk.group.rotation.y = Math.PI / 2 - facingAngle;
           dc.group.add(fk.group);
           figures.push(fk);
           const sp = buildSpotter(Math.random);
           const spA = facingAngle + 0.5;
           sp.group.position.set(Math.cos(spA) * 5.4, 0, Math.sin(spA) * 5.4);
-          sp.group.rotation.y = -spA;
+          sp.group.rotation.y = Math.PI / 2 - spA;
           dc.group.add(sp.group);
           figures.push(sp);
 

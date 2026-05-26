@@ -449,12 +449,14 @@ function populateDrumCircle(rng, dc, forest, facingAngle) {
       const a = benchCentre - Math.PI / 2 + t * Math.PI;
       const drummer = buildHandDrummer(rng);
       drummer.group.position.set(Math.cos(a) * r, 0, Math.sin(a) * r);
-      // Face the fire. Gary's calling out that previous formula `π/2 - a`
-      // still had them rotated 90° from where they should be, so subtract
-      // another π/2 — meaning the figure's local -Z that we treat as "forward"
-      // is actually +X in figure space (probably because the simpleNPC head
-      // visual convention here differs from the puppet I copied from).
-      drummer.group.rotation.y = -a;
+      // Face the fire. Tortured history on this one: the figure's local
+      // forward really IS -Z (eyes at z=-0.18), and the math-correct
+      // formula for facing the origin from (cos a, sin a)*r is π/2 - a.
+      // I bounced through `-a` at one point because the old ambiguous
+      // ponytail made the figures' facing visually unclear; with the new
+      // clearly-defined ponytail behind the body, the math is back to
+      // being trustworthy.
+      drummer.group.rotation.y = Math.PI / 2 - a;
       dc.group.add(drummer.group);
       figures.push(drummer);
     }
@@ -482,8 +484,8 @@ function populateDrumCircle(rng, dc, forest, facingAngle) {
   const fkDist = 4.2;               // a bit outside the firepit edge
   const fk = buildFirekeeper(rng);
   fk.group.position.set(Math.cos(fkA) * fkDist, 0, Math.sin(fkA) * fkDist);
-  // Face the fire — same rotation convention as drummers.
-  fk.group.rotation.y = -fkA;
+  // Face the fire — same convention as drummers (π/2 - angle).
+  fk.group.rotation.y = Math.PI / 2 - fkA;
   dc.group.add(fk.group);
   figures.push(fk);
 
@@ -492,7 +494,7 @@ function populateDrumCircle(rng, dc, forest, facingAngle) {
   const spotterA = facingAngle + 0.50;
   const spotterDist = fkDist + 1.2;
   spotter.group.position.set(Math.cos(spotterA) * spotterDist, 0, Math.sin(spotterA) * spotterDist);
-  spotter.group.rotation.y = -spotterA;
+  spotter.group.rotation.y = Math.PI / 2 - spotterA;
   dc.group.add(spotter.group);
   figures.push(spotter);
 

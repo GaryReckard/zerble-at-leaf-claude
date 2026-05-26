@@ -161,7 +161,11 @@ export const Sound = {
     masterGain.connect(ctx.destination);
 
     musicBus = ctx.createGain();
-    musicBus.gain.value = 1.6; // bump: stage bands should carry across the festival
+    // Was 1.6 when the music was a wall-of-sound four-loop pattern at boot.
+    // The generators now breathe + rotate variants so they don't need the
+    // headroom boost to "carry" — dropping to 1.2 cuts the in-your-face
+    // feel near the main stage without making distant stages disappear.
+    musicBus.gain.value = 1.2;
     musicBus.connect(masterGain);
 
     sfxBus = ctx.createGain();
@@ -868,13 +872,32 @@ const SCALE_MIXO = [1, 9 / 8, 5 / 4, 4 / 3, 3 / 2, 5 / 3, 16 / 9, 2];
 
 // ----- JAM-BAND GROOVE (main stage) ----------------------------------------
 // Warm triangle lead, saw bass, sub-kick, sustained chord pad, longer melody.
+//
+// Variation pass: instead of a single 16-note melody on infinite loop, we
+// generate 3 melody variants + 2 bass variants up front (still deterministic
+// per seed) and rotate which one is "active" every 32 beats so the phrase
+// changes ~every 22s. Lead notes have a 22% chance to drop entirely so the
+// solo breathes instead of hammering. Every note's peak gain is multiplied
+// by a slow LFO so the mix ebbs and flows over ~28 seconds.
 function jamStage(ctx, panner, seed) {
   const rng = mulberry32(seed >>> 0);
   const baseFreq = 174 * Math.pow(2, Math.floor(rng() * 12) / 12); // ~F3 ± octave
   const tempo = 86 + Math.floor(rng() * 18);
   const beat = 60 / tempo;
-  const melody = new Array(16).fill(0).map(() => baseFreq * SCALE_PENT[Math.floor(rng() * SCALE_PENT.length)]);
-  const bass = new Array(8).fill(0).map(() => baseFreq * 0.5 * SCALE_PENT[Math.floor(rng() * 4)]);
+
+  const MELODY_VARIANTS = 3;
+  const BASS_VARIANTS = 2;
+  const BEATS_PER_ROTATION = 32;        // ≈ 2 melody loops per variant
+  const REST_PROB = 0.10;               // chance any given lead note drops
+  const LFO_PERIOD_S = 28;
+  const LFO_DEPTH = 0.30;               // ±30% on peak gain
+
+  const melodies = Array.from({ length: MELODY_VARIANTS }, () =>
+    new Array(16).fill(0).map(() => baseFreq * SCALE_PENT[Math.floor(rng() * SCALE_PENT.length)])
+  );
+  const basses = Array.from({ length: BASS_VARIANTS }, () =>
+    new Array(8).fill(0).map(() => baseFreq * 0.5 * SCALE_PENT[Math.floor(rng() * 4)])
+  );
 
   const lead = ctx.createOscillator();
   lead.type = 'triangle';
@@ -902,18 +925,28 @@ function jamStage(ctx, panner, seed) {
     const horizon = ctx.currentTime + 0.6;
     while (nextNote < horizon) {
       const t = nextNote;
+      const rot = Math.floor(beatIdx / BEATS_PER_ROTATION);
+      const melody = melodies[rot % MELODY_VARIANTS];
+      const bass   = basses[rot % BASS_VARIANTS];
       const m = melody[beatIdx % melody.length];
-      lead.frequency.setValueAtTime(m, t);
-      leadGain.gain.cancelScheduledValues(t);
-      leadGain.gain.setValueAtTime(0.0001, t);
-      leadGain.gain.exponentialRampToValueAtTime(0.24, t + 0.015);
-      leadGain.gain.exponentialRampToValueAtTime(0.0001, t + beat * 0.85);
+      // Slow breath — sin maps to [-1,1], so peak gain is multiplied by [0.7, 1.3].
+      const breath = 1 + LFO_DEPTH * Math.sin((t / LFO_PERIOD_S) * 2 * Math.PI);
+
+      // Lead drops out 22% of beats. Kick + bass + harm keep going so the
+      // pulse doesn't disappear — only the melody breathes.
+      if (Math.random() >= REST_PROB) {
+        lead.frequency.setValueAtTime(m, t);
+        leadGain.gain.cancelScheduledValues(t);
+        leadGain.gain.setValueAtTime(0.0001, t);
+        leadGain.gain.exponentialRampToValueAtTime(0.24 * breath, t + 0.015);
+        leadGain.gain.exponentialRampToValueAtTime(0.0001, t + beat * 0.85);
+      }
       // Harmonic an octave up on accent beats
       if (beatIdx % 4 === 0) {
         harm.frequency.setValueAtTime(m * 2, t);
         harmGain.gain.cancelScheduledValues(t);
         harmGain.gain.setValueAtTime(0.0001, t);
-        harmGain.gain.exponentialRampToValueAtTime(0.08, t + 0.02);
+        harmGain.gain.exponentialRampToValueAtTime(0.08 * breath, t + 0.02);
         harmGain.gain.exponentialRampToValueAtTime(0.0001, t + beat * 1.7);
       }
       if (beatIdx % 2 === 0) {
@@ -921,14 +954,14 @@ function jamStage(ctx, panner, seed) {
         bassOsc.frequency.setValueAtTime(b, t);
         bassGain.gain.cancelScheduledValues(t);
         bassGain.gain.setValueAtTime(0.0001, t);
-        bassGain.gain.exponentialRampToValueAtTime(0.30, t + 0.02);
+        bassGain.gain.exponentialRampToValueAtTime(0.30 * breath, t + 0.02);
         bassGain.gain.exponentialRampToValueAtTime(0.0001, t + beat * 1.8);
       }
       kick.frequency.setValueAtTime(110, t);
       kick.frequency.exponentialRampToValueAtTime(40, t + 0.08);
       kickGain.gain.cancelScheduledValues(t);
       kickGain.gain.setValueAtTime(0.0001, t);
-      kickGain.gain.exponentialRampToValueAtTime(0.5, t + 0.005);
+      kickGain.gain.exponentialRampToValueAtTime(0.5 * breath, t + 0.005);
       kickGain.gain.exponentialRampToValueAtTime(0.0001, t + 0.18);
       nextNote += beat;
       beatIdx++;
@@ -952,13 +985,30 @@ function jamStage(ctx, panner, seed) {
 // ----- BRASS / HORN-LED (side stages) --------------------------------------
 // Square + saw lead through a band-pass filter — gives that buzzy horn timbre.
 // Faster tempo, mixolydian, staccato accents, no sub-bass kick.
+//
+// Variation pass: 3 horn melodies, 2 tuba lines, rotated every 16 beats.
+// Horn dropouts 28% (brass naturally takes breaths between phrases).
+// Slow ±25% gain LFO over 22s — slightly faster than jam since brass is
+// inherently punchier.
 function brassStage(ctx, panner, seed) {
   const rng = mulberry32(seed >>> 0);
   const baseFreq = 233 * Math.pow(2, Math.floor(rng() * 12) / 12); // Bb3 ± octave
   const tempo = 116 + Math.floor(rng() * 24);
   const beat = 60 / tempo;
-  const melody = new Array(8).fill(0).map(() => baseFreq * SCALE_MIXO[Math.floor(rng() * SCALE_MIXO.length)]);
-  const bass = new Array(4).fill(0).map(() => baseFreq * 0.5 * SCALE_MIXO[Math.floor(rng() * 4)]);
+
+  const MELODY_VARIANTS = 3;
+  const BASS_VARIANTS = 2;
+  const BEATS_PER_ROTATION = 16;
+  const REST_PROB = 0.12;
+  const LFO_PERIOD_S = 22;
+  const LFO_DEPTH = 0.25;
+
+  const melodies = Array.from({ length: MELODY_VARIANTS }, () =>
+    new Array(8).fill(0).map(() => baseFreq * SCALE_MIXO[Math.floor(rng() * SCALE_MIXO.length)])
+  );
+  const basses = Array.from({ length: BASS_VARIANTS }, () =>
+    new Array(4).fill(0).map(() => baseFreq * 0.5 * SCALE_MIXO[Math.floor(rng() * 4)])
+  );
 
   // Two-osc "horn" — saw + square detuned slightly through a bandpass.
   const sawOsc = ctx.createOscillator(); sawOsc.type = 'sawtooth';
@@ -982,22 +1032,29 @@ function brassStage(ctx, panner, seed) {
     const horizon = ctx.currentTime + 0.6;
     while (nextNote < horizon) {
       const t = nextNote;
+      const rot = Math.floor(beatIdx / BEATS_PER_ROTATION);
+      const melody = melodies[rot % MELODY_VARIANTS];
+      const bass   = basses[rot % BASS_VARIANTS];
       const m = melody[beatIdx % melody.length];
-      // Detune the two oscs ~7 cents for chorus.
-      sawOsc.frequency.setValueAtTime(m * 1.004, t);
-      sqrOsc.frequency.setValueAtTime(m * 0.996, t);
-      hornMix.gain.cancelScheduledValues(t);
-      hornMix.gain.setValueAtTime(0.0001, t);
-      hornMix.gain.exponentialRampToValueAtTime(0.20, t + 0.012);
-      // Staccato decay — short bursts.
-      hornMix.gain.exponentialRampToValueAtTime(0.0001, t + beat * 0.55);
+      const breath = 1 + LFO_DEPTH * Math.sin((t / LFO_PERIOD_S) * 2 * Math.PI);
+
+      if (Math.random() >= REST_PROB) {
+        // Detune the two oscs ~7 cents for chorus.
+        sawOsc.frequency.setValueAtTime(m * 1.004, t);
+        sqrOsc.frequency.setValueAtTime(m * 0.996, t);
+        hornMix.gain.cancelScheduledValues(t);
+        hornMix.gain.setValueAtTime(0.0001, t);
+        hornMix.gain.exponentialRampToValueAtTime(0.20 * breath, t + 0.012);
+        // Staccato decay — short bursts.
+        hornMix.gain.exponentialRampToValueAtTime(0.0001, t + beat * 0.55);
+      }
       // Tuba on the downbeats only.
       if (beatIdx % 2 === 0) {
         const b = bass[Math.floor(beatIdx / 2) % bass.length];
         tuba.frequency.setValueAtTime(b, t);
         tubaGain.gain.cancelScheduledValues(t);
         tubaGain.gain.setValueAtTime(0.0001, t);
-        tubaGain.gain.exponentialRampToValueAtTime(0.32, t + 0.025);
+        tubaGain.gain.exponentialRampToValueAtTime(0.32 * breath, t + 0.025);
         tubaGain.gain.exponentialRampToValueAtTime(0.0001, t + beat * 1.4);
       }
       nextNote += beat;
@@ -1090,13 +1147,32 @@ function secondLineStage(ctx, panner, seed) {
     { tick: 14, vol: 0.18 },   // roll
     { tick: 15, vol: 0.22 },   // pickup to 1
   ];
-  // Tuba walks I → V → bVII → IV (a mixolydian standard). Two notes per beat.
-  const TUBA_RATIOS = [1.0, 1.0, 1.5, 1.5, 16/9, 16/9, 4/3, 4/3];
   const SCALE = SCALE_MIXO;
-  // Lead riff: 16 melodic indices (-1 = rest), in scale-degree positions.
-  const LEAD = [4, -1, 5, 4, -1, 2, -1, 1,  4, 5, 6, 5, 4, 2, 1, -1];
-  // Counter horn: sparser, lower octave.
-  const COUNTER = [-1, -1, 1, -1, -1, 2, -1, -1, -1, -1, 4, -1, 2, 1, -1, -1];
+
+  // Variation pass: 3 tuba walks, 3 lead riffs, 3 counter-horn variants.
+  // Rotate every 32 ticks (= 2 bars) so each variant gets two cycles before
+  // it swaps out. Lead horn drops 18% of phrases (a brass player breathes
+  // when there's nothing to say). Slow ±20% gain breath over 20s.
+  const TUBA_VARIANTS = [
+    [1.0, 1.0, 1.5, 1.5, 16/9, 16/9, 4/3, 4/3],   // I → V → bVII → IV
+    [1.0, 1.0, 4/3, 4/3, 3/2,  3/2,  1.0,  1.0],   // I → IV → V → I
+    [1.0, 5/4, 3/2, 5/4, 1.0,  4/3,  3/2,  4/3],   // walking arpeggio
+  ];
+  const LEAD_VARIANTS = [
+    [4, -1, 5, 4, -1, 2, -1, 1,  4,  5, 6, 5, 4, 2, 1, -1],
+    [6, -1, 5, -1, 4, -1, 5,  4,  2,  1, -1, 2, 4, -1, 5, -1],
+    [1, 2, 4, 5, -1, 6, 5, 4,  -1, 5, 4, 2, 1, -1, -1, -1],
+  ];
+  const COUNTER_VARIANTS = [
+    [-1, -1, 1, -1, -1, 2, -1, -1, -1, -1, 4, -1, 2,  1, -1, -1],
+    [-1, -1, -1, 4, -1, -1, 2, -1, -1, -1, -1, 5, -1, -1, 4, -1],
+    [-1,  1, -1, -1, 4, -1, -1, 2, -1,  1, -1, -1, 5, -1, -1, 4],
+  ];
+
+  const TICKS_PER_ROTATION = 32;
+  const REST_PROB_LEAD = 0.08;
+  const LFO_PERIOD_S = 20;
+  const LFO_DEPTH = 0.20;
 
   let nextTick = ctx.currentTime + 0.15;
   let tickIdx = 0;
@@ -1105,6 +1181,11 @@ function secondLineStage(ctx, panner, seed) {
     while (nextTick < horizon) {
       const t = nextTick;
       const bt = tickIdx % 16;
+      const rot = Math.floor(tickIdx / TICKS_PER_ROTATION);
+      const TUBA_RATIOS = TUBA_VARIANTS[rot % TUBA_VARIANTS.length];
+      const LEAD = LEAD_VARIANTS[rot % LEAD_VARIANTS.length];
+      const COUNTER = COUNTER_VARIANTS[rot % COUNTER_VARIANTS.length];
+      const breath = 1 + LFO_DEPTH * Math.sin((t / LFO_PERIOD_S) * 2 * Math.PI);
 
       // Kick
       if (KICK_TICKS.includes(bt)) {
@@ -1112,7 +1193,7 @@ function secondLineStage(ctx, panner, seed) {
         kickOsc.frequency.exponentialRampToValueAtTime(45, t + 0.10);
         kickGain.gain.cancelScheduledValues(t);
         kickGain.gain.setValueAtTime(0.0001, t);
-        kickGain.gain.exponentialRampToValueAtTime(0.42, t + 0.005);
+        kickGain.gain.exponentialRampToValueAtTime(0.42 * breath, t + 0.005);
         kickGain.gain.exponentialRampToValueAtTime(0.0001, t + 0.20);
       }
       // Snare
@@ -1120,7 +1201,7 @@ function secondLineStage(ctx, panner, seed) {
         if (s.tick === bt) {
           snareGain.gain.cancelScheduledValues(t);
           snareGain.gain.setValueAtTime(0.0001, t);
-          snareGain.gain.exponentialRampToValueAtTime(s.vol, t + 0.002);
+          snareGain.gain.exponentialRampToValueAtTime(s.vol * breath, t + 0.002);
           snareGain.gain.exponentialRampToValueAtTime(0.0001, t + 0.08);
         }
       }
@@ -1130,18 +1211,18 @@ function secondLineStage(ctx, panner, seed) {
         tubaOsc.frequency.setValueAtTime(baseFreq * 0.5 * ratio, t);
         tubaGain.gain.cancelScheduledValues(t);
         tubaGain.gain.setValueAtTime(0.0001, t);
-        tubaGain.gain.exponentialRampToValueAtTime(0.30, t + 0.02);
+        tubaGain.gain.exponentialRampToValueAtTime(0.30 * breath, t + 0.02);
         tubaGain.gain.exponentialRampToValueAtTime(0.0001, t + beat * 0.55);
       }
       // Lead horn riff
       const leadIdx = LEAD[bt];
-      if (leadIdx >= 0) {
+      if (leadIdx >= 0 && Math.random() >= REST_PROB_LEAD) {
         const f = baseFreq * SCALE[leadIdx % SCALE.length];
         leadOsc.frequency.setValueAtTime(f * 1.004, t);
         leadSqr.frequency.setValueAtTime(f * 0.996, t);
         leadMix.gain.cancelScheduledValues(t);
         leadMix.gain.setValueAtTime(0.0001, t);
-        leadMix.gain.exponentialRampToValueAtTime(0.18, t + 0.015);
+        leadMix.gain.exponentialRampToValueAtTime(0.18 * breath, t + 0.015);
         leadMix.gain.exponentialRampToValueAtTime(0.0001, t + tick * 2.6);
       }
       // Counter horn (lower)
@@ -1151,7 +1232,7 @@ function secondLineStage(ctx, panner, seed) {
         counterOsc.frequency.setValueAtTime(f, t);
         counterMix.gain.cancelScheduledValues(t);
         counterMix.gain.setValueAtTime(0.0001, t);
-        counterMix.gain.exponentialRampToValueAtTime(0.14, t + 0.02);
+        counterMix.gain.exponentialRampToValueAtTime(0.14 * breath, t + 0.02);
         counterMix.gain.exponentialRampToValueAtTime(0.0001, t + tick * 3);
       }
 
@@ -1179,6 +1260,10 @@ function secondLineStage(ctx, panner, seed) {
 // ----- DRUM CIRCLE (polyrhythmic drums, no melody) -------------------------
 // Two toms in a 3:4 cross-rhythm, plus a heartbeat-like kick. The seed picks
 // tempo + which tom plays the 3-pattern vs the 4-pattern.
+//
+// Variation pass: rotate through 3 tom-pattern pairs every 4 measures, add
+// 12% miss chance per tom hit (drummers fluff strokes), and a slow ±20%
+// gain breath over 26s. Kick stays metronomic — it's the heartbeat.
 function drumStage(ctx, panner, seed) {
   const rng = mulberry32(seed >>> 0);
   const tempo = 70 + Math.floor(rng() * 22);
@@ -1187,6 +1272,24 @@ function drumStage(ctx, panner, seed) {
   const tick = beat / 3;
   const tom1Freq = 150 + Math.floor(rng() * 40);   // higher tom
   const tom2Freq = 88 + Math.floor(rng() * 22);    // lower tom
+
+  // 12-tick patterns. true = hit. Pattern A is the original 3:4 cross-rhythm.
+  // B and C are gentle reshuffles so each rotation still grooves but the
+  // accents land differently.
+  const TOM1_PATTERNS = [
+    [true, false, false, false, true, false, false, false, true, false, false, false],
+    [true, false, false, true, false, false, true, false, false, false, true, false],
+    [false, false, true, false, true, false, false, true, false, true, false, false],
+  ];
+  const TOM2_PATTERNS = [
+    [true, false, false, true, false, false, true, false, false, true, false, false],
+    [true, false, true, false, false, true, false, true, false, false, true, false],
+    [true, true, false, false, true, false, true, false, true, false, false, true],
+  ];
+  const TICKS_PER_ROTATION = 48;          // 4 measures
+  const MISS_PROB = 0.06;
+  const LFO_PERIOD_S = 26;
+  const LFO_DEPTH = 0.20;
 
   // Drums are pitch-swept sine oscillators that we re-pluck per hit.
   const kick = ctx.createOscillator(); kick.type = 'sine';
@@ -1208,31 +1311,34 @@ function drumStage(ctx, panner, seed) {
     while (nextTick < horizon) {
       const t = nextTick;
       const measureTick = tickIdx % 12;
-      // Kick: 1 and 7 (every half measure).
+      const rot = Math.floor(tickIdx / TICKS_PER_ROTATION);
+      const tom1Pat = TOM1_PATTERNS[rot % TOM1_PATTERNS.length];
+      const tom2Pat = TOM2_PATTERNS[rot % TOM2_PATTERNS.length];
+      const breath = 1 + LFO_DEPTH * Math.sin((t / LFO_PERIOD_S) * 2 * Math.PI);
+
+      // Kick: 1 and 7 (every half measure). No miss — kick is the heartbeat.
       if (measureTick === 0 || measureTick === 6) {
         kick.frequency.setValueAtTime(95, t);
         kick.frequency.exponentialRampToValueAtTime(45, t + 0.10);
         kickGain.gain.cancelScheduledValues(t);
         kickGain.gain.setValueAtTime(0.0001, t);
-        kickGain.gain.exponentialRampToValueAtTime(0.48, t + 0.005);
+        kickGain.gain.exponentialRampToValueAtTime(0.48 * breath, t + 0.005);
         kickGain.gain.exponentialRampToValueAtTime(0.0001, t + 0.20);
       }
-      // Tom1 on the 3-pattern (every 4 ticks)
-      if (measureTick % 4 === 0) {
+      if (tom1Pat[measureTick] && Math.random() >= MISS_PROB) {
         tom1.frequency.setValueAtTime(tom1Freq * 1.2, t);
         tom1.frequency.exponentialRampToValueAtTime(tom1Freq, t + 0.06);
         tom1Gain.gain.cancelScheduledValues(t);
         tom1Gain.gain.setValueAtTime(0.0001, t);
-        tom1Gain.gain.exponentialRampToValueAtTime(0.34, t + 0.005);
+        tom1Gain.gain.exponentialRampToValueAtTime(0.34 * breath, t + 0.005);
         tom1Gain.gain.exponentialRampToValueAtTime(0.0001, t + 0.16);
       }
-      // Tom2 on the 4-pattern (every 3 ticks)
-      if (measureTick % 3 === 0) {
+      if (tom2Pat[measureTick] && Math.random() >= MISS_PROB) {
         tom2.frequency.setValueAtTime(tom2Freq * 1.2, t);
         tom2.frequency.exponentialRampToValueAtTime(tom2Freq, t + 0.07);
         tom2Gain.gain.cancelScheduledValues(t);
         tom2Gain.gain.setValueAtTime(0.0001, t);
-        tom2Gain.gain.exponentialRampToValueAtTime(0.30, t + 0.005);
+        tom2Gain.gain.exponentialRampToValueAtTime(0.30 * breath, t + 0.005);
         tom2Gain.gain.exponentialRampToValueAtTime(0.0001, t + 0.18);
       }
       nextTick += tick;

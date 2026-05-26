@@ -1,0 +1,68 @@
+# Roadmap
+
+What's queued up next, plus a parking lot of "we talked about it, haven't done it yet." Items move to [CHANGELOG.md](CHANGELOG.md) when they ship.
+
+---
+
+## Music
+
+### Section system *(medium effort, biggest payoff)*
+
+Each music generator gets named sections — `intro / groove / build / break / outro` — each with its own pattern bank and tempo. A meta-scheduler picks the next section probabilistically, with musical transitions: a snare fill into a new section, a tempo ramp into a breakdown. Voices come in and out (just kick for a bar, then horns enter). Different sources can be in different sections at the same time — no global lockstep.
+
+This is the "real" answer to "less repetitive" — the cheap-wins variation pass (multiple variants, rest probability, gain LFO) addresses surface-level repetition, but doesn't give the music a sense of arc.
+
+### Real songform *(big effort, smaller marginal payoff)*
+
+Markov/motif-based phrase generation so the melody actually develops instead of looping. Per-source "songs" — 2–3 minute arcs with intro → verse → chorus → bridge → outro, then a new song picked from the bank. Key changes between songs.
+
+### Smaller music polish
+
+- **Dynamics-aware breath** — couple the rest-probability to the LFO so quiet phases drop more notes and loud phases pack in more accents.
+- **Tempo wobble** — slow drift (±3 BPM over 32 bars) so the groove isn't perfectly metronomic. Tricky because `beat` is captured in envelope math; a clean implementation requires factoring tempo into a function.
+- **Shuffled variant order** — currently rotates 0→1→2→0→1→2. Picking the next variant from a weighted shuffle (avoiding immediate repeats) would feel less mechanical.
+- **Stage-music presets that drift** — even within a single source, the lead can occasionally swap timbre (triangle → sine → square) at section boundaries.
+
+---
+
+## Trip / wook
+
+- **Accept methods we considered but didn't ship.** Currently tap-to-toast or press [Y]. Other options on the table:
+  - **Tap-the-wook** — raycast a tap on the canvas; if it hits a wook (or its proximity zone) during `awaiting_confirm`, accept. More diegetic.
+  - **Dedicated ACCEPT button** — fourth touch button that appears only during `awaiting_confirm`. Most discoverable but adds permanent UI for a rare interaction.
+- **Trip narration polish.** The TRIP_NARRATIVE_TEXTS array in `main.js` could rotate by trip-elapsed-time so early-trip text differs from late-trip text. Right now it's uniform random.
+
+---
+
+## Audio polish
+
+- **`Sound.setVolume(0)` proper-mute API.** The localStorage clamp (≥0.05) is a safety net against an accidentally-dragged slider; a real "fully mute" path should bypass the clamp so intentional muting works.
+- **Output-routing detection.** If iOS sound is still broken after the v2 unlock, log whether the audio is routed to a ghost Bluetooth device. Surface in `Sound.diagnostics()`.
+- **`?sounddebug=1` discoverability.** The mobile audio debug toast only shows when the URL param is set. Consider gating it on a debug build flag rather than a query string, so it never accidentally appears in production.
+
+---
+
+## Docs
+
+- **"LEAF-style drum circle" comment in ARCHITECTURE.md.** Still mentions LEAF as an internal label even though the README is now generic-festival. Decide: scrub from architecture too, or keep as internal context for code-reading colleagues.
+- **Multiple sizes of `assets/zerble.png`.** Currently a single PNG. A higher-res original would scale down cleaner on Retina displays — the README `<img>` is set to `width="420"` but devices pull the full resolution.
+
+---
+
+## Touch / UX
+
+- **Touch overlay during title card.** Currently hidden behind the title's `backdrop-filter`. After Start, the overlay reveals — that's fine, but a brief "tap-and-go" hint after Start might help new touch players find the thumbstick.
+
+---
+
+## Performance
+
+- **Crowd InstancedMesh churn.** When NPCs change state, their per-instance matrix flag has to flip. Worth profiling on low-end devices to see if writes per frame are an issue.
+- **Forest tree count on low tier.** PERF tier currently scales chunk draw radius and crowd density but not forest tree density. Dense forests on mid-spec phones might benefit from a tier-gated thin-out.
+
+---
+
+## Out of scope (worth flagging)
+
+- **Bundler.** Tempting but adds a build step, breaks the "open index.html and it just works" property. Stay no-build until performance forces the issue.
+- **Audio files.** Same — adding sample-based audio means an asset pipeline and a CDN story. Synthesized stays the constraint.

@@ -112,6 +112,23 @@
         <option value="performer_drum">Performer — drum kit</option>
         <option value="performer_sax">Performer — sax</option>
       </optgroup>
+      <optgroup label="Camping">
+        <option value="camp_tent">Camp tent (sleeping)</option>
+        <option value="camp_chair">Camp chair (folding)</option>
+        <option value="chiminea">Chiminea / firepit</option>
+        <option value="tiki_torch">Tiki torch</option>
+        <option value="ezup">EZ-up canopy</option>
+        <option value="tapestry">Tapestry</option>
+        <option value="campsite_small">Campsite (small)</option>
+        <option value="campsite_medium">Campsite (medium)</option>
+        <option value="campsite_large">Campsite (large)</option>
+      </optgroup>
+      <optgroup label="Forest">
+        <option value="forest_tree_pine">Forest tree — tall pine</option>
+        <option value="forest_tree_oak">Forest tree — oak</option>
+        <option value="forest_tree_birch">Forest tree — birch</option>
+        <option value="forest_tree_random">Forest tree — random variety</option>
+      </optgroup>
       <optgroup label="Particles">
         <option value="heart">Heart particle</option>
       </optgroup>
@@ -150,6 +167,11 @@ import { mulberry32 } from './src/rng.js';
     import { buildKid } from './src/models/kid.js';
     import { buildWook } from './src/models/wook.js';
     import { buildPerformer } from './src/models/performer.js';
+    import {
+      buildCampTent, buildCampChair, buildChiminea, buildTikiTorch,
+      buildEzUp, buildTapestry, buildCampsite, updateCampsiteProps,
+    } from './src/models/campsite.js';
+    import { buildTallPine, buildOak, buildBirch, buildForestTree } from './src/models/tree.js';
 
     const canvas = document.getElementById('canvas');
     const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
@@ -695,6 +717,124 @@ import { mulberry32 } from './src/rng.js';
           entityRoot = g;
           cam.target.set(0, 1.2, 0);
           cam.dist = 5;
+          applyCam();
+          break;
+        }
+
+        // ----- Camping -----
+        case 'camp_tent': {
+          const t = buildCampTent(Math.random);
+          scene.add(t.group);
+          entityRoot = t.group;
+          cam.target.set(0, 1.0, 0);
+          cam.dist = 5;
+          applyCam();
+          break;
+        }
+        case 'camp_chair': {
+          const c = buildCampChair(Math.random);
+          scene.add(c.group);
+          entityRoot = c.group;
+          cam.target.set(0, 0.5, 0);
+          cam.dist = 2.5;
+          applyCam();
+          break;
+        }
+        case 'chiminea': {
+          const ch = buildChiminea(Math.random);
+          scene.add(ch.group);
+          entityRoot = ch.group;
+          // Tick the ember flicker each frame against the sandbox nightness.
+          updateFn = (dt) => {
+            updateCampsiteProps(performance.now() / 1000, tod.nightness, [ch]);
+          };
+          cam.target.set(0, 0.5, 0);
+          cam.dist = 3;
+          applyCam();
+          break;
+        }
+        case 'tiki_torch': {
+          const tk = buildTikiTorch(Math.random);
+          scene.add(tk.group);
+          entityRoot = tk.group;
+          updateFn = (dt) => {
+            updateCampsiteProps(performance.now() / 1000, tod.nightness, [tk]);
+          };
+          cam.target.set(0, 1.0, 0);
+          cam.dist = 4;
+          applyCam();
+          break;
+        }
+        case 'ezup': {
+          const ez = buildEzUp(Math.random);
+          scene.add(ez.group);
+          entityRoot = ez.group;
+          cam.target.set(0, 1.4, 0);
+          cam.dist = 7;
+          applyCam();
+          break;
+        }
+        case 'tapestry': {
+          const tp = buildTapestry(Math.random);
+          scene.add(tp.group);
+          entityRoot = tp.group;
+          cam.target.set(0, 1.0, 0);
+          cam.dist = 4.5;
+          applyCam();
+          break;
+        }
+        case 'campsite_small':
+        case 'campsite_medium':
+        case 'campsite_large': {
+          const size = name.split('_')[1];
+          const cs = buildCampsite(Math.random, size);
+          scene.add(cs.group);
+          entityRoot = cs.group;
+          updateFn = (dt) => {
+            updateCampsiteProps(performance.now() / 1000, tod.nightness, cs.animatables);
+          };
+          // Frame the whole site — radius scales with size.
+          const r = { small: 5, medium: 7, large: 9 }[size];
+          cam.target.set(0, 1.2, 0);
+          cam.dist = r * 1.7;
+          applyCam();
+          break;
+        }
+
+        // ----- Forest trees -----
+        case 'forest_tree_pine': {
+          const g = buildTallPine(Math.random);
+          scene.add(g);
+          entityRoot = g;
+          cam.target.set(0, 4, 0);
+          cam.dist = 14;
+          applyCam();
+          break;
+        }
+        case 'forest_tree_oak': {
+          const g = buildOak(Math.random);
+          scene.add(g);
+          entityRoot = g;
+          cam.target.set(0, 3, 0);
+          cam.dist = 12;
+          applyCam();
+          break;
+        }
+        case 'forest_tree_birch': {
+          const g = buildBirch(Math.random);
+          scene.add(g);
+          entityRoot = g;
+          cam.target.set(0, 3.5, 0);
+          cam.dist = 11;
+          applyCam();
+          break;
+        }
+        case 'forest_tree_random': {
+          const g = buildForestTree(Math.random);
+          scene.add(g);
+          entityRoot = g;
+          cam.target.set(0, 3.5, 0);
+          cam.dist = 13;
           applyCam();
           break;
         }

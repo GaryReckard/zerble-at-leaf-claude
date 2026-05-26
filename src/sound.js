@@ -1086,5 +1086,9 @@ const COLLISION_SOUNDS = {
   arch:        (c, d) => woodKnock(c, d),
   lamppost:    (c, d) => clang(c, d),
   drum_circle: (c, d) => { thump(c, d, 70, 0.4, 0.55); thump(c, d, 110, 0.25, 0.3); },
+  // Forest collisions: edge = rustling leaves + knock (you hit a wall of brush);
+  // forest_tree = a louder woody thud (you ran into a 9-metre oak).
+  forest_edge: (c, d) => { woodKnock(c, d); thump(c, d, 140, 0.2, 0.28); },
+  forest_tree: (c, d) => { thump(c, d, 65, 0.45, 0.55); woodKnock(c, d); },
   default:     (c, d) => thump(c, d, 180, 0.2, 0.3),
 };

@@ -370,12 +370,15 @@ export class Wooks {
     this.wooks = [];
     this.colliders = [];
 
-    const WOOK_COUNT = 7;
+    // Wook count was 7 — too dense around spawn, easy to accidentally trigger
+    // a trip just by parking. Dropped to 5 + larger initial spread + spread
+    // check on recycle (see update()) so two wooks don't cluster.
+    const WOOK_COUNT = 5;
     for (let i = 0; i < WOOK_COUNT; i++) {
       const w = buildWook();
       // Drift in slow circles around random anchor points
       const ang = Math.random() * TAU;
-      const rad = 40 + Math.random() * 80;
+      const rad = 60 + Math.random() * 100;  // was 40+80; now 60-160m initial radius
       w.userData.anchor = new THREE.Vector3(Math.cos(ang) * rad, 0, Math.sin(ang) * rad);
       w.userData.radius = 2.5 + Math.random() * 3;
       w.userData.phase = Math.random() * TAU;
@@ -401,12 +404,15 @@ export class Wooks {
     const APPROACH_SPEED  = 1.8;    // m/s when walking up to the driver
     const REST_SPEED      = 0.5;    // |zerble.speed| below this counts as stopped
     const FAR_THRESHOLD2  = 300 * 300;  // recycle a wook whose anchor is this far
-    const RECYCLE_MIN     = 60;     // re-anchor within this minimum distance
-    const RECYCLE_MAX     = 140;    // ...and this maximum, around Zerble
+    const RECYCLE_MIN     = 90;     // re-anchor within this minimum distance (was 60 — too close)
+    const RECYCLE_MAX     = 160;    // ...and this maximum, around Zerble
+    const WOOK_SPREAD     = 40;     // min metres between wook anchors after recycle
 
     // Recycle wooks whose anchor drifted too far from Zerble — without this,
-    // the 7 wooks spawned at world origin stay at radius 40-120m forever, so
-    // anyone who drives 800m away never encounters one.
+    // the wooks spawned at world origin stay at radius 60-160m forever, so
+    // anyone who drives 800m away never encounters one. Recycled positions
+    // honour WOOK_SPREAD (min distance between two wook anchors) so two
+    // wooks don't cluster within trip-trigger range of each other.
     if (zerblePos) {
       for (let i = 0; i < this.wooks.length; i++) {
         const w = this.wooks[i];
@@ -414,9 +420,33 @@ export class Wooks {
         const adx = a.x - zerblePos.x;
         const adz = a.z - zerblePos.z;
         if (adx * adx + adz * adz > FAR_THRESHOLD2) {
-          const ang = Math.random() * TAU;
-          const dist = RECYCLE_MIN + Math.random() * (RECYCLE_MAX - RECYCLE_MIN);
-          a.set(zerblePos.x + Math.cos(ang) * dist, 0, zerblePos.z + Math.sin(ang) * dist);
+          // Try up to 8 angles to find a position with adequate spread.
+          let placed = false;
+          for (let attempt = 0; attempt < 8; attempt++) {
+            const ang = Math.random() * TAU;
+            const dist = RECYCLE_MIN + Math.random() * (RECYCLE_MAX - RECYCLE_MIN);
+            const nx = zerblePos.x + Math.cos(ang) * dist;
+            const nz = zerblePos.z + Math.sin(ang) * dist;
+            let tooClose = false;
+            for (let j = 0; j < this.wooks.length; j++) {
+              if (j === i) continue;
+              const oa = this.wooks[j].userData.anchor;
+              const ddx = nx - oa.x, ddz = nz - oa.z;
+              if (ddx * ddx + ddz * ddz < WOOK_SPREAD * WOOK_SPREAD) { tooClose = true; break; }
+            }
+            if (!tooClose) {
+              a.set(nx, 0, nz);
+              placed = true;
+              break;
+            }
+          }
+          // Fallback: if spread couldn't be satisfied (unlikely with only 5
+          // wooks), accept the last candidate — better than not recycling.
+          if (!placed) {
+            const ang = Math.random() * TAU;
+            const dist = RECYCLE_MIN + Math.random() * (RECYCLE_MAX - RECYCLE_MIN);
+            a.set(zerblePos.x + Math.cos(ang) * dist, 0, zerblePos.z + Math.sin(ang) * dist);
+          }
           // Re-randomize so all recycled wooks don't lock to the same orbit phase
           w.userData.phase = Math.random() * TAU;
         }

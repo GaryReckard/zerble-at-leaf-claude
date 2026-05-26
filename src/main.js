@@ -10,6 +10,9 @@ import { Input } from './input.js';
 import { Touch } from './touch.js';
 import { HUD } from './hud.js';
 import { buildWorld, updateWorld, getTimeOfDay } from './world.js';
+import { forestAnimatables } from './forests.js';
+import { lakeAnimatables } from './lakes.js';
+import { updateCampsiteProps } from './models/campsite.js';
 import { updateStagePerformers, updateStageLightShow, stageLightLenses } from './chunks.js';
 import { Zerble } from './zerble.js';
 import { Bubbles } from './bubbles.js';
@@ -66,6 +69,54 @@ Trip.init();
 composer.addPass(Trip.pass);
 composer.addPass(new OutputPass());
 
+// ---------- Wook offer prompt + trip narration wiring ----------
+//
+// The trip system fires onOffer/onAccept/onDecline around the wook offer
+// flow, and onNarrate periodically during an active trip. We hook those to
+// HUD toasts here. Keeping the copy in main.js means the trip module stays
+// game-agnostic (no HUD imports inside it).
+const WOOK_OFFER_TEXTS = [
+  "🌿 the wook smiles and extends a hand... press [Y] to accept",
+  "🌿 the wook offers you something. press [Y] to take it",
+  "🌿 the wook is sharing the vibe. press [Y] to receive",
+  "🌿 the wook nods knowingly. press [Y] to partake",
+];
+const WOOK_DECLINE_TEXTS = {
+  moved:     "the wook watches you drive away",
+  wook_gone: "the wook wanders off",
+  timeout:   "the wook shrugs and drifts back to the circle",
+};
+const TRIP_NARRATIVE_TEXTS = [
+  "the trees seem to be breathing",
+  "you can taste the bass",
+  "everything is connected, somehow",
+  "is the sky usually that color?",
+  "you forgot what you were doing",
+  "a wook is watching from the trees",
+  "the path is humming",
+  "your hands feel like ideas",
+  "the festival is alive",
+  "time is doing that thing again",
+  "you remember a song from before you were born",
+  "the bubbles know your name",
+  "the mountains are nodding along",
+];
+Trip.onOffer = () => {
+  const msg = WOOK_OFFER_TEXTS[Math.floor(Math.random() * WOOK_OFFER_TEXTS.length)];
+  HUD.toast(msg, 9000);
+};
+Trip.onAccept = () => {
+  HUD.toast("...", 1500);
+};
+Trip.onDecline = (reason) => {
+  const msg = WOOK_DECLINE_TEXTS[reason] || "the moment passes";
+  HUD.toast(msg, 2000);
+};
+Trip.onNarrate = () => {
+  const msg = TRIP_NARRATIVE_TEXTS[Math.floor(Math.random() * TRIP_NARRATIVE_TEXTS.length)];
+  HUD.toast(msg, 3200);
+};
+
 // ---------- Zerble + Smiles + Bubbles ----------
 const zerble = new Zerble();
 zerble.position.set(0, 0, 65);
@@ -102,13 +153,14 @@ scene.add(wooks.group);
 // ---------- Camera ----------
 const chaseCam = new ChaseCamera(camera, zerble);
 
-// Touch + mouse cam toggle button — same as pressing V.
+// Touch + mouse cam toggle button — same as pressing V. Cycles through
+// chase → first-person → top-down → chase.
 const btnCam = document.getElementById('btn-cam');
 if (btnCam) {
   const toggle = (e) => {
     e.preventDefault();
     chaseCam.toggleMode();
-    HUD.toast(chaseCam.mode === 'first' ? 'First-person view' : 'Chase view', 1500);
+    HUD.toast(chaseCam.modeLabel, 1500);
   };
   btnCam.addEventListener('click', toggle);
   btnCam.addEventListener('touchstart', toggle, { passive: false });
@@ -204,11 +256,17 @@ function tickBody(dt) {
       Analytics.firstHonk();
     }
 
-    // V toggles first-person view from Zerble's eyes.
+    // V cycles camera modes: chase → first-person → top-down → chase.
     if (Input.consumePressed('V')) {
       chaseCam.toggleMode();
-      HUD.toast(chaseCam.mode === 'first' ? 'First-person view (V to exit)' : 'Chase view', 1500);
+      HUD.toast(chaseCam.modeLabel + ' (V to cycle)', 1500);
       Analytics.viewToggle(chaseCam.mode);
+    }
+
+    // Y accepts a pending wook trip offer. Outside of awaiting_confirm the
+    // press is consumed silently — Y has no other binding so this is fine.
+    if (Input.consumePressed('Y')) {
+      if (Trip.state === 'awaiting_confirm') Trip.acceptOffer();
     }
 
     bubbles.update(dt, zerble, nightness);
@@ -237,6 +295,16 @@ function tickBody(dt) {
     const nowS = performance.now() * 0.001;
     updateStagePerformers(nowS);
     updateStageLightShow(nowS, nightness, zerble.position);
+
+    // Campsite props (firepit ember pulse + tiki torch flicker) for both
+    // forest-clearing campsites and lakeside ones. Two separate lists owned
+    // by their respective systems (chunk vs lake lifecycle); single update fn.
+    for (let i = 0; i < forestAnimatables.length; i++) {
+      updateCampsiteProps(nowS, nightness, forestAnimatables[i].animatables);
+    }
+    for (let i = 0; i < lakeAnimatables.length; i++) {
+      updateCampsiteProps(nowS, nightness, lakeAnimatables[i].animatables);
+    }
 
     // Procedural world expands around Zerble.
     updateWorld(zerble.position, dt);
@@ -388,6 +456,8 @@ function toastForKind(kind) {
     case 'lamppost': return 'Bonked a lamppost.';
     case 'drum_circle': return 'You crashed the drum circle!';
     case 'lake_edge': return 'Splash! Carts don\'t float.';
+    case 'forest_edge': return 'These woods are thick!';
+    case 'forest_tree': return 'Ow — that\'s a big tree!';
     case 'island': return 'Tiny island, busy day.';
     case 'lurleen': return 'Easy, lover — that\'s Lurleen.';
     default: return 'Ouch.';

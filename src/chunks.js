@@ -20,6 +20,7 @@ import { hash2, mulberry32 } from './rng.js';
 import { Sound } from './sound.js';
 import { PERF } from './perf.js';
 import { chunkOverlapsLake, chunkInLake } from './lakes.js';
+import { getForestAt, buildForestChunk, chunkInForest, forestAnimatables } from './forests.js';
 import { buildTent } from './models/tent.js';
 import { buildFoodTruck, FOOD_TRUCK_SCALE } from './models/foodTruck.js';
 import { buildHammock as buildHammockModel } from './models/hammock.js';
@@ -253,13 +254,21 @@ export class ChunkManager {
     for (let i = stageBeamRefs.length - 1; i >= 0; i--) {
       if (stageBeamRefs[i].chunkKey === key) stageBeamRefs.splice(i, 1);
     }
+    // Sweep forest animatables (campsite firepit / torch flicker state).
+    for (let i = forestAnimatables.length - 1; i >= 0; i--) {
+      if (forestAnimatables[i].chunkKey === key) forestAnimatables.splice(i, 1);
+    }
 
     this.loaded.delete(key);
   }
 
   _generate(cx, cz) {
     const key = chunkKey(cx, cz);
-    const theme = pickTheme(cx, cz);
+    // Forests preempt the normal theme: if this chunk is part of a forest's
+    // 3x3 block, we hand it off to forests.js entirely (which builds dense
+    // trees + perimeter colliders + — eventually — the clearing).
+    const forest = getForestAt(cx, cz);
+    const theme = forest ? 'forest' : pickTheme(cx, cz);
     const group = new THREE.Group();
     group.name = `chunk(${cx},${cz},${theme})`;
 
@@ -273,26 +282,34 @@ export class ChunkManager {
       crowd: this.crowd,
     };
 
-    // Every chunk: paths along its grid axes (skipped if the chunk overlaps a lake)
-    placePaths(ctx);
+    if (forest) {
+      // Forest chunks skip the normal path grid, theme builders, ambient
+      // crowd, and chunk-tree scatter. Everything is handled inside
+      // buildForestChunk so reasoning about "what's in a forest chunk?"
+      // stays in forests.js.
+      buildForestChunk(ctx, forest);
+    } else {
+      // Every chunk: paths along its grid axes (skipped if the chunk overlaps a lake)
+      placePaths(ctx);
 
-    // Suppress theme content (stages, food trucks, vendor rows, drum circles,
-    // hammocks, picnic blankets) when the chunk center sits inside a lake.
-    // Otherwise these get placed on top of the water. Trees + sparse ambient
-    // crowd still happen — they consult registry footprints individually so
-    // they naturally land on the shoreline.
-    const inWater = chunkInLake(ctx.cxWorld, ctx.czWorld);
-    if (!inWater) {
-      THEME_BUILDERS[theme](ctx);
+      // Suppress theme content (stages, food trucks, vendor rows, drum circles,
+      // hammocks, picnic blankets) when the chunk center sits inside a lake.
+      // Otherwise these get placed on top of the water. Trees + sparse ambient
+      // crowd still happen — they consult registry footprints individually so
+      // they naturally land on the shoreline.
+      const inWater = chunkInLake(ctx.cxWorld, ctx.czWorld);
+      if (!inWater) {
+        THEME_BUILDERS[theme](ctx);
+      }
+
+      // Scatter trees — will dodge the buildings + lake footprints registered.
+      const treeDensity = inWater ? 0 : THEME_PROPS[theme].treeDensity;
+      scatterTrees(ctx, treeDensity);
+
+      // Ambient crowd
+      const crowdCount = inWater ? 0 : THEME_PROPS[theme].ambientCrowd;
+      spawnAmbientCrowd(ctx, crowdCount);
     }
-
-    // Scatter trees — will dodge the buildings + lake footprints registered.
-    const treeDensity = inWater ? 0 : THEME_PROPS[theme].treeDensity;
-    scatterTrees(ctx, treeDensity);
-
-    // Ambient crowd
-    const crowdCount = inWater ? 0 : THEME_PROPS[theme].ambientCrowd;
-    spawnAmbientCrowd(ctx, crowdCount);
 
     this.scene.add(group);
     this.loaded.set(key, { group, cx, cz, theme });
@@ -434,7 +451,7 @@ function placePaths(ctx) {
 // curve. The curve is a Catmull-Rom through jittered interior control points
 // (deterministic via the passed rng), and the ribbon has constant width with
 // edges offset perpendicular to the local tangent. Lying flat at y=0.06.
-function buildCurvedPath(x1, z1, x2, z2, width, rng, material) {
+export function buildCurvedPath(x1, z1, x2, z2, width, rng, material) {
   const segments = 16;
   const halfW = width / 2;
 

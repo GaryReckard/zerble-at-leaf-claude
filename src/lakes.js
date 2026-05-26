@@ -13,6 +13,12 @@ import * as THREE from 'three';
 import { registry } from './registry.js';
 import { hash2, mulberry32 } from './rng.js';
 import { buildCanoe } from './models/canoe.js';
+import { buildCampsite } from './models/campsite.js';
+
+// Per-frame animatables from lakeside campsites. Each entry:
+//   { lakeKey: string, animatables: [...] }
+// destroyLake sweeps this list when its lake unloads.
+export const lakeAnimatables = [];
 
 const LAKE_CELL = 320;
 const LAKE_DENSITY = 0.45;       // ~45% of macrocells get a lake
@@ -101,8 +107,13 @@ export function buildLake(scene, mcx, mcz, rng, opts = {}) {
   // Causeway midpoint
   const causewayMidX = (bigCx + smallCx) / 2;
   const causewayMidZ = (bigCz + smallCz) / 2;
-  // Causeway runs ALONG the sep axis through the two lakes.
-  const causewayLen = sep + bigR + smallR + 40;  // extends past both lakes
+  // Causeway spans ONLY the gap between the two lakes' edges, with a small
+  // overlap on each side so the cart transitions cleanly between grass and
+  // shore. Previously this was `sep + bigR + smallR + 40` which extended the
+  // road all the way through both lakes — a long grass road cutting across
+  // open water. Gary asked to remove that.
+  const gapLen = sep - bigR - smallR;
+  const causewayLen = Math.max(2, gapLen) + 12;
   const causewayAngle = Math.atan2(dirZ, dirX);
 
   // ---- Materials ----
@@ -297,6 +308,70 @@ export function buildLake(scene, mcx, mcz, rng, opts = {}) {
     attractor: { radius: 6, weight: 1.6 },
   }));
 
+  // ---- Lakeside campsites ----
+  // Roughly half of lakes get 1-2 campsites pitched on the grass just outside
+  // the big lake's shoreline. Sites are placed deterministically — same seed
+  // means same camps. We avoid the causeway angle so tents don't clip the
+  // grass road, and pick distinct angles so two camps don't pile up.
+  const lakeKey = _key(mcx, mcz);
+  const lakeAnimatableEntries = [];
+  if (rng() < 0.55) {
+    const campCount = 1 + Math.floor(rng() * 2);  // 1 or 2
+    const usedAngles = [];
+    // Causeway runs along ±causewayAngle; reserve a wedge around both ends.
+    const causewayBlockHalfArc = Math.PI / 5;  // ±36° each end
+    for (let i = 0; i < campCount; i++) {
+      // Try up to 6 angles to find one clear of the causeway and prior camps
+      let theta = null;
+      for (let attempt = 0; attempt < 6; attempt++) {
+        const t = rng() * Math.PI * 2;
+        // Reject if within causeway wedge (either end)
+        const dA = Math.min(angDiff(t, causewayAngle), angDiff(t, causewayAngle + Math.PI));
+        if (dA < causewayBlockHalfArc) continue;
+        // Reject if too close to a previously placed camp
+        const tooClose = usedAngles.some((u) => angDiff(t, u) < 0.6);
+        if (tooClose) continue;
+        theta = t;
+        break;
+      }
+      if (theta == null) continue;
+      usedAngles.push(theta);
+
+      // Position: just outside the lake on the grass. Lakes don't have an
+      // explicit "shore grass" radius, but the lake-edge collider ring sits
+      // at the lake radius, so dropping the camp at lakeR + 8m clears the
+      // colliders and leaves a few metres of buffer before the camp itself.
+      // Per-camp deterministic rng so two camps on the same lake look different
+      const campSeed = hash2(mcx * 211 + 17, mcz * 313 + i * 59);
+      const camp = buildCampsite(mulberry32(campSeed), 'small');
+      const r = bigR + camp.footprint + 4;
+      const cx = bigCx + Math.cos(theta) * r;
+      const cz = bigCz + Math.sin(theta) * r;
+      camp.group.position.set(cx, 0, cz);
+      // Face the lake — tents/EZ-up "open side" toward water
+      camp.group.rotation.y = Math.atan2(bigCz - cz, bigCx - cx);
+      group.add(camp.group);
+
+      lakeAnimatableEntries.push(camp.animatables);
+
+      // Register a campsite attractor so any shore-bound NPCs gravitate
+      // toward the gathering. Small radius — we don't want crowd-pulling
+      // halfway across the festival.
+      registryIds.push(registry.add({
+        kind: 'campsite',
+        position: new THREE.Vector3(cx, 0, cz),
+        footprint: camp.footprint,
+        attractor: { radius: 6, weight: 1.4 },
+      }));
+    }
+
+    if (lakeAnimatableEntries.length > 0) {
+      // Flatten so the updater walks one list per lake (not per-camp).
+      const flat = lakeAnimatableEntries.flat();
+      lakeAnimatables.push({ lakeKey, animatables: flat });
+    }
+  }
+
   // ---- Canoe with paddler(s) drifting around the big lake ----
   const canoe = createLakeCanoe(group, bigCx, bigCz, bigR, rng);
 
@@ -307,6 +382,7 @@ export function buildLake(scene, mcx, mcz, rng, opts = {}) {
     group,
     registryIds,
     canoe,
+    lakeKey,
   };
 }
 
@@ -452,6 +528,14 @@ function destroyLake(scene, lake) {
   });
   scene.remove(lake.group);
   for (const id of lake.registryIds) registry.remove(id);
+  // Sweep lakeside campsite animatables tagged with this lake's key.
+  if (lake.lakeKey) {
+    for (let i = lakeAnimatables.length - 1; i >= 0; i--) {
+      if (lakeAnimatables[i].lakeKey === lake.lakeKey) {
+        lakeAnimatables.splice(i, 1);
+      }
+    }
+  }
 }
 
 // Helper for chunks.js to know whether a chunk should skip its standard paths

@@ -164,7 +164,12 @@ export const Trip = {
 
   // Timing / proximity settings
   duration:            180,        // 3-minute trip by default — wooks deal good shit
-  fadeIn:              1.5,
+  // fadeIn was 1.5s, which was *too* punchy — full effects landed almost
+  // immediately and the trip felt like getting hit by a bus. Stretched to
+  // 10s so the first ten seconds are barely-perceptible: hue shifts a touch,
+  // colour slightly off, everything else negligible. Then the dynamic curves
+  // ramp into the meat of the trip over the next half-minute.
+  fadeIn:              10,
   fadeOut:             3.0,
   cooldown:            5,
   proximityThreshold:  2.5,
@@ -174,8 +179,23 @@ export const Trip = {
   // Mode
   dynamic:          false,   // wook auto-trigger + "Dynamic Trip" button set this true
 
+  // Hooks set by main.js. Trip emits these around the wook-offer flow so the
+  // HUD can show/hide a prompt. Both are no-ops by default.
+  onOffer:   null,   // () => void — wook just offered a trip; show prompt
+  onAccept:  null,   // () => void — user accepted; hide prompt
+  onDecline: null,   // (reason) => void — user declined or timed out
+  // Narrative toast emitter — () => void called periodically during a trip.
+  // main.js sets this to fire HUD.toast(...) with a random line.
+  onNarrate: null,
+
   // Internal state
-  state:            'idle',  // 'idle' | 'fading_in' | 'sustaining' | 'fading_out' | 'cooldown'
+  // 'awaiting_confirm' is the new step between idle (proximity reached) and
+  // fading_in — gives the player a chance to accept or decline the wook's gift.
+  state:            'idle',  // 'idle' | 'awaiting_confirm' | 'fading_in' | 'sustaining' | 'fading_out' | 'cooldown'
+  _confirmTimer:    0,
+  _confirmTimeout:  8,        // user has this many seconds to press Y
+  _narrateTimes:    null,     // sorted list of elapsed-seconds at which to fire a narration
+  _narrateIdx:      0,
   _phaseTimer:      0,
   _proximityTimer:  0,
   _envelope:        0,
@@ -200,6 +220,28 @@ export const Trip = {
     this.setPreset('standard');
   },
 
+  // Wook offered a trip and the player accepted (Y key, see main.js wiring).
+  // Always uses Dynamic mode — the wook-pipeline experience is the scripted one.
+  acceptOffer() {
+    if (this.state !== 'awaiting_confirm') return;
+    this.dynamic = true;
+    this._enterFadingIn();
+    Analytics.tripStart('wook_accept');
+    if (typeof this.onAccept === 'function') this.onAccept();
+  },
+
+  // Wook offer declined — by moving, by timeout, or by walking out of range.
+  // Drops into a short cooldown so the same wook doesn't immediately re-offer
+  // on the next tick.
+  declineOffer(reason = 'unknown') {
+    if (this.state !== 'awaiting_confirm') return;
+    this.state = 'cooldown';
+    this._phaseTimer = 0;
+    this._proximityTimer = 0;
+    this._confirmTimer = 0;
+    if (typeof this.onDecline === 'function') this.onDecline(reason);
+  },
+
   // Manual trigger (FIRE TRIP button) — uses Static mode (whatever sliders are set to)
   trigger() {
     this.dynamic = false;
@@ -219,6 +261,25 @@ export const Trip = {
     this._proximityTimer = 0;
     this._tripElapsed = 0;
     this.state = 'fading_in';
+
+    // Schedule 5 narrative toasts at randomized times across the trip.
+    // Skip the very start (let the ease-in breathe) and the very end (don't
+    // overlap the come-down). Sort ascending so we can fire them in order
+    // by comparing _tripElapsed against _narrateTimes[_narrateIdx].
+    const total = this.fadeIn + this.duration + this.fadeOut;
+    const earliest = Math.max(this.fadeIn + 4, 12);     // ~12s minimum
+    const latest = total - this.fadeOut - 8;            // 8s before come-down
+    const span = Math.max(10, latest - earliest);
+    const slots = 5;
+    const times = [];
+    for (let i = 0; i < slots; i++) {
+      // Even slot center with random jitter so the times don't bunch up.
+      const slotStart = earliest + (i / slots) * span;
+      const slotEnd = earliest + ((i + 1) / slots) * span;
+      times.push(slotStart + Math.random() * (slotEnd - slotStart));
+    }
+    this._narrateTimes = times;
+    this._narrateIdx = 0;
   },
 
   // Cut the trip short — smoothly fade out from whatever envelope we're currently at.
@@ -351,7 +412,19 @@ export const Trip = {
     this.pass.uniforms.time.value = this._timeAccum;
 
     // Track trip elapsed time across the three active phases
-    if (this.isActive()) this._tripElapsed += dt;
+    if (this.isActive()) {
+      this._tripElapsed += dt;
+      // Emit any narrative toasts whose scheduled time has passed.
+      if (this._narrateTimes && this._narrateIdx < this._narrateTimes.length) {
+        while (
+          this._narrateIdx < this._narrateTimes.length
+          && this._tripElapsed >= this._narrateTimes[this._narrateIdx]
+        ) {
+          if (typeof this.onNarrate === 'function') this.onNarrate();
+          this._narrateIdx++;
+        }
+      }
+    }
 
     // Find nearest wook distance
     let nearestDist = Infinity;
@@ -371,13 +444,32 @@ export const Trip = {
         if (zerbleSpeed < this.restSpeed && nearestDist < this.proximityThreshold) {
           this._proximityTimer += dt;
           if (this._proximityTimer >= this.restDuration) {
-            // Wook-dose: always uses Dynamic mode.
-            this.dynamic = true;
-            this._enterFadingIn();
-            Analytics.tripStart('wook');
+            // Wook is in range and Zerble has been parked long enough — offer
+            // the trip rather than auto-dosing. The player can accept (Y),
+            // drive away, or just wait out the prompt timeout.
+            this.state = 'awaiting_confirm';
+            this._confirmTimer = 0;
+            if (typeof this.onOffer === 'function') this.onOffer();
           }
         } else {
           this._proximityTimer = 0;
+        }
+        this._envelope = 0;
+        break;
+      }
+
+      case 'awaiting_confirm': {
+        this._confirmTimer += dt;
+        // Cancel reasons (any one resolves the prompt as a decline):
+        //   - User started moving (drove away)
+        //   - Wook walked out of range
+        //   - Timeout exceeded
+        let declineReason = null;
+        if (zerbleSpeed >= this.restSpeed) declineReason = 'moved';
+        else if (nearestDist > this.proximityThreshold * 1.6) declineReason = 'wook_gone';
+        else if (this._confirmTimer >= this._confirmTimeout) declineReason = 'timeout';
+        if (declineReason) {
+          this.declineOffer(declineReason);
         }
         this._envelope = 0;
         break;

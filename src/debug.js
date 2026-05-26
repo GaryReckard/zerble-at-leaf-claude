@@ -402,7 +402,9 @@ function buildTripPanel() {
     padding: '8px 10px',
     borderRadius: '6px',
     border: '1px solid #2a4a5a',
-    maxWidth: '300px',
+    // Was 300px — the Duration row's "180.0" readout overflowed the right
+    // edge. Bumped to 340px and widened the readout column (see buildSliderRow).
+    maxWidth: '340px',
     pointerEvents: 'auto',
     display: 'none',
     userSelect: 'none',
@@ -563,7 +565,9 @@ function buildSliderRow(label, key, min, max, step, Trip, group) {
 
   const readout = document.createElement('span');
   readout.textContent = Number(currentVal).toFixed(step < 0.1 ? 2 : 1);
-  readout.style.cssText = 'width:36px;text-align:right;';
+  // 36px was too narrow for "180.0" — bumped to 48px so 3-digit values fit
+  // without the row hanging off the panel.
+  readout.style.cssText = 'width:48px;text-align:right;';
   row.appendChild(readout);
 
   input.addEventListener('input', () => {

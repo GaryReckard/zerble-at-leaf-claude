@@ -213,6 +213,25 @@ HUD.onStart(() => {
   const tc = document.getElementById('touch-controls');
   if (tc) tc.setAttribute('aria-hidden', 'false');
   HUD.toast('Drive around — make people smile, dodge the parade.', 2800);
+
+  // Audio debug surfaced on-screen: ?sounddebug=1 in the URL pops a compact
+  // toast a beat after Start with the unlock state, so we can diagnose iOS
+  // audio without Safari Web Inspector. The promise resolutions land on the
+  // next microtask, hence the short delay.
+  if (new URLSearchParams(location.search).get('sounddebug') === '1') {
+    setTimeout(() => {
+      const d = Sound.diagnostics();
+      const ms = d.restoredFromLocalStorage.master;
+      const msg =
+        `ctx ${d.live.ctxState} ` +
+        `m${(d.live.masterGain ?? 0).toFixed(2)} ` +
+        `html ${d.htmlUnlockPlayResolved ? '✓' : (d.htmlUnlockPlayRejected ? '✗' : '?')} ` +
+        `buf ${d.webAudioBufferUnlocked ? '✓' : '✗'} ` +
+        `rate ${d.live.ctxSampleRate}` +
+        (ms ? ` LS:${ms.raw}→${ms.applied}` : '');
+      HUD.toast(msg, 9000);
+    }, 250);
+  }
 });
 
 // iOS suspends the AudioContext on tab switch / device lock. Resume on return.
@@ -522,6 +541,7 @@ if (window.visualViewport) {
 window.__game = {
   camera, zerble, scene, renderer, crowd, registry, chaseCam, lurleen,
   getTimeOfDay, Trip,
+  sound: Sound,
 };
 
 installDebug({

@@ -19,16 +19,51 @@ let sfxBus = null;       // shared bus for all SFX (engine, collisions, honks, b
 let engineNodes = null;
 let initialized = false;
 let silentUnlockEl = null;   // HTMLAudioElement kept alive to hold the iOS "Playback" audio session
+let silentUnlockUrl = null;  // Blob URL — revoked on tear-down (not currently torn down, but for hygiene)
 
-// 44-byte valid silent WAV (1 channel, 22050Hz, 8-bit PCM, zero samples).
-// iOS Safari routes WebAudio through the "Ambient" audio session by default,
-// which respects the hardware silent switch. Once *any* HTMLMediaElement has
-// successfully started playback inside a user gesture, the whole page is
-// promoted to the "Playback" session and WebAudio plays through the
-// loudspeaker regardless of the side mute switch. This data URL is that
-// element's source — small enough to inline, valid enough to actually start.
-const SILENT_WAV_DATA_URI =
-  'data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEAIlYAACJWAAABAAgAZGF0YQAAAAA=';
+// Diagnostics state — populated by init() so we can surface what unlocked
+// (and what didn't) from window.__game.sound.diagnostics() on the iPhone.
+const _diag = {
+  initCalled: false,
+  ctxConstructed: false,
+  ctxStateAfterConstruct: null,
+  resumeCalled: false,
+  resumeError: null,
+  ctxStateAfterResume: null,
+  htmlUnlockTried: false,
+  htmlUnlockPlayResolved: false,
+  htmlUnlockPlayRejected: null,
+  webAudioBufferUnlocked: false,
+  restoredFromLocalStorage: { master: null, music: null, sfx: null },
+};
+
+// Build a valid 100ms silent 16-bit PCM WAV in memory. We use a real (non-zero)
+// audio body because some iOS Safari versions silently refuse to mark
+// zero-sample media as "played", which means the audio session never promotes
+// to Playback and the hardware silent switch keeps muting WebAudio.
+function buildSilentWavBlobUrl() {
+  const sampleRate = 8000;
+  const numSamples = sampleRate / 10;          // 100ms
+  const dataBytes = numSamples * 2;            // 16-bit mono
+  const buffer = new ArrayBuffer(44 + dataBytes);
+  const view = new DataView(buffer);
+  let p = 0;
+  const wU32 = (v) => { view.setUint32(p, v, true); p += 4; };
+  const wU16 = (v) => { view.setUint16(p, v, true); p += 2; };
+  const wStr = (s) => { for (let i = 0; i < s.length; i++) view.setUint8(p++, s.charCodeAt(i)); };
+  wStr('RIFF'); wU32(36 + dataBytes);
+  wStr('WAVE'); wStr('fmt '); wU32(16);
+  wU16(1);                                     // PCM
+  wU16(1);                                     // 1 channel
+  wU32(sampleRate);                            // sample rate
+  wU32(sampleRate * 2);                        // byte rate (1ch * 16bit)
+  wU16(2);                                     // block align
+  wU16(16);                                    // bits per sample
+  wStr('data'); wU32(dataBytes);
+  // 16-bit signed PCM silence is 0 — ArrayBuffer is already zeroed.
+  const blob = new Blob([buffer], { type: 'audio/wav' });
+  return URL.createObjectURL(blob);
+}
 
 // Global nightness (0..1) — set each frame by main.js via Sound.setNightness.
 // The forest drum engine reads this every scheduler tick to gate voices in,
@@ -44,6 +79,7 @@ const _pendingStages = [];
 export const Sound = {
   // Must be called from a user gesture (Start button click). Safe to call again.
   init() {
+    _diag.initCalled = true;
     if (initialized) {
       // Resume in case the browser auto-suspended
       if (ctx && ctx.state === 'suspended') ctx.resume();
@@ -52,7 +88,74 @@ export const Sound = {
     const AudioCtx = window.AudioContext || window.webkitAudioContext;
     if (!AudioCtx) return;
     ctx = new AudioCtx();
+    _diag.ctxConstructed = true;
+    _diag.ctxStateAfterConstruct = ctx.state;
 
+    // iOS unlock A: resume FIRST, before we touch any other node. On iOS the
+    // AudioContext is constructed in 'suspended' state and resume() needs the
+    // active user gesture. Doing it before the rest of the graph setup keeps
+    // the gesture privilege as fresh as possible.
+    if (ctx.state === 'suspended') {
+      _diag.resumeCalled = true;
+      const p = ctx.resume();
+      if (p && typeof p.then === 'function') {
+        p.then(() => { _diag.ctxStateAfterResume = ctx.state; })
+         .catch((e) => { _diag.resumeError = String(e); });
+      } else {
+        _diag.ctxStateAfterResume = ctx.state;
+      }
+    } else {
+      _diag.ctxStateAfterResume = ctx.state;
+    }
+
+    // iOS unlock B: play a 1-sample silent WebAudio buffer source. On some
+    // older iOS versions this is what actually flips the WebAudio scheduler
+    // from "scheduled but silent" to "audible". Cheap, harmless on every
+    // other browser.
+    try {
+      const unlockBuf = ctx.createBuffer(1, 1, 22050);
+      const src = ctx.createBufferSource();
+      src.buffer = unlockBuf;
+      src.connect(ctx.destination);
+      src.start(0);
+      _diag.webAudioBufferUnlocked = true;
+    } catch (e) { /* old iOS may throw on createBuffer(1,1,22050); we tried */ }
+
+    // iOS unlock C: play a real HTMLAudioElement so the page is promoted to
+    // the "Playback" audio session and WebAudio stops respecting the silent
+    // switch. Must be a non-zero-duration media file with a valid header — a
+    // 0-sample WAV will look "played" to us but iOS sometimes doesn't count
+    // it. Build a real 100ms silent WAV in memory and play it from a Blob URL,
+    // appended to the DOM so iOS treats it as a first-class media element.
+    try {
+      _diag.htmlUnlockTried = true;
+      silentUnlockUrl = buildSilentWavBlobUrl();
+      const el = document.createElement('audio');
+      el.setAttribute('playsinline', '');
+      el.setAttribute('webkit-playsinline', '');
+      el.preload = 'auto';
+      el.loop = true;
+      el.muted = false;
+      el.volume = 0.001;            // audible to iOS, inaudible to humans
+      el.src = silentUnlockUrl;
+      // Off-screen but in the tree — appending to <body> matters on iOS.
+      el.style.position = 'fixed';
+      el.style.top = '-9999px';
+      el.style.width = '1px';
+      el.style.height = '1px';
+      el.style.opacity = '0';
+      document.body.appendChild(el);
+      const p = el.play();
+      if (p && typeof p.then === 'function') {
+        p.then(() => { _diag.htmlUnlockPlayResolved = true; })
+         .catch((e) => { _diag.htmlUnlockPlayRejected = String(e); });
+      } else {
+        _diag.htmlUnlockPlayResolved = true;
+      }
+      silentUnlockEl = el;
+    } catch (e) { _diag.htmlUnlockPlayRejected = String(e); }
+
+    // Now build the actual mix graph.
     masterGain = ctx.createGain();
     masterGain.gain.value = 0.55;
     masterGain.connect(ctx.destination);
@@ -65,46 +168,28 @@ export const Sound = {
     sfxBus.gain.value = 1.0;
     sfxBus.connect(masterGain);
 
-    // Restore persisted volume levels (zerble.vol.*)
+    // Restore persisted volume levels (zerble.vol.*). Clamp anything < 0.05
+    // up to 0.05 — a stuck-at-zero slider from a previous session is the
+    // sneakiest "no sound" footgun, and 0.05 is still close enough to silent
+    // that an intentionally-muted player won't notice. Use Sound.setVolume()
+    // to explicitly go all the way to zero.
     try {
-      const sm = localStorage.getItem('zerble.vol.master');
-      const sc = localStorage.getItem('zerble.vol.music');
-      const ss = localStorage.getItem('zerble.vol.sfx');
-      if (sm !== null) masterGain.gain.value = parseFloat(sm);
-      if (sc !== null) musicBus.gain.value = parseFloat(sc);
-      if (ss !== null) sfxBus.gain.value = parseFloat(ss);
+      const restore = (key, gain, fallback) => {
+        const raw = localStorage.getItem(key);
+        if (raw === null) return null;
+        const v = parseFloat(raw);
+        if (!Number.isFinite(v)) return null;
+        const clamped = v < 0.05 ? 0.05 : v;
+        gain.gain.value = clamped;
+        return { raw, applied: clamped };
+      };
+      _diag.restoredFromLocalStorage.master = restore('zerble.vol.master', masterGain);
+      _diag.restoredFromLocalStorage.music  = restore('zerble.vol.music',  musicBus);
+      _diag.restoredFromLocalStorage.sfx    = restore('zerble.vol.sfx',    sfxBus);
     } catch (e) { /* localStorage unavailable */ }
 
     engineNodes = createEngine(ctx, sfxBus);
     initialized = true;
-
-    // iOS unlock #1: route the page through the "Playback" audio session so
-    // WebAudio bypasses the silent switch. Must happen inside the same user
-    // gesture that called init(). The element is kept alive on `silentUnlockEl`
-    // so iOS doesn't GC the session out from under us.
-    try {
-      const el = document.createElement('audio');
-      el.setAttribute('playsinline', '');
-      el.setAttribute('webkit-playsinline', '');
-      el.preload = 'auto';
-      el.loop = true;
-      el.src = SILENT_WAV_DATA_URI;
-      // play() returns a Promise on modern browsers; ignore rejection so a
-      // failed unlock doesn't kill the rest of init.
-      const p = el.play();
-      if (p && typeof p.catch === 'function') p.catch(() => {});
-      silentUnlockEl = el;
-    } catch (e) { /* HTMLAudioElement unavailable — soldier on */ }
-
-    // iOS unlock #2: AudioContexts created on iOS start in 'suspended' state
-    // even when constructed inside a user gesture. resume() must be called
-    // synchronously in that same gesture to actually unlock the graph. Without
-    // this, every oscillator/buffer source feeds into a stopped clock and
-    // produces silence — which is exactly the "no sound on iOS, ever" symptom.
-    if (ctx.state === 'suspended') {
-      const p = ctx.resume();
-      if (p && typeof p.catch === 'function') p.catch(() => {});
-    }
 
     // Drain any stage music attachments that were queued during world boot.
     const queued = _pendingStages.splice(0);
@@ -113,6 +198,29 @@ export const Sound = {
       const real = createStageMusic(ctx, musicBus, q.x, q.y, q.z, q.seed, q.style);
       q.handle._adopt(real);
     }
+  },
+
+  // Returns a snapshot of the audio init state. Wired through
+  // window.__game.sound.diagnostics() so we can probe an iPhone via Safari
+  // Web Inspector without ad-hoc instrumentation. Also includes the LIVE
+  // ctx state + gain values so we can spot a stuck-suspended context or a
+  // dropped-to-zero master after the fact.
+  diagnostics() {
+    return {
+      ...JSON.parse(JSON.stringify(_diag)),
+      live: {
+        initialized,
+        ctxState: ctx ? ctx.state : 'no-ctx',
+        ctxSampleRate: ctx ? ctx.sampleRate : null,
+        ctxBaseLatency: ctx ? ctx.baseLatency : null,
+        masterGain: masterGain ? masterGain.gain.value : null,
+        musicBus: musicBus ? musicBus.gain.value : null,
+        sfxBus: sfxBus ? sfxBus.gain.value : null,
+        silentUnlockPaused: silentUnlockEl ? silentUnlockEl.paused : null,
+        silentUnlockCurrentTime: silentUnlockEl ? silentUnlockEl.currentTime : null,
+        silentUnlockReadyState: silentUnlockEl ? silentUnlockEl.readyState : null,
+      },
+    };
   },
 
   // iOS Safari auto-suspends the AudioContext when the tab is hidden / the

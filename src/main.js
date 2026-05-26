@@ -10,7 +10,7 @@ import { Input } from './input.js';
 import { Touch } from './touch.js';
 import { HUD } from './hud.js';
 import { buildWorld, updateWorld, getTimeOfDay } from './world.js';
-import { forestAnimatables, forestDrumCircles } from './forests.js';
+import { forestAnimatables, forestDrumCircles, forestDrumMusic } from './forests.js';
 import { lakeAnimatables } from './lakes.js';
 import { updateCampsiteProps } from './models/campsite.js';
 import { updateLeafDrumCircle } from './models/leafDrumCircle.js';
@@ -319,6 +319,21 @@ function tickBody(dt) {
       if (entry.figures && entry.figures.length > 0) {
         updateTribalFigures(nowS, nightness, entry.figures);
       }
+    }
+    // Forest drum-circle audio lowpass — woods absorb the highs as the
+    // player drives away from the fire. Inside body = 14kHz (wide open).
+    // Past the perimeter, cutoff ramps down to ~2.5kHz over the next 250m.
+    for (let i = 0; i < forestDrumMusic.length; i++) {
+      const entry = forestDrumMusic[i];
+      if (!entry.handle?.setLowpassCutoff) continue;
+      const dx = zerble.position.x - entry.centerX;
+      const dz = zerble.position.z - entry.centerZ;
+      const dist = Math.hypot(dx, dz);
+      // outsideness in [0, 1] over 250m past the body perimeter.
+      const r = entry.bodyRadius || 100;
+      const outsideness = Math.max(0, Math.min(1, (dist - r) / 250));
+      const cutoff = 14000 * (1 - outsideness) + 2500 * outsideness;
+      entry.handle.setLowpassCutoff(cutoff);
     }
 
     // Procedural world expands around Zerble.

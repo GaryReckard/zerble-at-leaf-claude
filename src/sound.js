@@ -125,6 +125,15 @@ export const Sound = {
             this._pendingX = nx; this._pendingY = ny; this._pendingZ = nz;
           }
         },
+        // Forward lowpass cutoff to the real handle once adoption finishes.
+        // Pre-adoption calls are silently dropped — the engine sets its own
+        // initial cutoff at construction time, so the first call lands within
+        // a frame or two of the audio coming up anyway.
+        setLowpassCutoff(freq) {
+          if (this._real && this._real.setLowpassCutoff) {
+            this._real.setLowpassCutoff(freq);
+          }
+        },
         stop() {
           if (this._real) this._real.stop();
           else this.cancelled = true;
@@ -672,6 +681,11 @@ function createStageMusic(ctx, dest, x, y, z, seed, style = 'jam') {
       panner.setPosition(nx, ny, nz);
     }
   };
+  // setLowpassCutoff is only defined on the forest-drum engine — leave a
+  // no-op shim on other styles so callers can call it uniformly.
+  if (typeof handle.setLowpassCutoff !== 'function') {
+    handle.setLowpassCutoff = () => {};
+  }
   return handle;
 }
 
@@ -1112,6 +1126,21 @@ function forestDrumStage(ctx, panner, seed) {
   const measureDur = beat * 4;                   // 4 beats per measure
   const tickDur = measureDur / 12;
 
+  // Lowpass filter — sits between every voice and the spatial panner so the
+  // engine can muffle the highs when the player is outside the forest body.
+  // Cutoff starts wide open; main.js drives it down via setLowpassCutoff as
+  // the player drives away from the fire (reviewer's "woods absorb the
+  // sound" idea). Q stays low so we don't ring on the resonance.
+  const lowpass = ctx.createBiquadFilter();
+  lowpass.type = 'lowpass';
+  lowpass.frequency.value = 14000;
+  lowpass.Q.value = 0.5;
+  lowpass.connect(panner);
+  // All internal voice connections point here so they're filtered before
+  // reaching the panner. Trigger functions still reference `panner` for
+  // their parameter names (kept to minimise diff churn) but pass `dest`.
+  const dest = lowpass;
+
   // Euclidean rhythm: distribute `hits` evenly across `steps` ticks. Returns
   // a length-`steps` boolean array. Optional `shift` rotates the pattern.
   function E(hits, steps, shift = 0) {
@@ -1152,7 +1181,7 @@ function forestDrumStage(ctx, panner, seed) {
     osc.frequency.value = freq;
     const gain = ctx.createGain();
     gain.gain.value = 0;
-    osc.connect(gain).connect(panner);
+    osc.connect(gain).connect(dest);
     osc.start();
     persistent[name] = { osc, gain };
     return persistent[name];
@@ -1193,7 +1222,7 @@ function forestDrumStage(ctx, panner, seed) {
     gain.gain.setValueAtTime(0.0001, t);
     gain.gain.exponentialRampToValueAtTime(vel, t + 0.003);
     gain.gain.exponentialRampToValueAtTime(0.0001, t + dur);
-    src.connect(filter).connect(gain).connect(panner);
+    src.connect(filter).connect(gain).connect(dest);
     src.start(t);
     src.stop(t + dur + 0.02);
   }
@@ -1205,7 +1234,7 @@ function forestDrumStage(ctx, panner, seed) {
     gain.gain.setValueAtTime(0.0001, t);
     gain.gain.exponentialRampToValueAtTime(vel * 0.45, t + 0.002);
     gain.gain.exponentialRampToValueAtTime(0.0001, t + dur);
-    osc.connect(gain).connect(panner);
+    osc.connect(gain).connect(dest);
     osc.start(t);
     osc.stop(t + dur + 0.02);
   }
@@ -1284,12 +1313,19 @@ function forestDrumStage(ctx, panner, seed) {
 
   return {
     panner,
+    // Move the lowpass cutoff exponentially to the target so changes never
+    // pop. `freq` should be in Hz; we expect a range of ~2500..14000.
+    setLowpassCutoff(freq) {
+      const clamped = Math.max(120, Math.min(20000, freq));
+      lowpass.frequency.setTargetAtTime(clamped, ctx.currentTime, 0.20);
+    },
     stop() {
       clearInterval(intervalId);
       clearInterval(crackleId);
       for (const key in persistent) {
         try { persistent[key].osc.stop(); } catch (e) {}
       }
+      try { lowpass.disconnect(); } catch (e) {}
       try { panner.disconnect(); } catch (e) {}
     },
   };

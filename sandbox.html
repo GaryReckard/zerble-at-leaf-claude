@@ -151,10 +151,34 @@
     <div class="controls">
       <kbd>1</kbd>–<kbd>6</kbd> snap to angles · <kbd>R</kbd> reset · <kbd>L</kbd> toggle ground
     </div>
+
+    <!-- Audio panel — mirrors the in-game ` debug menu volume sliders so a
+         sandbox-only tester can balance mix without bouncing back to the game.
+         Sound.init() runs on the first interaction with the page. -->
+    <div class="audio-panel" style="margin-top:8px;border-top:1px solid #2a4a5a;padding-top:6px">
+      <div style="opacity:0.7;margin-bottom:4px">Audio</div>
+      <div style="display:flex;align-items:center;gap:6px;margin-bottom:3px">
+        <span style="flex:0 0 48px;opacity:0.8">Master</span>
+        <input id="vol-master" type="range" min="0" max="1.5" step="0.01" value="0.55" style="flex:1;accent-color:#ffe066;cursor:pointer">
+        <span id="vol-master-r" style="width:36px;text-align:right">0.55</span>
+      </div>
+      <div style="display:flex;align-items:center;gap:6px;margin-bottom:3px">
+        <span style="flex:0 0 48px;opacity:0.8">Music</span>
+        <input id="vol-music" type="range" min="0" max="3" step="0.01" value="1.6" style="flex:1;accent-color:#ffe066;cursor:pointer">
+        <span id="vol-music-r" style="width:36px;text-align:right">1.60</span>
+      </div>
+      <div style="display:flex;align-items:center;gap:6px;margin-bottom:3px">
+        <span style="flex:0 0 48px;opacity:0.8">SFX</span>
+        <input id="vol-sfx" type="range" min="0" max="2" step="0.01" value="1.0" style="flex:1;accent-color:#ffe066;cursor:pointer">
+        <span id="vol-sfx-r" style="width:36px;text-align:right">1.00</span>
+      </div>
+      <button id="hit-it-btn" style="margin-top:4px;width:100%;display:none;background:rgba(255,100,100,0.20);color:#fdd;border:1px solid rgba(255,100,100,0.45);border-radius:3px;padding:4px;cursor:pointer;font:inherit">Hit it</button>
+    </div>
   </div>
 
   <script type="module">
     import * as THREE from 'three';
+    import { Sound } from './src/sound.js';
     import { installDebug } from './src/debug.js';
     import { TimeOfDay } from './src/timeOfDay.js';
     import { Zerble } from './src/zerble.js';
@@ -324,10 +348,29 @@ import { mulberry32 } from './src/rng.js';
     let currentEntity = null;
     let entityRoot = null;
     let updateFn = null;
+    // Track the current entity's music handle (if any) so we can stop + free
+    // it when switching entities. Sandbox attaches the appropriate style
+    // ('jam', 'brass', 'drum', 'forest_drum') per entity in loadEntity.
+    let entityMusic = null;
     const select = document.getElementById('entity');
     const info = document.getElementById('info');
     // Expose for debugging / verification.
     window.__sandbox = { scene, camera, get currentEntity() { return currentEntity; } };
+
+    // Sound needs a user gesture to construct its AudioContext. Hook the
+    // first interactive event on the sandbox so subsequent entity loads can
+    // play music + SFX. Idempotent — only initialises once.
+    let soundInitialised = false;
+    function ensureSoundInit() {
+      if (soundInitialised) return;
+      soundInitialised = true;
+      Sound.init();
+      // Sync the volume readouts now that the gain nodes actually exist.
+      updateVolumeReadouts();
+    }
+    for (const ev of ['pointerdown', 'keydown']) {
+      window.addEventListener(ev, ensureSoundInit, { once: true });
+    }
 
     function clearEntity() {
       // Aggressive cleanup — remove every non-light, non-ground object so
@@ -345,10 +388,58 @@ import { mulberry32 } from './src/rng.js';
           }
         });
       }
+      // Stop the previous entity's spatial music. detachStageMusic tears
+      // down the oscillators + intervals + panner connections.
+      if (entityMusic) {
+        try { Sound.detachStageMusic(entityMusic); } catch (e) {}
+        entityMusic = null;
+      }
       currentEntity = null;
       entityRoot = null;
       updateFn = null;
     }
+
+    // Map of entity name → audio style. Entities not in this map get no music.
+    // Stages get their corresponding band style; drum-circle variants get
+    // 'drum' or the rich 'forest_drum' engine; everything else stays silent.
+    const ENTITY_MUSIC_STYLE = {
+      stage_main:                'jam',
+      stage_side:                'brass',
+      tent_stage:                'jam',
+      drum_circle_populated:     'forest_drum',
+      leaf_drum_circle:          'forest_drum',
+      leaf_drum_circle_day:      'forest_drum',
+      leaf_drum_circle_night:    'forest_drum',
+    };
+    function attachEntityMusic(name) {
+      const style = ENTITY_MUSIC_STYLE[name];
+      if (!style || !soundInitialised) return;
+      // Seed varies by name so two sandbox loads of the same entity sound
+      // identical, but different entities sound different.
+      let seed = 0;
+      for (let i = 0; i < name.length; i++) seed = (seed * 31 + name.charCodeAt(i)) | 0;
+      entityMusic = Sound.attachStageMusic(0, 1.5, 0, seed, style);
+    }
+
+    // Per-entity collision kind for the "Hit it" SFX button. Empty / missing
+    // means no button rendered.
+    const ENTITY_HIT_KIND = {
+      puppet: 'puppet', puppet_lineup: 'puppet',
+      tent: 'tent',
+      food_truck: 'truck',
+      kid: 'kid',
+      wook: 'wook',
+      stage_main: 'stage', stage_side: 'stage', tent_stage: 'stage',
+      entrance_arch: 'arch',
+      canoe: 'lake_edge',
+      band_member_trumpet: 'brass', band_member_tuba: 'brass',
+      band_member_sax: 'brass', band_member_drum: 'brass',
+      band_member_trombone: 'brass', brass_band: 'brass',
+      camp_tent: 'tent',
+      chiminea: 'firepit',
+      forest_tree_pine: 'forest_tree', forest_tree_oak: 'forest_tree',
+      forest_tree_birch: 'forest_tree', forest_tree_random: 'forest_tree',
+    };
 
     function loadEntity(name) {
       clearEntity();
@@ -963,7 +1054,45 @@ import { mulberry32 } from './src/rng.js';
           break;
         }
       }
+      attachEntityMusic(name);
+      updateHitButton(name);
       info.textContent = `Loaded: ${name}`;
+    }
+
+    // ---- Audio panel: volume sliders + "Hit it" SFX button ----
+    const volSliders = {
+      master: { input: document.getElementById('vol-master'), readout: document.getElementById('vol-master-r'), set: 'setMasterVolume', get: 'getMasterVolume' },
+      music:  { input: document.getElementById('vol-music'),  readout: document.getElementById('vol-music-r'),  set: 'setMusicVolume',  get: 'getMusicVolume'  },
+      sfx:    { input: document.getElementById('vol-sfx'),    readout: document.getElementById('vol-sfx-r'),    set: 'setSfxVolume',    get: 'getSfxVolume'    },
+    };
+    for (const [key, s] of Object.entries(volSliders)) {
+      s.input.addEventListener('input', () => {
+        const v = parseFloat(s.input.value);
+        s.readout.textContent = v.toFixed(2);
+        if (soundInitialised) Sound[s.set](v);
+      });
+    }
+    function updateVolumeReadouts() {
+      for (const s of Object.values(volSliders)) {
+        const v = Sound[s.get]();
+        s.input.value = v;
+        s.readout.textContent = v.toFixed(2);
+      }
+    }
+
+    // "Hit it" button — fires the entity's collision SFX. Visibility toggled
+    // per-entity via ENTITY_HIT_KIND lookup.
+    const hitBtn = document.getElementById('hit-it-btn');
+    let currentHitKind = null;
+    hitBtn.addEventListener('click', () => {
+      if (!currentHitKind) return;
+      ensureSoundInit();
+      Sound.playCollision(currentHitKind);
+    });
+    function updateHitButton(name) {
+      currentHitKind = ENTITY_HIT_KIND[name] || null;
+      hitBtn.style.display = currentHitKind ? 'block' : 'none';
+      if (currentHitKind) hitBtn.textContent = `Hit it (${currentHitKind})`;
     }
 
     // URL param + selector wiring

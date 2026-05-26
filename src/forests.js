@@ -428,19 +428,29 @@ function buildForestInteriorContent(ctx, forest) {
 // orbiting the fire, and a static firekeeper + spotter pair. All figures
 // are parented to the drum-circle group at LOCAL (0,0,0) since dc.group
 // is already positioned at the fire's world coords.
+//
+// Each figure gets a `wakeThreshold` (0..1 nightness) — they're hidden
+// below it, scale in across a narrow band above it. Staggering the
+// thresholds across the cast gives the "people drift in as evening comes
+// on" feel Gary asked for: a few core drummers + the firekeeper hold the
+// circle during the day, everyone else materialises as dusk advances.
 function populateDrumCircle(rng, dc, forest, facingAngle) {
   const figures = [];
-  // Bench ring centerline = facingAngle + π (opposite the path entry), so
-  // drummers fill the half-circle BEHIND the fire (from the player's POV
-  // as they walk in along the path). The bench arcs themselves were built
-  // in leafDrumCircle.js at the same angle.
   const benchCentre = facingAngle + Math.PI;
   const benchRadii = [5.5, 6.5, 7.5];
+  const drummerCounts = [4, 5, 6];
+
+  // 15 drummer thresholds in order of appearance — three day-time core
+  // who're always there, then a staircase across the dusk band.
+  const drummerThresholds = [
+    0.00, 0.00, 0.00,                       // 3 core day drummers
+    0.18, 0.28, 0.38, 0.46,                 // late afternoon arrivals
+    0.52, 0.58, 0.62, 0.68,                 // dusk
+    0.72, 0.76, 0.80, 0.85,                 // night
+  ];
+  let dIdx = 0;
 
   // ---- Drummers on each bench ring ----
-  // Distribute drummers along the arcs. Approx 5/6/7 across the rings so
-  // we get a slightly fuller back row.
-  const drummerCounts = [4, 5, 6];
   for (let ring = 0; ring < benchRadii.length; ring++) {
     const r = benchRadii[ring];
     const count = drummerCounts[ring];
@@ -449,52 +459,43 @@ function populateDrumCircle(rng, dc, forest, facingAngle) {
       const a = benchCentre - Math.PI / 2 + t * Math.PI;
       const drummer = buildHandDrummer(rng);
       drummer.group.position.set(Math.cos(a) * r, 0, Math.sin(a) * r);
-      // Face the fire. Tortured history on this one: the figure's local
-      // forward really IS -Z (eyes at z=-0.18), and the math-correct
-      // formula for facing the origin from (cos a, sin a)*r is π/2 - a.
-      // I bounced through `-a` at one point because the old ambiguous
-      // ponytail made the figures' facing visually unclear; with the new
-      // clearly-defined ponytail behind the body, the math is back to
-      // being trustworthy.
       drummer.group.rotation.y = Math.PI / 2 - a;
+      drummer.wakeThreshold = drummerThresholds[dIdx % drummerThresholds.length];
+      dIdx++;
       dc.group.add(drummer.group);
       figures.push(drummer);
     }
   }
 
   // ---- Dancers orbiting the fire ----
-  // 6-8 dancers on the inner ring at ~3.5m. updateDancer animates orbits
-  // in world space relative to fireCenter, so initial position doesn't
-  // really matter — we just stamp them at the fire and the animator
-  // re-positions on the first frame.
-  const dancerCount = 6 + Math.floor(rng() * 3);
-  for (let i = 0; i < dancerCount; i++) {
+  // 2 "early" dancers loitering near the fire all day, plus 5 night dancers.
+  // The early dancers still orbit by default (no special "loitering" pose)
+  // but they're there during day so the circle isn't dead empty.
+  const dancerThresholds = [0.25, 0.38, 0.55, 0.62, 0.70, 0.78, 0.85];
+  for (let i = 0; i < dancerThresholds.length; i++) {
     const dancer = buildFireDancer(rng);
-    // Stagger orbit phase so dancers spread out from frame 0.
-    dancer.phase = (i / dancerCount) * Math.PI * 2;
+    dancer.phase = (i / dancerThresholds.length) * Math.PI * 2;
+    dancer.wakeThreshold = dancerThresholds[i];
     dc.group.add(dancer.group);
     figures.push(dancer);
   }
 
-  // ---- Firekeeper + spotter pair ----
-  // Both stand on the entrance side (between fire and player as they
-  // arrive) so the player sees them framing the firepit. Statically
-  // placed — no follow logic per the reviewer's pushback.
-  const fkA = facingAngle;          // entrance side
-  const fkDist = 4.2;               // a bit outside the firepit edge
+  // ---- Firekeeper + spotter (always present) ----
+  const fkA = facingAngle;
+  const fkDist = 4.2;
   const fk = buildFirekeeper(rng);
   fk.group.position.set(Math.cos(fkA) * fkDist, 0, Math.sin(fkA) * fkDist);
-  // Face the fire — same convention as drummers (π/2 - angle).
   fk.group.rotation.y = Math.PI / 2 - fkA;
+  fk.wakeThreshold = 0;
   dc.group.add(fk.group);
   figures.push(fk);
 
   const spotter = buildSpotter(rng);
-  // Spotter stands 1.4m behind the firekeeper at a 30° offset (Gary's spec).
   const spotterA = facingAngle + 0.50;
   const spotterDist = fkDist + 1.2;
   spotter.group.position.set(Math.cos(spotterA) * spotterDist, 0, Math.sin(spotterA) * spotterDist);
   spotter.group.rotation.y = Math.PI / 2 - spotterA;
+  spotter.wakeThreshold = 0;
   dc.group.add(spotter.group);
   figures.push(spotter);
 
@@ -574,9 +575,19 @@ function buildForestDrumCirclePlaceholder(ctx, forest) {
 
   // Spatial drum music — the Phase 4 Euclidean engine. Anchored at the fire
   // so the PannerNode attenuates audio with distance. Seed mixed with the
-  // forest seed so two forests play different grooves.
+  // forest seed so two forests play different grooves. We track centerX/Z
+  // + bodyRadius on the entry so main.js can drive the lowpass cutoff from
+  // the player's distance to the fire each frame.
   const musicHandle = Sound.attachStageMusic(x, 1.4, z, forest.seed * 9173 + 31, 'forest_drum');
-  if (musicHandle) forestDrumMusic.push({ handle: musicHandle, chunkKey: ctx.key });
+  if (musicHandle) {
+    forestDrumMusic.push({
+      handle: musicHandle,
+      chunkKey: ctx.key,
+      centerX: x,
+      centerZ: z,
+      bodyRadius: forest.bodyRadius,
+    });
+  }
 
   // Firepit collider — Zerble can't drive into the hot stone wall.
   registry.add({

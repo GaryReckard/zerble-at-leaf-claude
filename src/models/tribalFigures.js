@@ -263,6 +263,9 @@ function buildTribalFigure(rng = Math.random, opts = {}) {
   if (scale !== 1) {
     g.scale.multiplyScalar(scale);
   }
+  // Snapshot the final build-time scale so the day/night arrive-in fade can
+  // multiply against it without losing the drummer-seated 0.75 Y-squash.
+  const baseScale = { x: g.scale.x, y: g.scale.y, z: g.scale.z };
 
   // ----- Per-figure animation interface -----
   // The central updater pokes these refs each frame. Closures over local
@@ -276,6 +279,10 @@ function buildTribalFigure(rng = Math.random, opts = {}) {
     armRefs,
     hairGroup,
     torso,
+    baseScale,
+    // wakeThreshold is set by populateDrumCircle after build — defaults to
+    // 0 (always present) if the caller doesn't override.
+    wakeThreshold: 0,
   };
 }
 
@@ -346,6 +353,38 @@ export function buildSpotter(rng = Math.random) {
 export function updateTribalFigures(t, nightness, figures) {
   for (let i = 0; i < figures.length; i++) {
     const f = figures[i];
+    // Day/night migration: every figure has a wakeThreshold (0..1). Below
+    // it, the figure is invisible — they haven't shown up yet. Across a
+    // narrow band above the threshold, the figure scales in (rises out of
+    // the ground in real-feeling time as the dusk advances). Above the
+    // band, full-size + full animation.
+    //
+    // Threshold staggering across the cast gives a "natural arrival" feel:
+    // a few core drummers + the firekeeper + a stray dancer hold the
+    // circle during the day, the rest of the cast fades in as night falls.
+    // wakeThreshold is "fully arrived BY this nightness". The figure fades
+    // in across the 0.05 band ending at wakeThreshold, so:
+    //   nightness ≤ wake-0.05 → invisible
+    //   nightness  = wake      → fully visible
+    //   nightness ≥ wake       → fully visible (stays)
+    // Figures with wakeThreshold=0 are always at reveal=1 even at noon.
+    const wake = f.wakeThreshold || 0;
+    const reveal = smoothstep01((nightness - wake + 0.05) / 0.05);
+    if (reveal <= 0.02) {
+      f.group.visible = false;
+      continue;
+    }
+    f.group.visible = true;
+    if (f.baseScale) {
+      f.group.scale.set(
+        f.baseScale.x * reveal,
+        f.baseScale.y * reveal,
+        f.baseScale.z * reveal,
+      );
+    }
+    // Once revealed, run the figure's normal animation. Hands at half-mast
+    // (low reveal) wouldn't drum or dance, but that's hidden by the small
+    // scale anyway — we keep the per-figure logic simple.
     switch (f.kind) {
       case 'dance': updateDancer(t, f); break;
       case 'drum_seated': updateDrummer(t, f); break;
@@ -353,6 +392,11 @@ export function updateTribalFigures(t, nightness, figures) {
       case 'spotter': updateSpotter(t, f); break;
     }
   }
+}
+
+function smoothstep01(x) {
+  const t = Math.max(0, Math.min(1, x));
+  return t * t * (3 - 2 * t);
 }
 
 function updateDancer(t, f) {

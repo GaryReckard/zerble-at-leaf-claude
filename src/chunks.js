@@ -374,15 +374,19 @@ function pickTheme(cx, cz) {
   return 'open_lawn';
 }
 
+// Density tuning — forests with 15+ campsites inside felt busier than
+// the open festival around them. Bumped ambient crowd counts across
+// most themes so the festival reads as a real festival, not an empty
+// fairgrounds.
 const THEME_PROPS = {
-  main_stage:  { treeDensity: 0.15, ambientCrowd: 30 },
-  side_stage:  { treeDensity: 0.25, ambientCrowd: 16 },
-  tent_stage:  { treeDensity: 0.10, ambientCrowd: 22 },   // dense crowd inside
-  food_plaza:  { treeDensity: 0.2,  ambientCrowd: 14 },
-  vendor_row:  { treeDensity: 0.3,  ambientCrowd: 13 },
-  drum_circle: { treeDensity: 0.4,  ambientCrowd: 12 },
-  grove:       { treeDensity: 1.0,  ambientCrowd: 7 },
-  open_lawn:   { treeDensity: 0.2,  ambientCrowd: 8 },
+  main_stage:  { treeDensity: 0.15, ambientCrowd: 42 },
+  side_stage:  { treeDensity: 0.25, ambientCrowd: 24 },
+  tent_stage:  { treeDensity: 0.10, ambientCrowd: 30 },   // dense crowd inside
+  food_plaza:  { treeDensity: 0.2,  ambientCrowd: 22 },
+  vendor_row:  { treeDensity: 0.3,  ambientCrowd: 20 },
+  drum_circle: { treeDensity: 0.4,  ambientCrowd: 18 },
+  grove:       { treeDensity: 1.0,  ambientCrowd: 11 },
+  open_lawn:   { treeDensity: 0.2,  ambientCrowd: 14 },
 };
 
 const THEME_BUILDERS = {
@@ -699,10 +703,10 @@ function buildTentStageTheme(ctx) {
 }
 
 function buildFoodPlaza(ctx) {
-  // 3-5 food trucks arranged around a central area. Trucks are scaled up
-  // visually (FOOD_TRUCK_SCALE) — push the ring outward + scale colliders to
-  // match so we don't end up parked-on-truck-roof.
-  const count = 3 + Math.floor(ctx.rng() * 3);
+  // 5-7 food trucks arranged around a central area (was 3-5). Trucks are
+  // scaled up visually (FOOD_TRUCK_SCALE) — push the ring outward + scale
+  // colliders to match so we don't end up parked-on-truck-roof.
+  const count = 5 + Math.floor(ctx.rng() * 3);
   const centerX = ctx.cxWorld;
   const centerZ = ctx.czWorld;
   const ring = 14 * FOOD_TRUCK_SCALE;
@@ -730,8 +734,9 @@ function buildVendorRow(ctx) {
   // Two parallel rows of tents along one axis. Tent canopies are ~3.2m
   // radius; tight spacing (~5m) keeps adjacent canopies nearly touching so
   // the row reads as a real market stall lineup, not isolated tents.
+  // Bumped from 5-7 to 7-9 per side to keep pace with forest density.
   const axisH = ctx.rng() < 0.5;
-  const count = 5 + Math.floor(ctx.rng() * 3);
+  const count = 7 + Math.floor(ctx.rng() * 3);
   const spacing = 5.0;
   const rowOffset = 7;
   for (let i = 0; i < count; i++) {
@@ -814,8 +819,8 @@ function buildDrumCircle(ctx) {
 }
 
 function buildGrove(ctx) {
-  // Already covered by tree scattering — add a hammock or two
-  const count = 1 + Math.floor(ctx.rng() * 2);
+  // Already covered by tree scattering — add a few hammocks (was 1-2, now 2-4)
+  const count = 2 + Math.floor(ctx.rng() * 3);
   for (let i = 0; i < count; i++) {
     const x = ctx.cxWorld + (ctx.rng() - 0.5) * (CHUNK_SIZE * 0.6);
     const z = ctx.czWorld + (ctx.rng() - 0.5) * (CHUNK_SIZE * 0.6);
@@ -828,8 +833,9 @@ function buildGrove(ctx) {
 }
 
 function buildOpenLawn(ctx) {
-  // Picnic blankets
-  const count = 1 + Math.floor(ctx.rng() * 3);
+  // Picnic blankets — was 1-3, now 3-6 so open lawns read as bustling
+  // festival commons instead of empty grass fields.
+  const count = 3 + Math.floor(ctx.rng() * 4);
   for (let i = 0; i < count; i++) {
     const x = ctx.cxWorld + (ctx.rng() - 0.5) * (CHUNK_SIZE * 0.7);
     const z = ctx.czWorld + (ctx.rng() - 0.5) * (CHUNK_SIZE * 0.7);

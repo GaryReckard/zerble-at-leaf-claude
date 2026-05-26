@@ -126,24 +126,10 @@ function buildTribalFigure(rng = Math.random, opts = {}) {
   torso.castShadow = true;
   g.add(torso);
 
-  // ----- Optional strap / skinny top -----
-  // Even when torsoColor == skinHex (the "bare" variant), we add a thin
-  // horizontal band where a bandeau / wrap would be — subtle enough to read
-  // as a sliver of cloth without becoming a shirt.
-  if (!isBlackClad && strapHex !== null) {
-    // The torso already IS the strap colour, so the strap is implicit. Skip.
-  } else if (!isBlackClad) {
-    // Bare top — add a thin band high on the torso for a wrapped-fabric
-    // hint without explicitly clothing the figure.
-    const band = new THREE.Mesh(
-      new THREE.CylinderGeometry(0.24, 0.24, 0.10, 6),
-      new THREE.MeshStandardMaterial({
-        color: wrapHex, roughness: 0.95, flatShading: true,
-      }),
-    );
-    band.position.y = 1.18;
-    g.add(band);
-  }
+  // (Used to add a thin "wrap" band at chest height for bare-top figures —
+  // Gary called it out as a "dark polygon" reading wrong. Bare-top now means
+  // bare-top with no fabric hint, fits the hot-fire vibe per his earlier note
+  // that people aren't dressing heavy.)
 
   // ----- Arms — two-segment with elbow pivot, posed per role -----
   const armRefs = [];
@@ -398,13 +384,26 @@ function updateDancer(t, f) {
   const sway = Math.sin(t * 2.5 + f.phase) * 0.10;
   f.group.rotation.z = sway;
 
-  // Arms above head, swaying together. Base pose is set at build time
-  // (shoulder.rotation.z = sx * 2.2). Animation adds a unified L/R tilt
-  // that follows the body sway — both arms drift the same direction so it
-  // reads as one continuous gesture, not flapping.
-  for (const arm of f.armRefs) {
-    arm.shoulder.rotation.z = arm.side * 2.2 + sway * 0.3;
-    arm.shoulder.rotation.x = 0.15 + sway * 0.10;
+  // Arms swaying dynamically — each arm has its own multi-axis sine
+  // wave so they don't move in lockstep. The L/R arms get a π-offset phase
+  // so when the right arm reaches up the left is slightly behind, then they
+  // cross over. Adds some elbow bend variation too so the silhouette
+  // isn't just stick-figure-with-arms-up the whole time.
+  for (let i = 0; i < f.armRefs.length; i++) {
+    const arm = f.armRefs[i];
+    const ap = f.phase + (arm.side > 0 ? 0 : Math.PI * 0.7);
+    // Z rotation = main "raise" axis. Base position is 2.2 for outward V;
+    // sine wobble of ±0.6 rad mixes V-pose with arms-up-overhead and
+    // arms-out-to-side without going below the shoulders.
+    arm.shoulder.rotation.z = arm.side * (2.2 + Math.sin(t * 1.8 + ap) * 0.55);
+    // X rotation = forward/back. Slow sway with a faster wiggle layered on.
+    arm.shoulder.rotation.x = 0.15
+      + Math.sin(t * 1.3 + ap * 1.4) * 0.45
+      + Math.sin(t * 3.1 + ap * 0.8) * 0.15;
+    // Y rotation = "twist" the upper arm so the forearm direction rotates.
+    arm.shoulder.rotation.y = Math.sin(t * 1.1 + ap * 0.9) * 0.30;
+    // Elbow bend — occasional fold + open.
+    arm.elbow.rotation.x = 0.35 + Math.sin(t * 2.2 + ap * 1.7) * 0.50;
   }
   // Hair sway — slight rotation around X opposite the body sway.
   if (f.hairGroup) f.hairGroup.rotation.z = -sway * 0.8;

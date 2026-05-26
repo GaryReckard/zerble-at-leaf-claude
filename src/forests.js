@@ -449,10 +449,12 @@ function populateDrumCircle(rng, dc, forest, facingAngle) {
       const a = benchCentre - Math.PI / 2 + t * Math.PI;
       const drummer = buildHandDrummer(rng);
       drummer.group.position.set(Math.cos(a) * r, 0, Math.sin(a) * r);
-      // Face the fire — figure's local -Z must point at origin (0,0,0).
-      // Derivation: world-forward = (-sin(θ), 0, -cos(θ)); inward from
-      // (cos(a), sin(a)) is (-cos(a), -sin(a)); → θ = π/2 - a.
-      drummer.group.rotation.y = Math.PI / 2 - a;
+      // Face the fire. Gary's calling out that previous formula `π/2 - a`
+      // still had them rotated 90° from where they should be, so subtract
+      // another π/2 — meaning the figure's local -Z that we treat as "forward"
+      // is actually +X in figure space (probably because the simpleNPC head
+      // visual convention here differs from the puppet I copied from).
+      drummer.group.rotation.y = -a;
       dc.group.add(drummer.group);
       figures.push(drummer);
     }

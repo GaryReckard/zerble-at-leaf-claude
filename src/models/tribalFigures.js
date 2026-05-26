@@ -217,15 +217,21 @@ function buildTribalFigure(rng = Math.random, opts = {}) {
     wig.castShadow = true;
     hairGroup.add(wig);
 
-    // Long ponytail / flowing hair behind the head, anchored at the wig's
-    // lower-back. Tapered cone tilts slightly back so it hangs below the
-    // shoulder blades.
-    const ponytail = new THREE.Mesh(
-      new THREE.ConeGeometry(0.16, 0.75, 7),
-      hairMat,
-    );
-    ponytail.position.set(0, -0.36, 0.12);
-    ponytail.rotation.x = -0.25;      // tip swings back
+    // Long ponytail — earlier this used a plain cone with apex up which
+    // (1) had the wide end at the bottom (looked upside-down) and (2) was
+    // positioned at z=+0.12 which is INSIDE the torso capsule (torso radius
+    // 0.22 at z=0), so the tail clipped through the body. Fixed by:
+    //   * tapered cylinder, WIDER AT TOP narrow at bottom (real ponytail shape)
+    //   * geometry translated so the pivot is at the TOP of the tail — that
+    //     way rotating tilts the tip back without dragging the head into
+    //     the upper-arm space
+    //   * placed at z=+0.22 (just behind the torso edge) so the tail can't
+    //     intersect the body even at zero tilt
+    const ponytailGeo = new THREE.CylinderGeometry(0.14, 0.04, 0.70, 7);
+    ponytailGeo.translate(0, -0.35, 0);     // pivot moves to top of the cylinder
+    const ponytail = new THREE.Mesh(ponytailGeo, hairMat);
+    ponytail.position.set(0, -0.05, 0.22);
+    ponytail.rotation.x = -0.35;             // tip swings further back
     ponytail.castShadow = true;
     hairGroup.add(ponytail);
   } else {

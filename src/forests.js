@@ -482,7 +482,8 @@ function populateDrumCircle(rng, dc, forest, facingAngle) {
   const fkDist = 4.2;               // a bit outside the firepit edge
   const fk = buildFirekeeper(rng);
   fk.group.position.set(Math.cos(fkA) * fkDist, 0, Math.sin(fkA) * fkDist);
-  fk.group.rotation.y = -fkA + Math.PI / 2;   // face the fire
+  // Face the fire — same rotation convention as drummers.
+  fk.group.rotation.y = -fkA;
   dc.group.add(fk.group);
   figures.push(fk);
 
@@ -491,7 +492,7 @@ function populateDrumCircle(rng, dc, forest, facingAngle) {
   const spotterA = facingAngle + 0.50;
   const spotterDist = fkDist + 1.2;
   spotter.group.position.set(Math.cos(spotterA) * spotterDist, 0, Math.sin(spotterA) * spotterDist);
-  spotter.group.rotation.y = -spotterA + Math.PI / 2;
+  spotter.group.rotation.y = -spotterA;
   dc.group.add(spotter.group);
   figures.push(spotter);
 

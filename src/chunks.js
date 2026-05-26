@@ -20,7 +20,8 @@ import { hash2, mulberry32 } from './rng.js';
 import { Sound } from './sound.js';
 import { PERF } from './perf.js';
 import { chunkOverlapsLake, chunkInLake } from './lakes.js';
-import { getForestAt, buildForestChunk, chunkInForest, forestAnimatables } from './forests.js';
+import { getForestAt, buildForestChunk, chunkInForest, forestAnimatables, forestDrumCircles, forestDrumMusic } from './forests.js';
+import { buildCampsite } from './models/campsite.js';
 import { buildTent } from './models/tent.js';
 import { buildFoodTruck, FOOD_TRUCK_SCALE } from './models/foodTruck.js';
 import { buildHammock as buildHammockModel } from './models/hammock.js';
@@ -257,6 +258,17 @@ export class ChunkManager {
     // Sweep forest animatables (campsite firepit / torch flicker state).
     for (let i = forestAnimatables.length - 1; i >= 0; i--) {
       if (forestAnimatables[i].chunkKey === key) forestAnimatables.splice(i, 1);
+    }
+    // Sweep LEAF drum-circle animatables (fire mesh pulse + PointLight flicker).
+    for (let i = forestDrumCircles.length - 1; i >= 0; i--) {
+      if (forestDrumCircles[i].chunkKey === key) forestDrumCircles.splice(i, 1);
+    }
+    // Detach forest-drum spatial music and free its oscillators.
+    for (let i = forestDrumMusic.length - 1; i >= 0; i--) {
+      if (forestDrumMusic[i].chunkKey === key) {
+        Sound.detachStageMusic(forestDrumMusic[i].handle);
+        forestDrumMusic.splice(i, 1);
+      }
     }
 
     this.loaded.delete(key);
@@ -810,6 +822,9 @@ function buildGrove(ctx) {
     if (Math.abs(x - ctx.cxWorld) < 6 && Math.abs(z - ctx.czWorld) < 6) continue;
     buildHammock(ctx, x, z);
   }
+  // Sprinkle a small campsite in some groves — feels like festival-goers
+  // pitched tents under the trees.
+  scatterChunkCampsites(ctx, { chance: 0.5, max: 2 });
 }
 
 function buildOpenLawn(ctx) {
@@ -837,6 +852,56 @@ function buildOpenLawn(ctx) {
       position: new THREE.Vector3(x, 0, z),
       footprint: 0,
       attractor: { radius: 3, weight: 0.4 },
+      chunkKey: ctx.key,
+    });
+  }
+  // Open lawns are prime camping ground — most of them get a tent or two.
+  scatterChunkCampsites(ctx, { chance: 0.65, max: 2 });
+}
+
+// ---------- Festival-ground campsite scatter ----------
+//
+// Sprinkles 0-N small campsites across the chunk. Called from open_lawn /
+// grove theme builders so the festival has tents pitched here and there in
+// the open areas, not just inside forests.
+//
+// Skips positions near the chunk-grid path (so cars can still drive through)
+// and near any registered building/stage/lake. Animatables (firepit + torch
+// flicker) reuse the forestAnimatables list — naming aside, it's a generic
+// "chunk-bound campsite animatables" sink.
+function scatterChunkCampsites(ctx, { chance = 0.5, max = 2 } = {}) {
+  if (ctx.rng() > chance) return;
+  const count = 1 + Math.floor(ctx.rng() * max);
+  for (let i = 0; i < count; i++) {
+    // Stay off the path strip — paths run along chunk-grid midlines, so any
+    // position within ±4m of either axis is on a path.
+    let chosen = null;
+    for (let attempt = 0; attempt < 10; attempt++) {
+      const x = ctx.cxWorld + (ctx.rng() - 0.5) * (CHUNK_SIZE * 0.7);
+      const z = ctx.czWorld + (ctx.rng() - 0.5) * (CHUNK_SIZE * 0.7);
+      if (Math.abs(x - ctx.cxWorld) < 6 || Math.abs(z - ctx.czWorld) < 6) continue;
+      // Bail if any registered building is within 4m — keeps tents from
+      // jamming into stages, food trucks, etc.
+      if (registry.closestBuilding(new THREE.Vector3(x, 0, z), 4)) continue;
+      chosen = { x, z };
+      break;
+    }
+    if (!chosen) continue;
+
+    const camp = buildCampsite(ctx.rng, 'small');
+    camp.group.position.set(chosen.x, 0, chosen.z);
+    camp.group.rotation.y = ctx.rng() * Math.PI * 2;
+    ctx.group.add(camp.group);
+
+    if (camp.animatables && camp.animatables.length > 0) {
+      forestAnimatables.push({ chunkKey: ctx.key, animatables: camp.animatables });
+    }
+
+    registry.add({
+      kind: 'campsite',
+      position: new THREE.Vector3(chosen.x, 0, chosen.z),
+      footprint: camp.footprint,
+      attractor: { radius: 4, weight: 0.5 },
       chunkKey: ctx.key,
     });
   }

@@ -22,6 +22,12 @@ import { hash2, mulberry32 } from './rng.js';
 import { CHUNK_SIZE, buildCurvedPath } from './chunks.js';
 import { buildForestTree } from './models/tree.js';
 import { buildCampsite } from './models/campsite.js';
+import { buildLeafDrumCircle } from './models/leafDrumCircle.js';
+import {
+  buildFireDancer, buildHandDrummer, buildFirekeeper, buildSpotter,
+} from './models/tribalFigures.js';
+import { buildTikiTorch, updateCampsiteProps } from './models/campsite.js';
+import { Sound } from './sound.js';
 // `chunkInLake` is misleadingly named — it's a generic point-in-lake test
 // that takes any world (x, z). We reuse it for both "is this chunk center
 // in a lake" and "is this arbitrary perimeter point in a lake".
@@ -32,6 +38,17 @@ import { chunkInLake } from './lakes.js';
 // chunks.js _unload sweeps this list by chunkKey alongside its other
 // per-chunk teardown.
 export const forestAnimatables = [];
+
+// Per-frame animatable LEAF drum circles — fire mesh pulse + PointLight
+// flicker tied to nightness. Same chunkKey-tagged shape as forestAnimatables
+// but holds the drum-circle object (fireMesh, light, etc.) for the LEAF
+// updater rather than the campsite shape.
+export const forestDrumCircles = [];
+
+// Spatial music handles for forest drum circles — one per drum-circle forest,
+// running the rich Euclidean engine. Tracked here so chunks.js can detach the
+// audio when the owning chunk unloads.
+export const forestDrumMusic = [];
 
 const FOREST_BLOCK = 5;                 // every 5x5 chunks can host one forest center
 const FOREST_PROBABILITY = 1.0;          // ~1 forest per 5x5 block — dialable
@@ -167,9 +184,11 @@ export function getForestAt(cx, cz) {
 // area, not by radius (otherwise everything bunches near the center).
 function computeInteriorCampsitePositions(forest) {
   const rng = mulberry32(forest.seed * 199 + 41);
-  // Density target: ~5-9 sites inside a 100m-radius body. Smaller body, fewer
-  // sites (otherwise they overlap).
-  const target = 4 + Math.floor(rng() * 6);  // 4-9 sites
+  // Density target: ~8-19 sites inside a 100m-radius body. Roughly 2x the
+  // earlier 4-9 — Gary wants the forest littered with camping. Spacing
+  // constraints below will reject the runt; expect ~12-16 actually placed
+  // on a typical 100m body.
+  const target = 8 + Math.floor(rng() * 12);  // 8-19 attempts
   const drumBuffer = forest.interiorContent === 'drum_circle' ? 30 : 0;
   const centerBuffer = forest.interiorContent === 'campsite' ? 14 : 0;
   const minSpacing = 14;
@@ -261,13 +280,13 @@ export function chunkInForest(cxWorld, czWorld) {
 
 // Top-level entry: build this chunk's slice of the forest content.
 export function buildForestChunk(ctx, forest) {
-  // Edge colliders — only the perimeter ring, distributed across whichever
-  // chunks own each arc segment.
-  placeForestEdgeColliders(ctx, forest);
-
   // Trees — dense inside body radius, tapering to a sparse fringe outside.
-  // Placed deterministically from the forest seed + chunk offset so that
-  // chunk reload doesn't shuffle them.
+  // The tree colliders ARE the forest's wall — every forest tree registers
+  // its own hard collider (radius 0.9, damage 3) and with 4m min spacing
+  // there's no gap wide enough for the cart to squeeze through. We used to
+  // also place a `forest_edge` collider ring at the exact body radius, but
+  // it doubled up the tree wall AND constantly fired the "The woods are
+  // thick!" toast at players brushing the edge — removed.
   scatterForestTrees(ctx, forest);
 
   // The forest itself registers a footprint (for "is point in forest"
@@ -336,6 +355,51 @@ function buildForestPath(ctx, forest) {
     _forestPathMat,
   );
   ctx.group.add(mesh);
+
+  // Tiki-torch lanterns along the path, so the entrance is findable from
+  // outside the forest at night (the torch flames are emissive + bloom-lit).
+  placePathLanterns(ctx, forest, startX, startZ, rng);
+}
+
+// Place 5-7 tiki torches alternating left/right along the entrance path.
+// Each torch is an animatable prop (flame opacity + ember pulse) reusing
+// the campsite animator — we push them onto the existing forestAnimatables
+// list so main.js's ticker handles them with no new wiring.
+function placePathLanterns(ctx, forest, startX, startZ, rng) {
+  const endX = forest.centerX;
+  const endZ = forest.centerZ;
+  const dx = endX - startX;
+  const dz = endZ - startZ;
+  // Along + perpendicular axes (unit-length) for offsetting torches off
+  // the path centreline.
+  const len = Math.hypot(dx, dz);
+  const ax = dx / len, az = dz / len;
+  const perpX = -az, perpZ = ax;
+  const torchCount = 6;
+  const torchAnimatables = [];
+  for (let i = 0; i < torchCount; i++) {
+    // Place at i/(N-1) along the path, alternating sides, with a small
+    // jitter so they don't look surveyor-perfect.
+    const t = (i + 0.5) / torchCount;
+    const sideSign = (i % 2 === 0) ? 1 : -1;
+    const offDist = (PATH_WIDTH / 2) + 1.2 + rng() * 0.6;
+    const baseX = startX + ax * len * t;
+    const baseZ = startZ + az * len * t;
+    const tx = baseX + perpX * offDist * sideSign;
+    const tz = baseZ + perpZ * offDist * sideSign;
+    const torch = buildTikiTorch(rng);
+    torch.group.position.set(tx, 0, tz);
+    ctx.group.add(torch.group);
+    torchAnimatables.push(torch);
+  }
+  // Batch all torches for this path into one animatables entry so main.js
+  // ticks them in one call per forest.
+  if (torchAnimatables.length > 0) {
+    forestAnimatables.push({
+      chunkKey: ctx.key,
+      animatables: torchAnimatables,
+    });
+  }
 }
 
 // ---------- Forest interior content ----------
@@ -351,8 +415,101 @@ function buildForestInteriorContent(ctx, forest) {
   } else if (forest.interiorContent === 'drum_circle') {
     buildForestDrumCirclePlaceholder(ctx, forest);
   }
+  // Both content types ALSO get the "littered through the trees" interior
+  // campsites — multiple small sites between the trunks, with a wide berth
+  // around the drum circle (per Gary). The positions were pre-computed in
+  // getForestAt so scatterForestTrees could skip placing trees on top of them.
+  buildInteriorCampsites(ctx, forest);
   // 'none' falls through — empty clearing (won't happen unless hasInterior,
   // which gates this whole function).
+}
+
+// Populate a LEAF drum circle with drummers on the benches, dancers
+// orbiting the fire, and a static firekeeper + spotter pair. All figures
+// are parented to the drum-circle group at LOCAL (0,0,0) since dc.group
+// is already positioned at the fire's world coords.
+function populateDrumCircle(rng, dc, forest, facingAngle) {
+  const figures = [];
+  // Bench ring centerline = facingAngle + π (opposite the path entry), so
+  // drummers fill the half-circle BEHIND the fire (from the player's POV
+  // as they walk in along the path). The bench arcs themselves were built
+  // in leafDrumCircle.js at the same angle.
+  const benchCentre = facingAngle + Math.PI;
+  const benchRadii = [5.5, 6.5, 7.5];
+
+  // ---- Drummers on each bench ring ----
+  // Distribute drummers along the arcs. Approx 5/6/7 across the rings so
+  // we get a slightly fuller back row.
+  const drummerCounts = [4, 5, 6];
+  for (let ring = 0; ring < benchRadii.length; ring++) {
+    const r = benchRadii[ring];
+    const count = drummerCounts[ring];
+    for (let i = 0; i < count; i++) {
+      const t = (i + 0.5) / count;
+      const a = benchCentre - Math.PI / 2 + t * Math.PI;
+      const drummer = buildHandDrummer(rng);
+      drummer.group.position.set(Math.cos(a) * r, 0, Math.sin(a) * r);
+      drummer.group.rotation.y = -a + Math.PI;  // face the fire
+      dc.group.add(drummer.group);
+      figures.push(drummer);
+    }
+  }
+
+  // ---- Dancers orbiting the fire ----
+  // 6-8 dancers on the inner ring at ~3.5m. updateDancer animates orbits
+  // in world space relative to fireCenter, so initial position doesn't
+  // really matter — we just stamp them at the fire and the animator
+  // re-positions on the first frame.
+  const dancerCount = 6 + Math.floor(rng() * 3);
+  for (let i = 0; i < dancerCount; i++) {
+    const dancer = buildFireDancer(rng);
+    // Stagger orbit phase so dancers spread out from frame 0.
+    dancer.phase = (i / dancerCount) * Math.PI * 2;
+    dc.group.add(dancer.group);
+    figures.push(dancer);
+  }
+
+  // ---- Firekeeper + spotter pair ----
+  // Both stand on the entrance side (between fire and player as they
+  // arrive) so the player sees them framing the firepit. Statically
+  // placed — no follow logic per the reviewer's pushback.
+  const fkA = facingAngle;          // entrance side
+  const fkDist = 4.2;               // a bit outside the firepit edge
+  const fk = buildFirekeeper(rng);
+  fk.group.position.set(Math.cos(fkA) * fkDist, 0, Math.sin(fkA) * fkDist);
+  fk.group.rotation.y = -fkA + Math.PI / 2;   // face the fire
+  dc.group.add(fk.group);
+  figures.push(fk);
+
+  const spotter = buildSpotter(rng);
+  // Spotter stands 1.4m behind the firekeeper at a 30° offset (Gary's spec).
+  const spotterA = facingAngle + 0.50;
+  const spotterDist = fkDist + 1.2;
+  spotter.group.position.set(Math.cos(spotterA) * spotterDist, 0, Math.sin(spotterA) * spotterDist);
+  spotter.group.rotation.y = -spotterA + Math.PI / 2;
+  dc.group.add(spotter.group);
+  figures.push(spotter);
+
+  return figures;
+}
+
+// Materialize the deterministic interior campsite positions as actual
+// campsite assemblies, registered with this chunk so they unload with it.
+function buildInteriorCampsites(ctx, forest) {
+  if (!forest.interiorCampsitePositions || forest.interiorCampsitePositions.length === 0) return;
+  for (let i = 0; i < forest.interiorCampsitePositions.length; i++) {
+    const p = forest.interiorCampsitePositions[i];
+    const siteSeed = mulberry32(hash2(forest.seed * 211 + i * 71, i * 379 + 13));
+    // Bias toward 'small' inside the body — trees are tight, big EZ-ups
+    // would clip. Occasional 'medium' for variety.
+    const size = siteSeed() < 0.75 ? 'small' : 'medium';
+    const camp = buildCampsite(siteSeed, size);
+    camp.group.position.set(p.x, 0, p.z);
+    camp.group.rotation.y = siteSeed() * Math.PI * 2;
+    ctx.group.add(camp.group);
+    pushCampsiteAnimatables(ctx, camp);
+    registerCampsiteFootprint(ctx, p.x, p.z, camp.footprint);
+  }
 }
 
 function buildForestCampsite(ctx, forest) {
@@ -382,46 +539,54 @@ function buildForestCampsite(ctx, forest) {
   });
 }
 
-// Placeholder drum-circle visual — small fire + a stray djembe drum.
-// Identical to the original chunk drum_circle theme so we have *something*
-// in the clearing until Phase 5's LEAF-true rebuild.
+// LEAF-true drum circle visual — raised stone firepit, log cone, emissive
+// fire + PointLight, three-row bench semicircle. Built from
+// models/leafDrumCircle.js. Registers its own colliders (firepit damage 9,
+// bench ring damage 4) and pushes the animatable handle onto
+// forestDrumCircles so main.js can flicker it each frame.
 function buildForestDrumCirclePlaceholder(ctx, forest) {
   const x = forest.centerX;
   const z = forest.centerZ;
-
-  // Fire (emissive icosahedron + ring of stones)
-  const fire = new THREE.Mesh(
-    new THREE.IcosahedronGeometry(0.6, 1),
-    new THREE.MeshStandardMaterial({
-      color: 0xff7733,
-      emissive: 0xff5511,
-      emissiveIntensity: 2.5,
-      roughness: 0.8,
-    }),
-  );
-  fire.position.set(x, 0.6, z);
-  ctx.group.add(fire);
-
   const rng = mulberry32(forest.seed * 53 + 19);
-  for (let i = 0; i < 8; i++) {
-    const ang = (i / 8) * Math.PI * 2;
-    const stone = new THREE.Mesh(
-      new THREE.IcosahedronGeometry(0.3 + rng() * 0.15, 0),
-      new THREE.MeshStandardMaterial({ color: 0x6a6a78, roughness: 1, flatShading: true }),
-    );
-    stone.position.set(x + Math.cos(ang) * 1.4, 0.3, z + Math.sin(ang) * 1.4);
-    stone.castShadow = true;
-    ctx.group.add(stone);
-  }
 
-  // Big djembe drum
-  const drum = new THREE.Mesh(
-    new THREE.CylinderGeometry(0.7, 0.55, 1.4, 14),
-    new THREE.MeshStandardMaterial({ color: 0x8b5a2b, roughness: 0.9, flatShading: true }),
-  );
-  drum.position.set(x + 3, 0.7, z + 1);
-  drum.castShadow = true;
-  ctx.group.add(drum);
+  // facingAngle points from fire toward the entrance path so the bench
+  // semicircle opens on the path side — drummers face the player as they
+  // arrive across the fire.
+  const facingAngle = pathDirToAngle(forest.pathDirIdx);
+  const dc = buildLeafDrumCircle(rng, { facingAngle });
+  dc.group.position.set(x, 0, z);
+  ctx.group.add(dc.group);
+
+  // ---- Populate the circle: drummers, dancers, firekeeper + spotter ----
+  // The whole crew is parented to the drum-circle group so its position is
+  // already at (x, 0, z) — figures use local coords relative to the fire.
+  const figures = populateDrumCircle(rng, dc, forest, facingAngle);
+
+  forestDrumCircles.push({ chunkKey: ctx.key, dc, figures, fireCenter: { x, z } });
+
+  // Spatial drum music — the Phase 4 Euclidean engine. Anchored at the fire
+  // so the PannerNode attenuates audio with distance. Seed mixed with the
+  // forest seed so two forests play different grooves.
+  const musicHandle = Sound.attachStageMusic(x, 1.4, z, forest.seed * 9173 + 31, 'forest_drum');
+  if (musicHandle) forestDrumMusic.push({ handle: musicHandle, chunkKey: ctx.key });
+
+  // Firepit collider — Zerble can't drive into the hot stone wall.
+  registry.add({
+    kind: 'firepit',
+    position: new THREE.Vector3(x, 0.5, z),
+    footprint: dc.firepitCollider.radius,
+    collider: dc.firepitCollider,
+    chunkKey: ctx.key,
+  });
+  // Outer bench-ring soft collider — bounces the cart off the outermost
+  // bench arc so it doesn't drive through the seated drummers.
+  registry.add({
+    kind: 'bench_ring',
+    position: new THREE.Vector3(x, 0.4, z),
+    footprint: 0,
+    collider: dc.benchCollider,
+    chunkKey: ctx.key,
+  });
 
   // BACK PATH — runs from the drum circle out the opposite side of the body
   // to the open meadow zone (corner chunks of the 3x3). Mirrors the main
@@ -449,13 +614,13 @@ function buildForestDrumCirclePlaceholder(ctx, forest) {
     centerArc: Math.PI * 0.5,              // sites spread within ±45° of back direction
   });
 
-  // Register an attractor so the drum circle vibe propagates. Marked with
-  // a distinct kind so audio + later upgrades can find these specifically.
+  // Drum-circle attractor — no collider on this entry (firepit + bench_ring
+  // above already handle physical collisions). Kept distinct kind so audio
+  // + later phases can target these specifically without scanning all attractors.
   registry.add({
     kind: 'forest_drum_circle',
     position: new THREE.Vector3(x, 0, z),
-    footprint: 1.5,
-    collider: { radius: 1.2, damage: 4 },
+    footprint: 0,
     attractor: { radius: 8, weight: 1.4 },
     chunkKey: ctx.key,
   });
@@ -621,6 +786,22 @@ function scatterForestTrees(ctx, forest) {
     // Clearing exclusion — keep the central area tree-free for the drum circle.
     if (forest.hasInterior && dist < 16) continue;
 
+    // Interior campsite exclusion — campsites are scattered throughout the
+    // forest body (computed deterministically in getForestAt). Skip tree
+    // placements within ~6m of any campsite anchor so the camp's tents +
+    // canopy don't end up clipping into a tree trunk.
+    if (forest.interiorCampsitePositions && forest.interiorCampsitePositions.length > 0) {
+      let onCampsite = false;
+      for (let i = 0; i < forest.interiorCampsitePositions.length; i++) {
+        const cp = forest.interiorCampsitePositions[i];
+        const cdx = cp.x - x;
+        const cdz = cp.z - z;
+        // 6m radius around each campsite — enough room for an EZ-up + tent
+        if (cdx * cdx + cdz * cdz < 36) { onCampsite = true; break; }
+      }
+      if (onCampsite) continue;
+    }
+
     // Min spacing check (within this chunk)
     let tooClose = false;
     for (let i = 0; i < placed.length; i++) {
@@ -682,62 +863,6 @@ function corridorMatches(x, z, forest, dirIdx) {
 }
 
 // ---------- Forest edge colliders ----------
-
-// Place sphere colliders around the perimeter of the forest body, but only
-// the ones whose world position falls inside THIS chunk's bbox. Skip a
-// wedge of angles around `pathDir` so the path entry is collider-free.
-function placeForestEdgeColliders(ctx, forest) {
-  const ringR = forest.bodyRadius;
-  const sphereR = 1.6;
-  // Spacing along the ring: enough overlap that Zerble can't squeeze between.
-  const circumference = 2 * Math.PI * ringR;
-  const n = Math.ceil(circumference / (sphereR * 1.4));
-
-  // Gap angle (in radians) around the path entry direction
-  const pathAngle = pathDirToAngle(forest.pathDirIdx);
-  const gapHalfArc = 0.10;  // ~5.7° each side → 11.5° opening, ~12m wide at the perimeter
-
-  // Chunk bbox
-  const minX = ctx.cxWorld - CHUNK_SIZE / 2;
-  const maxX = ctx.cxWorld + CHUNK_SIZE / 2;
-  const minZ = ctx.czWorld - CHUNK_SIZE / 2;
-  const maxZ = ctx.czWorld + CHUNK_SIZE / 2;
-
-  // Pre-compute back-path angle once for drum-circle forests so the inner
-  // loop doesn't recompute it per perimeter point.
-  const backAngle = forest.backPathDirIdx != null
-    ? pathDirToAngle(forest.backPathDirIdx)
-    : null;
-
-  for (let i = 0; i < n; i++) {
-    const a = (i / n) * Math.PI * 2;
-
-    // Skip the main path-entry gap
-    if (forest.hasInterior) {
-      const da = angDiff(a, pathAngle);
-      if (da < gapHalfArc) continue;
-    }
-    // Skip the back-path gap (drum-circle forests only)
-    if (backAngle != null) {
-      const dbA = angDiff(a, backAngle);
-      if (dbA < gapHalfArc) continue;
-    }
-
-    const px = forest.centerX + Math.cos(a) * ringR;
-    const pz = forest.centerZ + Math.sin(a) * ringR;
-
-    // Only this chunk owns colliders inside its bbox
-    if (px < minX || px > maxX || pz < minZ || pz > maxZ) continue;
-
-    registry.add({
-      kind: 'forest_edge',
-      position: new THREE.Vector3(px, 0.5, pz),
-      footprint: 0,
-      collider: { radius: sphereR, damage: 3 },
-      chunkKey: ctx.key,
-    });
-  }
-}
 
 // Convert pathDirIdx (0=N, 1=E, 2=S, 3=W) to the angle used for placing
 // perimeter points: 0 rad = +X (E), π/2 = +Z (S), π = -X (W), 3π/2 = -Z (N).

@@ -10,9 +10,11 @@ import { Input } from './input.js';
 import { Touch } from './touch.js';
 import { HUD } from './hud.js';
 import { buildWorld, updateWorld, getTimeOfDay } from './world.js';
-import { forestAnimatables } from './forests.js';
+import { forestAnimatables, forestDrumCircles } from './forests.js';
 import { lakeAnimatables } from './lakes.js';
 import { updateCampsiteProps } from './models/campsite.js';
+import { updateLeafDrumCircle } from './models/leafDrumCircle.js';
+import { updateTribalFigures } from './models/tribalFigures.js';
 import { updateStagePerformers, updateStageLightShow, stageLightLenses } from './chunks.js';
 import { Zerble } from './zerble.js';
 import { Bubbles } from './bubbles.js';
@@ -240,6 +242,9 @@ function tickBody(dt) {
     const nightness = tod ? tod.nightness : 0;
     zerble.update(dt, Input, nightness);
     Sound.setEngineSpeed(zerble.speed, zerble.isBoosting ? 1 : 0);
+    // Push nightness into the audio module so the forest drum engine can
+    // gate voices + the crackling-fire bed against the day/night cycle.
+    Sound.setNightness(nightness);
 
     // SPACE = random honk (bell or clown). B = always bell. H = always clown.
     // All three share the honk ring + crowd reaction + cooldown.
@@ -304,6 +309,16 @@ function tickBody(dt) {
     }
     for (let i = 0; i < lakeAnimatables.length; i++) {
       updateCampsiteProps(nowS, nightness, lakeAnimatables[i].animatables);
+    }
+    // LEAF drum-circle fire pulse + PointLight flicker + tribal figures
+    // (drummers bobbing, dancers orbiting, firekeeper poking the fire).
+    // One updater call set per visible drum circle.
+    for (let i = 0; i < forestDrumCircles.length; i++) {
+      const entry = forestDrumCircles[i];
+      updateLeafDrumCircle(nowS, nightness, entry.dc);
+      if (entry.figures && entry.figures.length > 0) {
+        updateTribalFigures(nowS, nightness, entry.figures);
+      }
     }
 
     // Procedural world expands around Zerble.
@@ -456,8 +471,9 @@ function toastForKind(kind) {
     case 'lamppost': return 'Bonked a lamppost.';
     case 'drum_circle': return 'You crashed the drum circle!';
     case 'lake_edge': return 'Splash! Carts don\'t float.';
-    case 'forest_edge': return 'These woods are thick!';
     case 'forest_tree': return 'Ow — that\'s a big tree!';
+    case 'firepit': return 'Hot stone, ouch!';
+    case 'bench_ring': return 'Easy on the benches!';
     case 'island': return 'Tiny island, busy day.';
     case 'lurleen': return 'Easy, lover — that\'s Lurleen.';
     default: return 'Ouch.';

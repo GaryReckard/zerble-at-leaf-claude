@@ -112,6 +112,16 @@
         <option value="performer_drum">Performer — drum kit</option>
         <option value="performer_sax">Performer — sax</option>
       </optgroup>
+      <optgroup label="Drum circle">
+        <option value="leaf_drum_circle">LEAF drum circle (full)</option>
+        <option value="leaf_drum_circle_day">LEAF drum circle — daytime</option>
+        <option value="leaf_drum_circle_night">LEAF drum circle — full night</option>
+        <option value="drum_circle_populated">Drum circle populated (drummers + dancers + firekeeper)</option>
+        <option value="fire_dancer">Fire dancer</option>
+        <option value="hand_drummer">Hand drummer (seated)</option>
+        <option value="firekeeper">Firekeeper (black, with pole)</option>
+        <option value="spotter">Spotter (black, no pole)</option>
+      </optgroup>
       <optgroup label="Camping">
         <option value="camp_tent">Camp tent (sleeping)</option>
         <option value="camp_chair">Camp chair (folding)</option>
@@ -172,6 +182,11 @@ import { mulberry32 } from './src/rng.js';
       buildEzUp, buildTapestry, buildCampsite, updateCampsiteProps,
     } from './src/models/campsite.js';
     import { buildTallPine, buildOak, buildBirch, buildForestTree } from './src/models/tree.js';
+    import { buildLeafDrumCircle, updateLeafDrumCircle } from './src/models/leafDrumCircle.js';
+    import {
+      buildFireDancer, buildHandDrummer, buildFirekeeper, buildSpotter,
+      updateTribalFigures,
+    } from './src/models/tribalFigures.js';
 
     const canvas = document.getElementById('canvas');
     const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
@@ -717,6 +732,114 @@ import { mulberry32 } from './src/rng.js';
           entityRoot = g;
           cam.target.set(0, 1.2, 0);
           cam.dist = 5;
+          applyCam();
+          break;
+        }
+
+        // ----- Drum circle -----
+        case 'leaf_drum_circle':
+        case 'leaf_drum_circle_day':
+        case 'leaf_drum_circle_night': {
+          const dc = buildLeafDrumCircle(Math.random, { facingAngle: -Math.PI / 2 });
+          scene.add(dc.group);
+          entityRoot = dc.group;
+          // Pin nightness: day = 0, night = 1, plain = use sandbox time-of-day.
+          let pinned = null;
+          if (name === 'leaf_drum_circle_day') pinned = 0;
+          else if (name === 'leaf_drum_circle_night') pinned = 1;
+          if (pinned !== null) {
+            // Override the TOD update so the fire stays at the requested level.
+            // We snap nightness on the TOD object itself so any other system
+            // that reads tod.nightness sees the pinned value.
+            tod._nightness = pinned;
+            // Also lock t so the sun doesn't drift the scene back to daylight.
+            tod.t = pinned > 0.5 ? 0.5 : 0.2;
+          }
+          updateFn = (dt) => {
+            const n = pinned !== null ? pinned : tod.nightness;
+            updateLeafDrumCircle(performance.now() / 1000, n, dc);
+          };
+          cam.target.set(0, 2.0, 0);
+          cam.dist = 14;
+          cam.pitch = 0.25;
+          applyCam();
+          break;
+        }
+
+        // ----- Drum-circle figures (standalone) -----
+        case 'fire_dancer':
+        case 'hand_drummer':
+        case 'firekeeper':
+        case 'spotter': {
+          const builders = {
+            fire_dancer: buildFireDancer,
+            hand_drummer: buildHandDrummer,
+            firekeeper: buildFirekeeper,
+            spotter: buildSpotter,
+          };
+          const f = builders[name](Math.random);
+          scene.add(f.group);
+          entityRoot = f.group;
+          updateFn = (dt) => updateTribalFigures(performance.now() / 1000, tod.nightness, [f]);
+          cam.target.set(0, 1.0, 0);
+          cam.dist = 3.5;
+          applyCam();
+          break;
+        }
+
+        // ----- Drum circle populated with figures -----
+        case 'drum_circle_populated': {
+          const dc = buildLeafDrumCircle(Math.random, { facingAngle: -Math.PI / 2 });
+          scene.add(dc.group);
+          entityRoot = dc.group;
+          // Build a mini "populate" — borrow the layout from forests.js. We
+          // hand-roll it here since the sandbox doesn't load forests.js.
+          const facingAngle = -Math.PI / 2;
+          const figures = [];
+          const benchCentre = facingAngle + Math.PI;
+          const ringRadii = [5.5, 6.5, 7.5];
+          const counts = [4, 5, 6];
+          for (let ring = 0; ring < ringRadii.length; ring++) {
+            const r = ringRadii[ring];
+            for (let i = 0; i < counts[ring]; i++) {
+              const t = (i + 0.5) / counts[ring];
+              const a = benchCentre - Math.PI / 2 + t * Math.PI;
+              const d = buildHandDrummer(Math.random);
+              d.group.position.set(Math.cos(a) * r, 0, Math.sin(a) * r);
+              d.group.rotation.y = -a + Math.PI;
+              dc.group.add(d.group);
+              figures.push(d);
+            }
+          }
+          for (let i = 0; i < 7; i++) {
+            const dancer = buildFireDancer(Math.random);
+            dancer.phase = (i / 7) * Math.PI * 2;
+            dc.group.add(dancer.group);
+            figures.push(dancer);
+          }
+          const fk = buildFirekeeper(Math.random);
+          fk.group.position.set(Math.cos(facingAngle) * 4.2, 0, Math.sin(facingAngle) * 4.2);
+          fk.group.rotation.y = -facingAngle + Math.PI / 2;
+          dc.group.add(fk.group);
+          figures.push(fk);
+          const sp = buildSpotter(Math.random);
+          const spA = facingAngle + 0.5;
+          sp.group.position.set(Math.cos(spA) * 5.4, 0, Math.sin(spA) * 5.4);
+          sp.group.rotation.y = -spA + Math.PI / 2;
+          dc.group.add(sp.group);
+          figures.push(sp);
+
+          // Lock to night so we see the fire glowing
+          tod._nightness = 1;
+          tod.t = 0.5;
+          updateFn = (dt) => {
+            const t = performance.now() / 1000;
+            updateLeafDrumCircle(t, 1, dc);
+            updateTribalFigures(t, 1, figures);
+          };
+          cam.target.set(0, 1.5, 0);
+          cam.dist = 18;
+          cam.pitch = 0.25;
           applyCam();
           break;
         }

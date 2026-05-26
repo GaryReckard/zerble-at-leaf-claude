@@ -19,6 +19,11 @@ let sfxBus = null;       // shared bus for all SFX (engine, collisions, honks, b
 let engineNodes = null;
 let initialized = false;
 
+// Global nightness (0..1) — set each frame by main.js via Sound.setNightness.
+// The forest drum engine reads this every scheduler tick to gate voices in,
+// shape velocities, and decide whether the crackling-fire bed plays.
+let currentNightness = 0;
+
 // Stage music attachment is sometimes requested BEFORE Sound.init() runs —
 // the initial chunks (including the main stage at 0,0) generate during world
 // boot, but Sound.init must wait for a user gesture (Start tap on iOS). We
@@ -85,6 +90,13 @@ export const Sound = {
 
   isReady() {
     return initialized;
+  },
+
+  // Push the current world nightness (0..1) into module state. The forest
+  // drum engine reads this each scheduler tick to gate voices/velocity, and
+  // the crackling-fire bed gates on it too. Cheap call — bare variable set.
+  setNightness(n) {
+    currentNightness = Math.max(0, Math.min(1, n));
   },
 
   // ---- Spatial stage music ----
@@ -644,6 +656,7 @@ function createStageMusic(ctx, dest, x, y, z, seed, style = 'jam') {
   switch (style) {
     case 'brass':       handle = brassStage(ctx, panner, seed); break;
     case 'drum':        handle = drumStage(ctx, panner, seed); break;
+    case 'forest_drum': handle = forestDrumStage(ctx, panner, seed); break;
     case 'second_line': handle = secondLineStage(ctx, panner, seed); break;
     case 'jam':
     default:            handle = jamStage(ctx, panner, seed); break;
@@ -1072,6 +1085,212 @@ function drumStage(ctx, panner, seed) {
   };
 }
 
+// ----- FOREST DRUM CIRCLE (rich Euclidean polyrhythm) ----------------------
+//
+// Phase 4 — the LEAF-true engine. Built on coprime Euclidean rhythms over
+// the same 12-tick LCM that drumStage uses, but with:
+//
+//   * 7 voices instead of 3: kick + 2 toms + djembe slap + djembe tone +
+//     bell + shaker. Each is a different Euclidean pattern, shifted by
+//     coprime offsets so the combined groove never lines up the same way
+//     across measures.
+//   * Voice gating by nightness — kick/toms are always on, the brighter
+//     voices fade in as the sun goes down. At full night all 7 are firing.
+//   * Probabilistic misses + ghost-note velocity variance + ±5ms timing
+//     jitter — what the reviewer pushed back on the original spec for. The
+//     human-feel comes from those three together, not from any one of them.
+//   * A crackling-fire pink-noise bed gated on nightness > 0.3, panned with
+//     the drum mix so it only hisses up close.
+//
+// Per-circle CPU cost: ~8 oscillators always running + a few transient
+// BufferSource allocs per hit. With 3 visible drum circles that's ~24
+// oscillators total — well under what Web Audio can chew through.
+function forestDrumStage(ctx, panner, seed) {
+  const rng = mulberry32(seed >>> 0);
+  const tempo = 72 + Math.floor(rng() * 16);     // 72-88 bpm
+  const beat = 60 / tempo;
+  const measureDur = beat * 4;                   // 4 beats per measure
+  const tickDur = measureDur / 12;
+
+  // Euclidean rhythm: distribute `hits` evenly across `steps` ticks. Returns
+  // a length-`steps` boolean array. Optional `shift` rotates the pattern.
+  function E(hits, steps, shift = 0) {
+    const pattern = new Array(steps).fill(false);
+    for (let i = 0; i < hits; i++) pattern[Math.floor((i * steps) / hits)] = true;
+    if (!shift) return pattern;
+    const out = new Array(steps);
+    for (let i = 0; i < steps; i++) out[i] = pattern[((i - shift) % steps + steps) % steps];
+    return out;
+  }
+
+  // Voice definitions. Order matters — we trigger in this order so kick
+  // attacks fire ahead of higher voices when they share a tick.
+  //   pattern    : 12-tick rhythm
+  //   kind       : timbre generator
+  //   baseGain   : peak gain at velocity 1.0
+  //   miss       : 0..1 chance to skip any scheduled hit
+  //   ghost      : 0..1 chance a hit becomes a ghost note (velocity ≈0.18)
+  //   threshold  : nightness below which the voice is silent
+  const voices = [
+    { name: 'kick', pattern: E(2, 12),    kind: 'kick', baseGain: 0.50, miss: 0,    ghost: 0,    threshold: 0    },
+    { name: 'tom1', pattern: E(3, 12),    kind: 'tom1', baseGain: 0.36, miss: 0,    ghost: 0,    threshold: 0    },
+    { name: 'tom2', pattern: E(4, 12),    kind: 'tom2', baseGain: 0.30, miss: 0,    ghost: 0,    threshold: 0    },
+    { name: 'slap', pattern: E(5, 12, 1), kind: 'slap', baseGain: 0.30, miss: 0.10, ghost: 0.15, threshold: 0.20 },
+    { name: 'tone', pattern: E(7, 12, 2), kind: 'tone', baseGain: 0.22, miss: 0.15, ghost: 0.20, threshold: 0.30 },
+    { name: 'bell', pattern: E(3, 12, 5), kind: 'bell', baseGain: 0.18, miss: 0.20, ghost: 0.10, threshold: 0.40 },
+    { name: 'shak', pattern: E(8, 12),    kind: 'shak', baseGain: 0.14, miss: 0.15, ghost: 0,    threshold: 0.50 },
+  ];
+
+  // Tonal voices get a persistent oscillator+gain we re-pluck per hit (cheaper
+  // than allocating a new osc each time). Noise voices allocate per-hit since
+  // they need fresh buffer data anyway.
+  const persistent = {};
+  function ensureOsc(name, freq, type = 'sine') {
+    if (persistent[name]) return persistent[name];
+    const osc = ctx.createOscillator();
+    osc.type = type;
+    osc.frequency.value = freq;
+    const gain = ctx.createGain();
+    gain.gain.value = 0;
+    osc.connect(gain).connect(panner);
+    osc.start();
+    persistent[name] = { osc, gain };
+    return persistent[name];
+  }
+  ensureOsc('kick', 95);
+  ensureOsc('tom1', 150 + Math.floor(rng() * 40));
+  ensureOsc('tom2', 88 + Math.floor(rng() * 22));
+  ensureOsc('tone', 200 + Math.floor(rng() * 30));
+
+  function triggerKick(t, vel, p) {
+    p.osc.frequency.setValueAtTime(95, t);
+    p.osc.frequency.exponentialRampToValueAtTime(45, t + 0.10);
+    p.gain.gain.cancelScheduledValues(t);
+    p.gain.gain.setValueAtTime(0.0001, t);
+    p.gain.gain.exponentialRampToValueAtTime(vel, t + 0.005);
+    p.gain.gain.exponentialRampToValueAtTime(0.0001, t + 0.20);
+  }
+  function triggerSineHit(t, vel, p, peakFreq, restFreq, sweepDur, decayDur) {
+    p.osc.frequency.setValueAtTime(peakFreq, t);
+    p.osc.frequency.exponentialRampToValueAtTime(restFreq, t + sweepDur);
+    p.gain.gain.cancelScheduledValues(t);
+    p.gain.gain.setValueAtTime(0.0001, t);
+    p.gain.gain.exponentialRampToValueAtTime(vel, t + 0.005);
+    p.gain.gain.exponentialRampToValueAtTime(0.0001, t + decayDur);
+  }
+  function triggerNoise(t, vel, freq, qish, dur, type = 'highpass') {
+    const bufSize = Math.max(64, Math.ceil(ctx.sampleRate * dur));
+    const buf = ctx.createBuffer(1, bufSize, ctx.sampleRate);
+    const data = buf.getChannelData(0);
+    for (let i = 0; i < bufSize; i++) data[i] = Math.random() * 2 - 1;
+    const src = ctx.createBufferSource();
+    src.buffer = buf;
+    const filter = ctx.createBiquadFilter();
+    filter.type = type;
+    filter.frequency.value = freq;
+    if (qish != null) filter.Q.value = qish;
+    const gain = ctx.createGain();
+    gain.gain.setValueAtTime(0.0001, t);
+    gain.gain.exponentialRampToValueAtTime(vel, t + 0.003);
+    gain.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+    src.connect(filter).connect(gain).connect(panner);
+    src.start(t);
+    src.stop(t + dur + 0.02);
+  }
+  function triggerTri(t, vel, freq, dur) {
+    const osc = ctx.createOscillator();
+    osc.type = 'triangle';
+    osc.frequency.value = freq;
+    const gain = ctx.createGain();
+    gain.gain.setValueAtTime(0.0001, t);
+    gain.gain.exponentialRampToValueAtTime(vel * 0.45, t + 0.002);
+    gain.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+    osc.connect(gain).connect(panner);
+    osc.start(t);
+    osc.stop(t + dur + 0.02);
+  }
+
+  // Scheduler with lookahead. Per-tick we walk every voice and decide whether
+  // it fires. Nightness is read fresh each tick from the module-level
+  // currentNightness so daytime→night transitions are reflected in real time.
+  let nextTickTime = ctx.currentTime + 0.2;
+  let tickIdx = 0;
+  function schedule() {
+    const horizon = ctx.currentTime + 0.6;
+    while (nextTickTime < horizon) {
+      const ti = tickIdx % 12;
+      const n = currentNightness;
+      for (let v = 0; v < voices.length; v++) {
+        const voice = voices[v];
+        if (!voice.pattern[ti]) continue;
+        if (n < voice.threshold) continue;
+        if (voice.miss > 0 && Math.random() < voice.miss) continue;
+        // Velocity — ghost note vs accent. baseVel ranges 0.55..1.0.
+        const baseVel = (Math.random() < voice.ghost) ? 0.18 : (0.55 + Math.random() * 0.45);
+        // Gate gain — voice fades in over a 0.15 nightness window starting at threshold.
+        const gateN = Math.max(0, Math.min(1, (n - voice.threshold) / 0.15));
+        // Overall mix gain rises slightly with nightness so the whole thing
+        // is more present at night.
+        const overall = 0.45 + 0.55 * n;
+        const gain = voice.baseGain * gateN * baseVel * overall;
+        // Timing jitter ±5ms — humanises the groove.
+        const t = nextTickTime + (Math.random() - 0.5) * 0.010;
+        switch (voice.kind) {
+          case 'kick': triggerKick(t, gain, persistent.kick); break;
+          case 'tom1': triggerSineHit(t, gain, persistent.tom1, persistent.tom1.osc.frequency.value * 1.2, 150, 0.06, 0.16); break;
+          case 'tom2': triggerSineHit(t, gain, persistent.tom2, persistent.tom2.osc.frequency.value * 1.2, 90, 0.07, 0.18); break;
+          case 'tone': triggerSineHit(t, gain, persistent.tone, 230, 200, 0.05, 0.13); break;
+          case 'slap': triggerNoise(t, gain, 2400, null, 0.07, 'highpass'); break;
+          case 'bell': triggerTri(t, gain, 600 + (rng() * 80), 0.18); break;
+          case 'shak': triggerNoise(t, gain * 0.6, 5200, null, 0.04, 'highpass'); break;
+        }
+      }
+      nextTickTime += tickDur;
+      tickIdx++;
+    }
+  }
+  schedule();
+  const intervalId = setInterval(schedule, 180);
+
+  // ---- Crackling fire ----
+  // Pink-noise bursts every 0.4-1.2s, gated on nightness > 0.3. Quiet — the
+  // fire is supposed to be in the background, not competing with the drums.
+  // Each burst is a short bandpassed noise blip at a random centre frequency
+  // so successive cracks sound different (crackle, pop, hiss).
+  let nextCrackleTime = ctx.currentTime + 0.8;
+  function crackleSchedule() {
+    const n = currentNightness;
+    if (n < 0.3) {
+      // Push forward so we don't try to catch up when night arrives.
+      nextCrackleTime = ctx.currentTime + 0.4;
+      return;
+    }
+    while (nextCrackleTime < ctx.currentTime + 0.6) {
+      const dur = 0.04 + Math.random() * 0.08;
+      const vel = (0.08 + (n - 0.3) * 0.10) * (0.6 + Math.random() * 0.4);
+      triggerNoise(
+        nextCrackleTime, vel,
+        600 + Math.random() * 1400,
+        1.5, dur, 'bandpass',
+      );
+      nextCrackleTime += 0.4 + Math.random() * 0.8;
+    }
+  }
+  const crackleId = setInterval(crackleSchedule, 220);
+
+  return {
+    panner,
+    stop() {
+      clearInterval(intervalId);
+      clearInterval(crackleId);
+      for (const key in persistent) {
+        try { persistent[key].osc.stop(); } catch (e) {}
+      }
+      try { panner.disconnect(); } catch (e) {}
+    },
+  };
+}
+
 // ---------- Per-obstacle dispatch ----------
 
 const COLLISION_SOUNDS = {
@@ -1086,9 +1305,10 @@ const COLLISION_SOUNDS = {
   arch:        (c, d) => woodKnock(c, d),
   lamppost:    (c, d) => clang(c, d),
   drum_circle: (c, d) => { thump(c, d, 70, 0.4, 0.55); thump(c, d, 110, 0.25, 0.3); },
-  // Forest collisions: edge = rustling leaves + knock (you hit a wall of brush);
-  // forest_tree = a louder woody thud (you ran into a 9-metre oak).
-  forest_edge: (c, d) => { woodKnock(c, d); thump(c, d, 140, 0.2, 0.28); },
+  // Forest collisions: forest_tree = a louder woody thud (you ran into an
+  // 8-metre oak). Firepit = thumpy stone wall. Bench = soft wood bonk.
   forest_tree: (c, d) => { thump(c, d, 65, 0.45, 0.55); woodKnock(c, d); },
+  firepit:     (c, d) => { thump(c, d, 50, 0.5, 0.55); thump(c, d, 75, 0.3, 0.4); },
+  bench_ring:  (c, d) => woodKnock(c, d),
   default:     (c, d) => thump(c, d, 180, 0.2, 0.3),
 };

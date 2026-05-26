@@ -513,6 +513,7 @@ installDebug({
   scene, camera, renderer,
   zerble, crowd, bubbles, smiles, registry,
   puppets, band, kids, wooks,
+  lurleen,                              // teleport menu uses .position
   getRunning: () => running,
   getTimeOfDay,
   Trip,

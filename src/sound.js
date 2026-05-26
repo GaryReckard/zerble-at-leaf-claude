@@ -1233,6 +1233,10 @@ function forestDrumStage(ctx, panner, seed) {
         // is more present at night.
         const overall = 0.45 + 0.55 * n;
         const gain = voice.baseGain * gateN * baseVel * overall;
+        // Guard against effectively-silent triggers — exponentialRampToValueAtTime
+        // rejects targets exactly at zero, and even very tiny values waste an
+        // oscillator pulse for no audible result.
+        if (gain < 0.001) continue;
         // Timing jitter ±5ms — humanises the groove.
         const t = nextTickTime + (Math.random() - 0.5) * 0.010;
         switch (voice.kind) {

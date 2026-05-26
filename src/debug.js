@@ -12,6 +12,7 @@
 import * as THREE from 'three';
 import { Sound } from './sound.js';
 import { Analytics } from './analytics.js';
+import { getForestAt } from './forests.js';
 
 const PANEL_ID = 'debug-panel';
 const TRIP_PANEL_ID = 'trip-panel';
@@ -63,6 +64,115 @@ export function isGod() { return state.god; }
 export function npcsFrozen() { return state.freezeNPCs; }
 
 // ---------------- internals ----------------
+
+// ---- Landmark locator ----
+//
+// Given a category string, finds the nearest landmark of that type to
+// Zerble's current position. Returns { x, z, heading?, label } or null.
+//
+// Forest entrances are computed from the deterministic getForestAt hash —
+// we don't need the forest to be loaded yet; we scan a chunk-coord window
+// around the player and pick the nearest matching center. For dynamic
+// things (lurleen, lakes, campsites) we walk the live registry.
+function locateLandmark(kind) {
+  const h = state.hooks;
+  if (!h || !h.zerble) return null;
+  const zx = h.zerble.position.x;
+  const zz = h.zerble.position.z;
+
+  // Helper: closest item from an iterable of { position, ... }.
+  function nearestRegistryEntry(predicate) {
+    let best = null;
+    for (const e of h.registry.entries.values()) {
+      if (!predicate(e)) continue;
+      const d = Math.hypot(e.position.x - zx, e.position.z - zz);
+      if (!best || d < best.d) best = { entry: e, d };
+    }
+    return best ? best.entry : null;
+  }
+
+  // Helper: closest forest center from a hash scan.
+  function nearestForestCenter(filter) {
+    let best = null;
+    // 60-chunk window each side from the player → ~4.8km diameter. Plenty
+    // for a "nearest" query across the whole reasonably-explored world.
+    const cxz = Math.round(zx / 80);
+    const czz = Math.round(zz / 80);
+    for (let cx = cxz - 60; cx <= cxz + 60; cx++) {
+      for (let cz = czz - 60; cz <= czz + 60; cz++) {
+        const f = getForestAt(cx, cz);
+        if (!f || f.role !== 'center') continue;
+        if (filter && !filter(f)) continue;
+        const d = Math.hypot(f.centerX - zx, f.centerZ - zz);
+        if (!best || d < best.d) best = { f, d };
+      }
+    }
+    return best ? best.f : null;
+  }
+
+  // Drop the player at the OUTSIDE end of a forest's entrance path so they
+  // can drive in. pathDirIdx: 0=N, 1=E, 2=S, 3=W.
+  function forestEntrancePoint(forest) {
+    const off = 80 + 25;  // a bit further out than the path starts so the cart sits clear of the woods
+    let x = forest.centerX, z = forest.centerZ, heading = 0;
+    switch (forest.pathDirIdx) {
+      case 0: z -= off; heading = Math.PI;            break; // N → face south to drive in
+      case 1: x += off; heading = -Math.PI / 2;       break; // E → face west
+      case 2: z += off; heading = 0;                  break; // S → face north
+      case 3: x -= off; heading = Math.PI / 2;        break; // W → face east
+    }
+    return { x, z, heading };
+  }
+
+  switch (kind) {
+    case 'drum_circle': {
+      const f = nearestForestCenter((f) => f.interiorContent === 'drum_circle');
+      if (!f) return null;
+      const p = forestEntrancePoint(f);
+      return { ...p, label: `drum-circle forest at (${f.centerCx}, ${f.centerCz})` };
+    }
+    case 'campsite_forest': {
+      const f = nearestForestCenter((f) => f.interiorContent === 'campsite');
+      if (!f) return null;
+      const p = forestEntrancePoint(f);
+      return { ...p, label: `campsite forest at (${f.centerCx}, ${f.centerCz})` };
+    }
+    case 'any_forest': {
+      const f = nearestForestCenter((f) => f.hasInterior);
+      if (!f) return null;
+      const p = forestEntrancePoint(f);
+      return { ...p, label: `forest at (${f.centerCx}, ${f.centerCz})` };
+    }
+    case 'lurleen': {
+      const l = h.lurleen;
+      if (!l || !l.position) return null;
+      return { x: l.position.x, z: l.position.z + 8, heading: Math.PI, label: 'Lurleen' };
+    }
+    case 'lake': {
+      const e = nearestRegistryEntry((e) => e.kind === 'lake');
+      if (!e) return null;
+      // Sit on the shore — outside the lake radius — facing the centre.
+      const dx = zx - e.position.x;
+      const dz = zz - e.position.z;
+      const d = Math.hypot(dx, dz) || 1;
+      const reach = (e.footprint || 0) + 8;
+      return {
+        x: e.position.x + (dx / d) * reach,
+        z: e.position.z + (dz / d) * reach,
+        heading: Math.atan2(-dx, -dz),
+        label: 'nearest lake',
+      };
+    }
+    case 'campsite': {
+      const e = nearestRegistryEntry((e) => e.kind === 'campsite');
+      if (!e) return null;
+      return { x: e.position.x + 4, z: e.position.z + 4, label: 'nearest campsite' };
+    }
+    case 'spawn':
+      return { x: 0, z: 65, heading: 0, label: 'spawn' };
+  }
+  return null;
+}
 
 function api() {
   const h = state.hooks;
@@ -176,7 +286,51 @@ function buildPanel() {
   `;
   el.appendChild(todBlock);
 
+  // ----- Teleport menu -----
+  // Like Minecraft's /locate + /tp combined: pick a landmark type, click Go,
+  // and Zerble drops at the nearest one. For forests with paths, we drop
+  // him just outside the entrance so he can drive in — way more readable
+  // than landing on top of the firepit.
+  const tpBlock = document.createElement('div');
+  tpBlock.style.marginTop = '8px';
+  tpBlock.style.borderTop = '1px solid #2a4a5a';
+  tpBlock.style.paddingTop = '6px';
+  tpBlock.innerHTML = `
+    <div style="margin-bottom:4px;opacity:0.7">Teleport to nearest…</div>
+    <div style="display:flex;gap:4px">
+      <select id="dbg-tp-select" style="flex:1;font:inherit;background:#0e1c28;color:#dff;border:1px solid #2a4a5a;border-radius:3px;padding:2px 4px">
+        <option value="drum_circle">Drum circle (forest entrance)</option>
+        <option value="campsite_forest">Campsite forest (entrance)</option>
+        <option value="any_forest">Any forest (entrance)</option>
+        <option value="lurleen">Lurleen</option>
+        <option value="lake">Lake</option>
+        <option value="campsite">Campsite (any)</option>
+        <option value="spawn">Spawn</option>
+      </select>
+      <button id="dbg-tp-go" style="font:inherit;padding:2px 10px;background:rgba(255,224,102,0.20);color:#ffe066;border:1px solid rgba(255,224,102,0.45);border-radius:3px;cursor:pointer">Go</button>
+    </div>
+    <div id="dbg-tp-status" style="margin-top:3px;font-size:10px;opacity:0.6;min-height:13px"></div>
+  `;
+  el.appendChild(tpBlock);
+
   document.body.appendChild(el);
+
+  // Wire the teleport menu. Lookup logic runs from the player's current
+  // position so each click finds the closest landmark TO YOU, not the
+  // closest to spawn.
+  const tpSelect = tpBlock.querySelector('#dbg-tp-select');
+  const tpStatus = tpBlock.querySelector('#dbg-tp-status');
+  tpBlock.querySelector('#dbg-tp-go').addEventListener('click', () => {
+    const dest = locateLandmark(tpSelect.value);
+    if (dest) {
+      state.hooks.zerble.position.set(dest.x, state.hooks.zerble.position.y, dest.z);
+      state.hooks.zerble.speed = 0;
+      if (typeof dest.heading === 'number') state.hooks.zerble.heading = dest.heading;
+      tpStatus.textContent = `→ ${dest.label}`;
+    } else {
+      tpStatus.textContent = 'no nearby landmark of that type';
+    }
+  });
 
   // Wire slider + buttons to the timeOfDay hook (which may be null until
   // world.js finishes booting — getTimeOfDay() resolves lazily).

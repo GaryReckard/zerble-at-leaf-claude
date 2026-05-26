@@ -169,10 +169,14 @@ function buildTribalFigure(rng = Math.random, opts = {}) {
 
     // Per-pose initial rotation. Records for animation.
     if (pose === 'dance') {
-      // Arms up and out — ecstatic dancer silhouette. Slight elbow bend.
-      shoulder.rotation.z = sx * -0.5;   // raise above shoulders
-      shoulder.rotation.x = -1.4;         // and back over the head
-      elbow.rotation.x = 0.3;
+      // Arms up and out in a V-pose. Earlier this was `rotation.x = -1.4`
+      // which actually pivots the arm BEHIND the body (the "clasped behind
+      // back" silhouette Gary called out). Pure Z-rotation around the
+      // shoulder is what raises the arm overhead.
+      //   default arm hangs at (0, -0.18, 0). rotation.z = sx * 2.2 rotates
+      //   the arm so it points up-and-outward: (sx*0.15, +0.10, 0).
+      shoulder.rotation.z = sx * 2.2;
+      shoulder.rotation.x = 0.15;    // small forward tilt — feels alive
     } else if (pose === 'drum_seated') {
       // Forward and down — hands at lap, ready to strike a drum.
       shoulder.rotation.x = 0.9;
@@ -204,35 +208,47 @@ function buildTribalFigure(rng = Math.random, opts = {}) {
   head.castShadow = true;
   g.add(head);
 
-  // ----- Hair — long flowing back. Cone + bottom puff so it doesn't look
-  // like a single triangle. Black-clad figures get short cropped hair.
+  // ----- Hair -----
+  // Earlier version used a horizontally-squashed icosphere sitting low on
+  // the head, which read as a balding "ear-to-ear semicircle" ring instead
+  // of hair (Gary's catch). New build:
+  //   * a slightly larger-than-head sphere PUSHED BACK so the front of the
+  //     head (face/eyes) is uncovered, and the sphere wraps the crown +
+  //     sides + back
+  //   * a long cone trailing down the back for the "long flowing" look
+  // Black-clad figures still get a tight cropped cap (no flow).
   const hairGroup = new THREE.Group();
-  hairGroup.position.set(0, 1.62, 0.04);
+  hairGroup.position.set(0, 1.60, 0);
   if (!isBlackClad) {
-    // Long hair — main cone trailing down the back
-    const hairCone = new THREE.Mesh(
-      new THREE.ConeGeometry(0.18, 0.85, 7),
+    // Wig — bigger than the head, offset back so the face peeks out.
+    // Center at z = +0.12 means the wig's front face is at z = -0.14,
+    // safely behind the eyes (z = -0.18 in face-local coords).
+    const wig = new THREE.Mesh(
+      new THREE.IcosahedronGeometry(0.26, 1), hairMat,
+    );
+    wig.position.set(0, 0.06, 0.12);
+    wig.scale.set(1.0, 1.05, 1.1);
+    wig.castShadow = true;
+    hairGroup.add(wig);
+
+    // Long ponytail / flowing hair behind the head, anchored at the wig's
+    // lower-back. Tapered cone tilts slightly back so it hangs below the
+    // shoulder blades.
+    const ponytail = new THREE.Mesh(
+      new THREE.ConeGeometry(0.16, 0.75, 7),
       hairMat,
     );
-    hairCone.position.set(0, -0.30, -0.06);
-    hairCone.rotation.x = 0.15;     // tilt slightly back
-    hairCone.castShadow = true;
-    hairGroup.add(hairCone);
-    // Top of head cap — covers the skull from above
-    const hairCap = new THREE.Mesh(
-      new THREE.IcosahedronGeometry(0.21, 1), hairMat,
-    );
-    hairCap.scale.set(1, 0.55, 1);
-    hairCap.position.y = 0.04;
-    hairGroup.add(hairCap);
+    ponytail.position.set(0, -0.36, 0.12);
+    ponytail.rotation.x = -0.25;      // tip swings back
+    ponytail.castShadow = true;
+    hairGroup.add(ponytail);
   } else {
-    // Black-clad: short cropped hair, no flow
+    // Black-clad: tight cropped cap that hugs the head.
     const cap = new THREE.Mesh(
-      new THREE.IcosahedronGeometry(0.21, 1),
-      hairMat,
+      new THREE.IcosahedronGeometry(0.24, 1), hairMat,
     );
-    cap.scale.set(1, 0.5, 1);
-    cap.position.y = 0.02;
+    cap.position.set(0, 0.04, 0.03);
+    cap.scale.set(1, 0.85, 1.05);
     hairGroup.add(cap);
   }
   g.add(hairGroup);
@@ -279,17 +295,20 @@ export function buildFireDancer(rng = Math.random) {
 
 export function buildHandDrummer(rng = Math.random) {
   const figure = buildTribalFigure(rng, { pose: 'drum_seated' });
-  // Add a djembe between the drummer's knees — drumhead at lap height.
+  // Djembe sits IN FRONT of the drummer — figure's local "forward" is -Z, so
+  // the drum lives at negative z, low enough that the head is at lap height.
+  // Earlier this was at +Z (behind the body) so the arms reached forward into
+  // empty air; Gary called this out as "drums in them, not in front".
   const djembe = new THREE.Mesh(
     new THREE.CylinderGeometry(0.22, 0.16, 0.50, 12),
     new THREE.MeshStandardMaterial({
       color: 0x6a3a18, roughness: 0.95, flatShading: true,
     }),
   );
-  djembe.position.set(0, 0.60, 0.15);
+  djembe.position.set(0, 0.60, -0.32);
   djembe.castShadow = true;
   figure.group.add(djembe);
-  // Drumhead — pale skin
+  // Drumhead — pale skin, on top of the djembe body
   const drumhead = new THREE.Mesh(
     new THREE.CircleGeometry(0.215, 12),
     new THREE.MeshStandardMaterial({
@@ -297,7 +316,7 @@ export function buildHandDrummer(rng = Math.random) {
     }),
   );
   drumhead.rotation.x = -Math.PI / 2;
-  drumhead.position.set(0, 0.86, 0.15);
+  drumhead.position.set(0, 0.86, -0.32);
   figure.group.add(drumhead);
   figure.djembe = djembe;
   return figure;
@@ -356,16 +375,36 @@ function updateDancer(t, f) {
   const innerDip = 0.6 * (0.5 + 0.5 * Math.sin(t * 0.35 + f.phase * 2.3));
   const r = baseR - innerDip;
   f.group.position.set(Math.cos(a) * r, 0, Math.sin(a) * r);
-  // Face the fire (local 0,0,0). With dancer at (cos a, 0, sin a)*r,
-  // rotation.y = π/2 - a makes the dancer's local -Z point inward.
-  f.group.rotation.y = Math.PI / 2 - a;
+
+  // Face the DIRECTION OF MOTION (orbit tangent), not the fire. For
+  // counterclockwise motion at angle a, tangent direction in world XZ is
+  // (-sin a, cos a) → rotation.y = π - a makes local -Z point that way.
+  // Twirl: every ~10s the dancer spins a full 360° over ~1.2s, layered on
+  // top of the orbit-facing rotation.
+  const twirlCycle = 9 + (f.phase * 0.5) % 4;     // 9-13s per twirl, deterministic per dancer
+  const twirlPhase = (t * 0.9 + f.phase * 1.7) % twirlCycle;
+  const twirlDur = 1.2;
+  let twirl = 0;
+  if (twirlPhase < twirlDur) {
+    // Smoothstep the spin so it accelerates + decelerates rather than
+    // snapping into rotation.
+    const u = twirlPhase / twirlDur;
+    const eased = u * u * (3 - 2 * u);
+    twirl = eased * Math.PI * 2;
+  }
+  f.group.rotation.y = Math.PI - a + twirl;
+
   // Sway hips + torso — small Z rotation on the whole figure.
   const sway = Math.sin(t * 2.5 + f.phase) * 0.10;
   f.group.rotation.z = sway;
-  // Arm sway — the overhead arms tilt L/R together so it reads as one
-  // continuous gesture.
+
+  // Arms above head, swaying together. Base pose is set at build time
+  // (shoulder.rotation.z = sx * 2.2). Animation adds a unified L/R tilt
+  // that follows the body sway — both arms drift the same direction so it
+  // reads as one continuous gesture, not flapping.
   for (const arm of f.armRefs) {
-    arm.shoulder.rotation.z = arm.side * -0.5 + sway * 0.6;
+    arm.shoulder.rotation.z = arm.side * 2.2 + sway * 0.3;
+    arm.shoulder.rotation.x = 0.15 + sway * 0.10;
   }
   // Hair sway — slight rotation around X opposite the body sway.
   if (f.hairGroup) f.hairGroup.rotation.z = -sway * 0.8;

@@ -449,7 +449,10 @@ function populateDrumCircle(rng, dc, forest, facingAngle) {
       const a = benchCentre - Math.PI / 2 + t * Math.PI;
       const drummer = buildHandDrummer(rng);
       drummer.group.position.set(Math.cos(a) * r, 0, Math.sin(a) * r);
-      drummer.group.rotation.y = -a + Math.PI;  // face the fire
+      // Face the fire — figure's local -Z must point at origin (0,0,0).
+      // Derivation: world-forward = (-sin(θ), 0, -cos(θ)); inward from
+      // (cos(a), sin(a)) is (-cos(a), -sin(a)); → θ = π/2 - a.
+      drummer.group.rotation.y = Math.PI / 2 - a;
       dc.group.add(drummer.group);
       figures.push(drummer);
     }

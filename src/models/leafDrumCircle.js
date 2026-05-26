@@ -47,7 +47,29 @@ const FIRE_BASE_RADIUS = 1.0;
 const BENCH_RADII = [5.5, 6.5, 7.5];
 const BENCH_LOG_LEN = 1.4;
 const BENCH_LOG_R = 0.22;
-const BENCH_Y = 0.35;
+const BENCH_Y = 0.40;
+
+// Half-log geometry — a half-cylinder with flat top + rounded bottom.
+// Earlier the benches were full hexagonal cylinders which read like raw
+// fence posts laid sideways. Gary wanted the silhouette of a log split in
+// half (think a sit-able bench), flat side up. Built once at module load
+// and shared by every bench segment so the GPU only stores it once.
+const _halfLogShape = (() => {
+  const s = new THREE.Shape();
+  s.moveTo(-BENCH_LOG_R, 0);
+  s.lineTo(BENCH_LOG_R, 0);
+  // absarc(centerX, centerY, radius, startAngle, endAngle, clockwise)
+  s.absarc(0, 0, BENCH_LOG_R, 0, -Math.PI, true);
+  return s;
+})();
+const _halfLogGeo = new THREE.ExtrudeGeometry(_halfLogShape, {
+  depth: BENCH_LOG_LEN,
+  bevelEnabled: false,
+  curveSegments: 5,
+});
+// Centre the geometry on its midpoint so log.position is the centre of the
+// log (matches how the placement loop expects coords).
+_halfLogGeo.translate(0, 0, -BENCH_LOG_LEN / 2);
 
 // Build the assembly. `facingAngle` is the world angle (radians, atan2-style)
 // pointing FROM the fire toward the path entry. The bench semicircle opens
@@ -188,19 +210,12 @@ export function buildLeafDrumCircle(rng = Math.random, opts = {}) {
       const cx = Math.cos(a) * r;
       const cz = Math.sin(a) * r;
 
-      const log = new THREE.Mesh(
-        new THREE.CylinderGeometry(BENCH_LOG_R, BENCH_LOG_R, BENCH_LOG_LEN, 6),
-        BENCH_LOG_MAT,
-      );
+      // Half-log: ExtrudeGeometry already lays the log along Z with flat
+      // top up. Just rotate around Y to align the long axis with the
+      // bench arc's tangent at this point.
+      const log = new THREE.Mesh(_halfLogGeo, BENCH_LOG_MAT);
       log.position.set(cx, BENCH_Y, cz);
-      // Lay the cylinder horizontal: rotate around X by π/2 → long axis = Z
-      // Then rotate around Y so the log is tangent to the arc.
-      // Tangent direction at angle a is (-sin a, 0, cos a); angle from +Z is -a.
-      log.rotation.order = 'YXZ';
-      log.rotation.y = -a;
-      log.rotation.x = Math.PI / 2;
-      // Tiny stagger so the row doesn't read as a single extruded ring
-      log.rotation.y += (Math.sin(i * 7.3 + ring) * 0.06);
+      log.rotation.y = -a + (Math.sin(i * 7.3 + ring) * 0.06);
       log.castShadow = true;
       group.add(log);
 

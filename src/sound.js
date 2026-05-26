@@ -18,6 +18,17 @@ let musicBus = null;     // shared bus for stage music sources (so we can balanc
 let sfxBus = null;       // shared bus for all SFX (engine, collisions, honks, bumps)
 let engineNodes = null;
 let initialized = false;
+let silentUnlockEl = null;   // HTMLAudioElement kept alive to hold the iOS "Playback" audio session
+
+// 44-byte valid silent WAV (1 channel, 22050Hz, 8-bit PCM, zero samples).
+// iOS Safari routes WebAudio through the "Ambient" audio session by default,
+// which respects the hardware silent switch. Once *any* HTMLMediaElement has
+// successfully started playback inside a user gesture, the whole page is
+// promoted to the "Playback" session and WebAudio plays through the
+// loudspeaker regardless of the side mute switch. This data URL is that
+// element's source — small enough to inline, valid enough to actually start.
+const SILENT_WAV_DATA_URI =
+  'data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEAIlYAACJWAAABAAgAZGF0YQAAAAA=';
 
 // Global nightness (0..1) — set each frame by main.js via Sound.setNightness.
 // The forest drum engine reads this every scheduler tick to gate voices in,
@@ -67,6 +78,34 @@ export const Sound = {
     engineNodes = createEngine(ctx, sfxBus);
     initialized = true;
 
+    // iOS unlock #1: route the page through the "Playback" audio session so
+    // WebAudio bypasses the silent switch. Must happen inside the same user
+    // gesture that called init(). The element is kept alive on `silentUnlockEl`
+    // so iOS doesn't GC the session out from under us.
+    try {
+      const el = document.createElement('audio');
+      el.setAttribute('playsinline', '');
+      el.setAttribute('webkit-playsinline', '');
+      el.preload = 'auto';
+      el.loop = true;
+      el.src = SILENT_WAV_DATA_URI;
+      // play() returns a Promise on modern browsers; ignore rejection so a
+      // failed unlock doesn't kill the rest of init.
+      const p = el.play();
+      if (p && typeof p.catch === 'function') p.catch(() => {});
+      silentUnlockEl = el;
+    } catch (e) { /* HTMLAudioElement unavailable — soldier on */ }
+
+    // iOS unlock #2: AudioContexts created on iOS start in 'suspended' state
+    // even when constructed inside a user gesture. resume() must be called
+    // synchronously in that same gesture to actually unlock the graph. Without
+    // this, every oscillator/buffer source feeds into a stopped clock and
+    // produces silence — which is exactly the "no sound on iOS, ever" symptom.
+    if (ctx.state === 'suspended') {
+      const p = ctx.resume();
+      if (p && typeof p.catch === 'function') p.catch(() => {});
+    }
+
     // Drain any stage music attachments that were queued during world boot.
     const queued = _pendingStages.splice(0);
     for (const q of queued) {
@@ -85,6 +124,13 @@ export const Sound = {
       // Some iOS versions reject resume() outside a user gesture; the call is
       // best-effort and harmless if it throws.
       ctx.resume().catch(() => {});
+    }
+    // iOS may also pause the silent-unlock element when the tab backgrounds,
+    // which can drop the page back to the Ambient audio session and re-mute
+    // WebAudio behind the silent switch. Nudge it back to playing.
+    if (silentUnlockEl && silentUnlockEl.paused) {
+      const p = silentUnlockEl.play();
+      if (p && typeof p.catch === 'function') p.catch(() => {});
     }
   },
 

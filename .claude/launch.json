@@ -6,6 +6,12 @@
       "runtimeExecutable": "python3",
       "runtimeArgs": [".claude/serve_nocache.py", "8765"],
       "port": 8765
+    },
+    {
+      "name": "zerble-verify",
+      "runtimeExecutable": "python3",
+      "runtimeArgs": [".claude/serve_nocache.py", "8766"],
+      "port": 8766
     }
   ]
 }

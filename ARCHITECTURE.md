@@ -199,7 +199,7 @@ A pool of stateful NPCs spawned by chunks.
 Anthropomorphic golf cart. ~950 lines of geometry + physics.
 
 - Arcade driving: throttle/brake/turn/drag/boost. `MAX_SPEED = 18 m/s`, `BOOST_MULT = 1.55`, `TURN_RATE = 2.1 rad/s`.
-- Visible parts: red body, gold roof, blue seat, glowing cyan eyes, purple mustache, 6 wheels.
+- Visible parts: red body, gold roof, blue seat, glowing cyan eyes, purple mustache, four wheels.
 - Eye glow ramps with `nightness` and can be hand-tuned with `I` / `O`.
 - World-bounded by `WORLD_BOUND = 230` so the player can't outrun the festival's "feel."
 - `applyHit(pushDir)` adds an invulnerability window and a knockback impulse.

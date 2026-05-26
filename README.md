@@ -2,21 +2,15 @@
 
 > A bubble adventure.
 
-Drive a smiling, mustachioed golf cart through a procedural festival. Trail bubbles past dancing crowds, drum circles, food trucks, brass bands, and giant puppet parades. Collect smiles. Don't run over the kids.
+<p align="center">
+  <img src="assets/zerble.png" alt="Zerble — a red four-wheeled cart with a pink roof, a giant purple curly mustache, big blue googly eyes, and a trail of bubbles" width="420" />
+</p>
 
-```
-   ____  _ _   _              _
-  |__  /| | | | |            | |
-    / / | | |_| |__   ___    | |__   __ _ ___
-   / /  | |  _  |/ _ \   _   | '_ \ / _` / __|
-  / /___| | | | |  __/  (_)  | |_) | (_| \__ \
- /_____/|_|_| |_|\___|       |_.__/ \__,_|___/   ZERBLE
-                                                     at FESTIVAL
-```
+Drive a smiling, mustachioed golf cart through a procedural festival. Trail bubbles past dancing crowds, drum circles, food trucks, brass bands, and giant puppet parades. Collect smiles. Don't run over the kids.
 
 ## Premise
 
-You are Zerble — a 6-wheeled, glow-eyed festival cart with bubble-blowing breath. The festival sprawls procedurally in every direction: main stage at the origin, side stages, vendor rows, food plazas, drum circles, hammock groves, lakes, forests, and mountains on the horizon.
+You are Zerble — a glow-eyed festival cart with bubble-blowing breath and the world's biggest mustache. The festival sprawls procedurally in every direction: main stage at the origin, side stages, vendor rows, food plazas, drum circles, hammock groves, lakes, forests, and mountains on the horizon.
 
 The crowd is watching. Glide past them. Let your bubbles drift. They will smile — and smiles fly to you like tiny suns.
 

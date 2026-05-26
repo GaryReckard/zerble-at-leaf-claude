@@ -26,6 +26,7 @@ let groundMesh = null;
 let mountainsGroup = null;
 let skyMesh = null;
 let starsMesh = null;
+let moonMesh = null;
 let sun = null;
 let hemi = null;
 let ambient = null;
@@ -40,6 +41,7 @@ export function buildWorld(scene, crowd) {
   _scene = scene;
   skyMesh = buildSky(scene);
   starsMesh = buildStars(scene);
+  moonMesh = buildMoon(scene);
   const lights = buildLightsAndFog(scene);
   sun = lights.sun;
   hemi = lights.hemi;
@@ -89,6 +91,25 @@ export function updateWorld(playerPos, dt = 0.016) {
     starsMesh.material.uniforms.nightness.value = n;
     starsMesh.material.uniforms.time.value += dt;
     starsMesh.visible = n > 0.05;   // hard-skip the draw at full daylight
+  }
+  if (moonMesh && timeOfDay) {
+    // Moon arcs through the sky during the night phase (t in 0.55..0.95),
+    // east → overhead → west, parallel to how the sun behaves during the day.
+    // Hidden during the day so it doesn't compete with the sun.
+    const t = timeOfDay.t;
+    const nightPhase = t > 0.55 && t < 0.95;
+    if (nightPhase) {
+      const moonArc = (t - 0.55) * Math.PI / 0.40;
+      const moonDist = 850;
+      // Same east → west sweep as the sun, parametric on moonArc instead of arcAng
+      const mx = Math.cos(moonArc) * moonDist * 0.55;     // 55% of sky radius
+      const my = Math.max(40, Math.sin(moonArc) * moonDist * 0.55);
+      const mz = -moonDist * 0.45;                         // opposite of sun's z=60 → opposite half of sky
+      moonMesh.position.set(playerPos.x + mx, my, playerPos.z + mz);
+      moonMesh.visible = true;
+    } else {
+      moonMesh.visible = false;
+    }
   }
   if (groundMesh) {
     groundMesh.position.set(playerPos.x, 0, playerPos.z);
@@ -262,6 +283,60 @@ function buildStars(scene) {
   stars.renderOrder = -1;   // draw early — keeps additive blend out of crowd of bubbles
   scene.add(stars);
   return stars;
+}
+
+// Moon — visible sphere mesh that orbits the night sky in parallel to the
+// sun's day arc. Slightly emissive so it glows against the dark sky, with a
+// subtler "highlight + shadow" feel from a secondary darker patch on one
+// side. Not a light source — the hemisphere/sun handle world illumination.
+function buildMoon(scene) {
+  const group = new THREE.Group();
+  group.name = 'moon';
+
+  // Main moon body — pale cream, slight emissive so it pops against the
+  // night sky. Big enough to read from anywhere in the world (radius 14 at
+  // sky distance ~850 subtends ~1° — about real-moon size).
+  const moon = new THREE.Mesh(
+    new THREE.IcosahedronGeometry(14, 2),
+    new THREE.MeshBasicMaterial({
+      color: 0xfaf2dc,
+      // MeshBasicMaterial ignores lighting — exactly what we want for a
+      // self-luminous moon. The MeshStandardMaterial sun wouldn't light it
+      // anyway since they're both above the horizon together (well, never;
+      // moon only when sun is down — but still cleaner this way).
+    }),
+  );
+  group.add(moon);
+
+  // Slightly darker patch offset to one side — gives the moon a subtle
+  // "mare" / phase hint without going full lunar map. Small icosphere
+  // overlapping the front face of the main sphere.
+  const mare = new THREE.Mesh(
+    new THREE.IcosahedronGeometry(11, 2),
+    new THREE.MeshBasicMaterial({ color: 0xc8b89a }),
+  );
+  mare.position.set(2.5, 1.5, 4);
+  mare.scale.set(0.65, 0.55, 0.45);
+  group.add(mare);
+
+  // Soft halo — a larger faintly-emissive sphere with additive blending so it
+  // looks like the moon has a gentle glow around it.
+  const halo = new THREE.Mesh(
+    new THREE.IcosahedronGeometry(22, 1),
+    new THREE.MeshBasicMaterial({
+      color: 0xb8c4e0,
+      transparent: true,
+      opacity: 0.22,
+      blending: THREE.AdditiveBlending,
+      depthWrite: false,
+    }),
+  );
+  group.add(halo);
+
+  group.renderOrder = 0;  // after stars (-1), before bubbles
+  group.visible = false;  // updateWorld toggles based on night phase
+  scene.add(group);
+  return group;
 }
 
 function buildLightsAndFog(scene) {

@@ -150,17 +150,26 @@ export class TimeOfDay {
       this.sky.material.uniforms.bottomColor.value.copy(bottom);
     }
 
-    // Sun direction + color + intensity
+    // Sun direction + color + intensity.
+    //
+    // Earlier formula used sin(arcAng) for X, which is symmetric around noon —
+    // dawn (arcAng=0) → x=0, noon (arcAng=π/2) → x=90, dusk (arcAng=π) → x=0.
+    // So morning and afternoon shadows landed in the SAME place. Gary caught
+    // that the slider showed identical shadow behaviour going forward or
+    // backward from noon. New formula uses cos(arcAng) for X so the sun
+    // actually traverses east → overhead → west across the day:
+    //   dawn  (arcAng=0)   → x=+90 (east), y=0  (horizon)
+    //   noon  (arcAng=π/2) → x=0,   y=+130 (overhead)
+    //   dusk  (arcAng=π)   → x=-90 (west), y=0  (horizon)
     if (this.sun) {
-      const ang = (this.t - 0.07) * Math.PI / 0.36;     // arc from dawn to dusk
-      // During day, the sun arcs from east (-x) through up (+y) to west (+x).
-      // At night we lower it below horizon so shadows go away naturally.
       const dayPhase = this.t > 0.07 && this.t < 0.43;
-      const arcAng = dayPhase ? ang : 0;
+      const arcAng = dayPhase ? (this.t - 0.07) * Math.PI / 0.36 : 0;
       const sunDist = 130;
-      const x = Math.cos(arcAng - Math.PI / 2) * 90;
-      const y = dayPhase ? Math.max(20, Math.sin(arcAng) * sunDist) : -5;
-      const z = 60;
+      const x = dayPhase ? Math.cos(arcAng) * 90 : 90;
+      // Clamp y to a small positive minimum during day so the shadow camera
+      // doesn't snap to bizarre angles when the sun's right at the horizon.
+      const y = dayPhase ? Math.max(15, Math.sin(arcAng) * sunDist) : -40;
+      const z = 60;   // slight north tilt — gives the sun a "southern sky" arc
       this.sun.position.set(x, y, z);
 
       const c = _tmpColorA;

@@ -703,10 +703,10 @@ function buildTentStageTheme(ctx) {
 }
 
 function buildFoodPlaza(ctx) {
-  // 5-7 food trucks arranged around a central area (was 3-5). Trucks are
-  // scaled up visually (FOOD_TRUCK_SCALE) — push the ring outward + scale
-  // colliders to match so we don't end up parked-on-truck-roof.
-  const count = 5 + Math.floor(ctx.rng() * 3);
+  // 3-5 food trucks arranged around a central area. Trucks are scaled up
+  // visually (FOOD_TRUCK_SCALE) — push the ring outward + scale colliders to
+  // match so we don't end up parked-on-truck-roof.
+  const count = 3 + Math.floor(ctx.rng() * 3);
   const centerX = ctx.cxWorld;
   const centerZ = ctx.czWorld;
   const ring = 14 * FOOD_TRUCK_SCALE;
@@ -734,9 +734,8 @@ function buildVendorRow(ctx) {
   // Two parallel rows of tents along one axis. Tent canopies are ~3.2m
   // radius; tight spacing (~5m) keeps adjacent canopies nearly touching so
   // the row reads as a real market stall lineup, not isolated tents.
-  // Bumped from 5-7 to 7-9 per side to keep pace with forest density.
   const axisH = ctx.rng() < 0.5;
-  const count = 7 + Math.floor(ctx.rng() * 3);
+  const count = 5 + Math.floor(ctx.rng() * 3);
   const spacing = 5.0;
   const rowOffset = 7;
   for (let i = 0; i < count; i++) {
@@ -828,8 +827,9 @@ function buildGrove(ctx) {
     buildHammock(ctx, x, z);
   }
   // Sprinkle a small campsite in some groves — feels like festival-goers
-  // pitched tents under the trees.
-  scatterChunkCampsites(ctx, { chance: 0.5, max: 2 });
+  // pitched tents under the trees. ~20% of those become a tight clump
+  // ("group of friends camping together") instead of scattered.
+  scatterChunkCampsites(ctx, { chance: 0.5, max: 2, clumpChance: 0.20 });
 }
 
 function buildOpenLawn(ctx) {
@@ -861,8 +861,10 @@ function buildOpenLawn(ctx) {
       chunkKey: ctx.key,
     });
   }
-  // Open lawns are prime camping ground — most of them get a tent or two.
-  scatterChunkCampsites(ctx, { chance: 0.65, max: 2 });
+  // Open lawns are prime camping ground — most of them get a tent or two,
+  // and ~30% upgrade to a tight 3-6 site clump (a "campground patch" out
+  // in the open festival grass).
+  scatterChunkCampsites(ctx, { chance: 0.65, max: 2, clumpChance: 0.30 });
 }
 
 // ---------- Festival-ground campsite scatter ----------
@@ -875,42 +877,98 @@ function buildOpenLawn(ctx) {
 // and near any registered building/stage/lake. Animatables (firepit + torch
 // flicker) reuse the forestAnimatables list — naming aside, it's a generic
 // "chunk-bound campsite animatables" sink.
-function scatterChunkCampsites(ctx, { chance = 0.5, max = 2 } = {}) {
+function scatterChunkCampsites(ctx, { chance = 0.5, max = 2, clumpChance = 0 } = {}) {
   if (ctx.rng() > chance) return;
-  const count = 1 + Math.floor(ctx.rng() * max);
+  // Roll for clump mode: 3-6 campsites tightly bunched around a single point
+  // rather than scattered across the whole chunk. Reads as "a group of
+  // friends pitched camp together" — a real campground vignette in the open
+  // festival, not just isolated tents.
+  const clump = clumpChance > 0 && ctx.rng() < clumpChance;
+  if (clump) {
+    placeCampsiteClump(ctx);
+  } else {
+    placeScatteredCampsites(ctx, 1 + Math.floor(ctx.rng() * max));
+  }
+}
+
+function placeScatteredCampsites(ctx, count) {
   for (let i = 0; i < count; i++) {
-    // Stay off the path strip — paths run along chunk-grid midlines, so any
-    // position within ±4m of either axis is on a path.
     let chosen = null;
     for (let attempt = 0; attempt < 10; attempt++) {
       const x = ctx.cxWorld + (ctx.rng() - 0.5) * (CHUNK_SIZE * 0.7);
       const z = ctx.czWorld + (ctx.rng() - 0.5) * (CHUNK_SIZE * 0.7);
+      // Stay off the chunk-grid path strip
       if (Math.abs(x - ctx.cxWorld) < 6 || Math.abs(z - ctx.czWorld) < 6) continue;
-      // Bail if any registered building is within 4m — keeps tents from
-      // jamming into stages, food trucks, etc.
       if (registry.closestBuilding(new THREE.Vector3(x, 0, z), 4)) continue;
       chosen = { x, z };
       break;
     }
     if (!chosen) continue;
-
-    const camp = buildCampsite(ctx.rng, 'small');
-    camp.group.position.set(chosen.x, 0, chosen.z);
-    camp.group.rotation.y = ctx.rng() * Math.PI * 2;
-    ctx.group.add(camp.group);
-
-    if (camp.animatables && camp.animatables.length > 0) {
-      forestAnimatables.push({ chunkKey: ctx.key, animatables: camp.animatables });
-    }
-
-    registry.add({
-      kind: 'campsite',
-      position: new THREE.Vector3(chosen.x, 0, chosen.z),
-      footprint: camp.footprint,
-      attractor: { radius: 4, weight: 0.5 },
-      chunkKey: ctx.key,
-    });
+    placeSingleCampsite(ctx, chosen.x, chosen.z);
   }
+}
+
+// Place a tight cluster of 3-6 campsites around a single picked centre.
+// Sites are arranged on a small ring (radius 6-9m) with random angle so
+// they read as a cohesive group rather than a strict circle. Min 5m
+// between sites to keep props from overlapping.
+function placeCampsiteClump(ctx) {
+  // Pick a clump centre off the path strip + clear of buildings.
+  let centre = null;
+  for (let attempt = 0; attempt < 14; attempt++) {
+    const cx = ctx.cxWorld + (ctx.rng() - 0.5) * (CHUNK_SIZE * 0.55);
+    const cz = ctx.czWorld + (ctx.rng() - 0.5) * (CHUNK_SIZE * 0.55);
+    if (Math.abs(cx - ctx.cxWorld) < 12 || Math.abs(cz - ctx.czWorld) < 12) continue;
+    if (registry.closestBuilding(new THREE.Vector3(cx, 0, cz), 14)) continue;
+    centre = { x: cx, z: cz };
+    break;
+  }
+  if (!centre) return;
+
+  const siteCount = 3 + Math.floor(ctx.rng() * 4);   // 3-6 sites
+  const placed = [];
+  const MIN_SPACING = 5;
+  for (let i = 0; i < siteCount; i++) {
+    let chosen = null;
+    for (let attempt = 0; attempt < 8; attempt++) {
+      const a = ctx.rng() * Math.PI * 2;
+      const r = 4 + ctx.rng() * 6;
+      const x = centre.x + Math.cos(a) * r;
+      const z = centre.z + Math.sin(a) * r;
+      // Spacing check vs prior placements
+      let tooClose = false;
+      for (let j = 0; j < placed.length; j++) {
+        const dx = placed[j].x - x, dz = placed[j].z - z;
+        if (dx * dx + dz * dz < MIN_SPACING * MIN_SPACING) { tooClose = true; break; }
+      }
+      if (tooClose) continue;
+      if (registry.closestBuilding(new THREE.Vector3(x, 0, z), 3)) continue;
+      chosen = { x, z };
+      break;
+    }
+    if (!chosen) continue;
+    placeSingleCampsite(ctx, chosen.x, chosen.z);
+    placed.push(chosen);
+  }
+}
+
+function placeSingleCampsite(ctx, x, z) {
+  const camp = buildCampsite(ctx.rng, 'small');
+  camp.group.position.set(x, 0, z);
+  camp.group.rotation.y = ctx.rng() * Math.PI * 2;
+  ctx.group.add(camp.group);
+
+  if (camp.animatables && camp.animatables.length > 0) {
+    forestAnimatables.push({ chunkKey: ctx.key, animatables: camp.animatables });
+  }
+
+  registry.add({
+    kind: 'campsite',
+    position: new THREE.Vector3(x, 0, z),
+    footprint: camp.footprint,
+    attractor: { radius: 4, weight: 0.5 },
+    chunkKey: ctx.key,
+  });
 }
 
 

@@ -24,32 +24,37 @@ const SKY_TOP_DAY     = new THREE.Color(0x6fb6e8);
 const SKY_BOTTOM_DAY  = new THREE.Color(0xffd0a8);
 const SKY_TOP_DUSK    = new THREE.Color(0x3a2e6a);
 const SKY_BOTTOM_DUSK = new THREE.Color(0xff7a4e);
-const SKY_TOP_NIGHT   = new THREE.Color(0x0a0a28);
-const SKY_BOTTOM_NIGHT= new THREE.Color(0x191638);
+// Night colors lifted slightly from the original 0x0a0a28 / 0x191638 set —
+// Gary asked for "a wee bit less dark", so the sky reads as moonlit deep
+// blue rather than ink, and the ground hemisphere brightens enough that
+// you can still see grass without the headlight on.
+const SKY_TOP_NIGHT   = new THREE.Color(0x121540);
+const SKY_BOTTOM_NIGHT= new THREE.Color(0x232148);
 
 const SUN_DAY    = new THREE.Color(0xffe1b0);
 const SUN_DUSK   = new THREE.Color(0xff7a3e);
-const MOON_NIGHT = new THREE.Color(0x8aa6d8);
+const MOON_NIGHT = new THREE.Color(0xa6bcdf);
 
 const FOG_DAY   = new THREE.Color(0xffcfae);
 const FOG_DUSK  = new THREE.Color(0xb86a5a);
-const FOG_NIGHT = new THREE.Color(0x1a1638);
+const FOG_NIGHT = new THREE.Color(0x232048);
 
 // Hemisphere light colors. Sky color blends through dawn/dusk/night,
 // ground color stays warmer to keep grass readable at night.
 const HEMI_SKY_DAY   = new THREE.Color(0xa9d6ff);
-const HEMI_SKY_NIGHT = new THREE.Color(0x2a3580);
+const HEMI_SKY_NIGHT = new THREE.Color(0x3a4598);
 const HEMI_GROUND_DAY   = new THREE.Color(0xc89265);
-const HEMI_GROUND_NIGHT = new THREE.Color(0x2a1a30);
+const HEMI_GROUND_NIGHT = new THREE.Color(0x3c2a44);
 
-// Sun intensities — direct light fades to ~zero at night; the moon is a
-// dim cool fill to keep silhouettes visible.
+// Sun (moon) + hemi + ambient intensities at night — bumped a touch so
+// the cart, paths, and figures don't disappear into pure black between
+// fire pools.
 const SUN_INTENSITY_DAY = 1.35;
-const SUN_INTENSITY_NIGHT = 0.08;
+const SUN_INTENSITY_NIGHT = 0.18;
 const HEMI_INTENSITY_DAY = 0.75;
-const HEMI_INTENSITY_NIGHT = 0.35;
+const HEMI_INTENSITY_NIGHT = 0.55;
 const AMBIENT_INTENSITY_DAY = 0.15;
-const AMBIENT_INTENSITY_NIGHT = 0.10;
+const AMBIENT_INTENSITY_NIGHT = 0.18;
 
 // Smoothstep helper — saturating interpolation between two thresholds.
 function smoothstep(a, b, x) {

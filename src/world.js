@@ -25,6 +25,7 @@ let lakeManager = null;
 let groundMesh = null;
 let mountainsGroup = null;
 let skyMesh = null;
+let starsMesh = null;
 let sun = null;
 let hemi = null;
 let ambient = null;
@@ -38,6 +39,7 @@ export function getTimeOfDay() {
 export function buildWorld(scene, crowd) {
   _scene = scene;
   skyMesh = buildSky(scene);
+  starsMesh = buildStars(scene);
   const lights = buildLightsAndFog(scene);
   sun = lights.sun;
   hemi = lights.hemi;
@@ -79,6 +81,15 @@ export function updateWorld(playerPos, dt = 0.016) {
   // so the world feels infinite — chunks at fixed world coords slide past,
   // but the backdrops always look the same distance away.
   if (skyMesh) skyMesh.position.set(playerPos.x, 0, playerPos.z);
+  if (starsMesh) {
+    starsMesh.position.set(playerPos.x, 0, playerPos.z);
+    // Drive the star shader's nightness uniform so they fade in at dusk and
+    // disappear at dawn. Also push current time for the twinkle wobble.
+    const n = timeOfDay ? timeOfDay.nightness : 0;
+    starsMesh.material.uniforms.nightness.value = n;
+    starsMesh.material.uniforms.time.value += dt;
+    starsMesh.visible = n > 0.05;   // hard-skip the draw at full daylight
+  }
   if (groundMesh) {
     groundMesh.position.set(playerPos.x, 0, playerPos.z);
     // Re-sample terrain heights using WORLD coords so hills stay put as the
@@ -158,6 +169,99 @@ function buildSky(scene) {
   const sky = new THREE.Mesh(skyGeo, skyMat);
   scene.add(sky);
   return sky;
+}
+
+// Starfield — 1200 points scattered across the upper hemisphere of a sphere
+// just inside the sky dome. Each star gets a random size, a randomized colour
+// (mostly white, with a sprinkle of warm + cool tints), and an independent
+// twinkle phase so the field shimmers rather than blinking uniformly.
+//
+// Driven entirely by a custom ShaderMaterial — uses gl_PointSize for per-star
+// scale and AdditiveBlending so they glow against the dark sky. nightness
+// uniform fades them in/out as the day cycles.
+function buildStars(scene) {
+  const STAR_COUNT = 1200;
+  const geo = new THREE.BufferGeometry();
+  const positions = new Float32Array(STAR_COUNT * 3);
+  const sizes = new Float32Array(STAR_COUNT);
+  const colors = new Float32Array(STAR_COUNT * 3);
+
+  for (let i = 0; i < STAR_COUNT; i++) {
+    // Upper hemisphere distribution: phi all the way around, theta only the
+    // top ~80° (some stars near the horizon, none below).
+    const phi = Math.random() * Math.PI * 2;
+    const theta = Math.acos(Math.random() * 0.95);  // 0..~78° from straight-up
+    const r = 850;                                    // just inside sky radius 900
+    positions[i * 3]     = r * Math.sin(theta) * Math.cos(phi);
+    positions[i * 3 + 1] = r * Math.cos(theta);
+    positions[i * 3 + 2] = r * Math.sin(theta) * Math.sin(phi);
+
+    // Size — pow(rand, 4) biases toward small with a few bright "named star"
+    // outliers. Range roughly 1.0..5.5 device-pixel units.
+    sizes[i] = 1.0 + Math.pow(Math.random(), 4) * 4.5;
+
+    // Colour — 70% white, 15% blue-white, 10% yellow-white, 5% orange-white.
+    const cp = Math.random();
+    let r0, g0, b0;
+    if      (cp < 0.70) { r0 = 1.00; g0 = 1.00; b0 = 1.00; }
+    else if (cp < 0.85) { r0 = 0.85; g0 = 0.92; b0 = 1.00; }
+    else if (cp < 0.95) { r0 = 1.00; g0 = 0.95; b0 = 0.85; }
+    else                { r0 = 1.00; g0 = 0.85; b0 = 0.72; }
+    colors[i * 3]     = r0;
+    colors[i * 3 + 1] = g0;
+    colors[i * 3 + 2] = b0;
+  }
+  geo.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+  geo.setAttribute('size',     new THREE.BufferAttribute(sizes, 1));
+  geo.setAttribute('color',    new THREE.BufferAttribute(colors, 3));
+
+  const mat = new THREE.ShaderMaterial({
+    uniforms: {
+      nightness: { value: 0 },
+      time:      { value: 0 },
+      pixelRatio:{ value: Math.min(window.devicePixelRatio || 1, 2) },
+    },
+    vertexShader: /* glsl */ `
+      attribute float size;
+      attribute vec3 color;
+      varying vec3 vColor;
+      varying float vTwinkle;
+      uniform float time;
+      uniform float pixelRatio;
+      void main() {
+        vColor = color;
+        // Per-star twinkle phase from position — deterministic, unique per star.
+        float phase = position.x * 0.013 + position.z * 0.019 + position.y * 0.007;
+        vTwinkle = 0.65 + 0.35 * sin(time * 1.6 + phase);
+        vec4 mv = modelViewMatrix * vec4(position, 1.0);
+        gl_PointSize = size * pixelRatio;
+        gl_Position = projectionMatrix * mv;
+      }
+    `,
+    fragmentShader: /* glsl */ `
+      uniform float nightness;
+      varying vec3 vColor;
+      varying float vTwinkle;
+      void main() {
+        // Soft round splat — alpha falls off from center to edge.
+        vec2 uv = gl_PointCoord - vec2(0.5);
+        float d = length(uv);
+        if (d > 0.5) discard;
+        float falloff = smoothstep(0.5, 0.0, d);
+        float alpha = falloff * nightness * vTwinkle;
+        gl_FragColor = vec4(vColor * vTwinkle, alpha);
+      }
+    `,
+    transparent: true,
+    depthWrite: false,
+    depthTest: true,
+    blending: THREE.AdditiveBlending,
+  });
+
+  const stars = new THREE.Points(geo, mat);
+  stars.renderOrder = -1;   // draw early — keeps additive blend out of crowd of bubbles
+  scene.add(stars);
+  return stars;
 }
 
 function buildLightsAndFog(scene) {

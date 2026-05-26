@@ -45,6 +45,10 @@ const TABLE = {
     crowdMax: 180,
     chunkLoadRadius: 1,
     chunkUnloadRadius: 2,
+    // contextLights = optional proxy PointLights at firepits / drum-circle
+    // pits / etc., one per cluster. Off on low so emissive + bloom carry the
+    // load without paying the per-fragment lighting cost on slow GPUs.
+    contextLights: false,
   },
   mid: {
     name: 'mid',
@@ -58,6 +62,7 @@ const TABLE = {
     crowdMax: 320,
     chunkLoadRadius: 2,
     chunkUnloadRadius: 3,
+    contextLights: true,
   },
   high: {
     name: 'high',
@@ -71,6 +76,7 @@ const TABLE = {
     crowdMax: 500,
     chunkLoadRadius: 2,
     chunkUnloadRadius: 3,
+    contextLights: true,
   },
 };
 

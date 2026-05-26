@@ -84,6 +84,7 @@
         <option value="hammock_with_npc">Hammock + person (lounging)</option>
         <option value="tent">Vendor tent</option>
         <option value="food_truck">Food truck</option>
+<option value="sugar_shack">Sugar Shack</option>
         <option value="tree">Tree</option>
         <option value="entrance_arch">Entrance arch</option>
         <option value="stage_main">Main stage (with band)</option>
@@ -152,6 +153,22 @@
       <kbd>1</kbd>–<kbd>6</kbd> snap to angles · <kbd>R</kbd> reset · <kbd>L</kbd> toggle ground
     </div>
 
+    <!-- Time-of-day panel — slider + preset buttons that drive the local
+         TimeOfDay so sandbox tests can see how a model looks at any hour
+         without bouncing back to the game. Mirrors the in-game ToD block
+         that used to live in the backtick debug menu. -->
+    <div class="tod-panel" style="margin-top:8px;border-top:1px solid #2a4a5a;padding-top:6px">
+      <div style="opacity:0.7;margin-bottom:4px">Time of day <span id="tod-readout" style="float:right;opacity:0.7"></span></div>
+      <input id="tod-slider" type="range" min="0" max="1" step="0.001" value="0.15"
+        style="width:100%;accent-color:#ffe066;cursor:pointer">
+      <div style="display:flex;gap:4px;margin-top:6px">
+        <button data-t="0.10" class="tod-preset" style="flex:1;font:inherit;padding:3px 4px;cursor:pointer;background:rgba(255,224,102,0.15);color:inherit;border:1px solid rgba(255,224,102,0.4);border-radius:4px">Morning</button>
+        <button data-t="0.30" class="tod-preset" style="flex:1;font:inherit;padding:3px 4px;cursor:pointer;background:rgba(255,224,102,0.15);color:inherit;border:1px solid rgba(255,224,102,0.4);border-radius:4px">Noon</button>
+        <button data-t="0.50" class="tod-preset" style="flex:1;font:inherit;padding:3px 4px;cursor:pointer;background:rgba(255,224,102,0.15);color:inherit;border:1px solid rgba(255,224,102,0.4);border-radius:4px">Dusk</button>
+        <button data-t="0.75" class="tod-preset" style="flex:1;font:inherit;padding:3px 4px;cursor:pointer;background:rgba(255,224,102,0.15);color:inherit;border:1px solid rgba(255,224,102,0.4);border-radius:4px">Midnight</button>
+      </div>
+    </div>
+
     <!-- Audio panel — mirrors the in-game ` debug menu volume sliders so a
          sandbox-only tester can balance mix without bouncing back to the game.
          Sound.init() runs on the first interaction with the page. -->
@@ -179,7 +196,6 @@
   <script type="module">
     import * as THREE from 'three';
     import { Sound } from './src/sound.js';
-    import { installDebug } from './src/debug.js';
     import { TimeOfDay } from './src/timeOfDay.js';
     import { Zerble } from './src/zerble.js';
     import { Lurleen, createHeartGeometry } from './src/lurleen.js';
@@ -190,6 +206,7 @@
 import { mulberry32 } from './src/rng.js';
     import { buildTent } from './src/models/tent.js';
     import { buildFoodTruck } from './src/models/foodTruck.js';
+import { buildSugarShack } from './src/models/sugarShack.js';
     import { buildTree } from './src/models/tree.js';
     import { buildEntranceArch } from './src/models/entranceArch.js';
     import { leafBannerTextures } from './src/models/leafBanner.js';
@@ -629,6 +646,16 @@ import { mulberry32 } from './src/rng.js';
           entityRoot = g;
           cam.target.set(0, 2, 0);
           cam.dist = 14;
+          applyCam();
+          break;
+        }
+        case 'sugar_shack': {
+          const g = buildSugarShack(Math.random);
+          scene.add(g);
+          entityRoot = g;
+          // Shack is ~8m wide, so we pull the cam back further than a truck.
+          cam.target.set(0, 1.5, 0);
+          cam.dist = 18;
           applyCam();
           break;
         }
@@ -1119,37 +1146,36 @@ import { mulberry32 } from './src/rng.js';
       setTimeout(() => info.textContent = `Loaded: ${select.value}`, 1200);
     });
 
-    // Debug panel — backtick toggles it. Wire only the hooks debug.js actually
-    // needs. The full game hooks (zerble, crowd, registry, etc.) don't exist in
-    // the sandbox, so we pass safe stubs so updatePanel() doesn't throw.
-    const _noop = () => {};
-    const _stubVec3 = new THREE.Vector3();
-    installDebug({
-      scene,
-      camera,
-      renderer,
-      // Stub out game-world objects so the text readout degrades gracefully
-      // instead of crashing. The panel still shows FPS, ToD, and audio sliders.
-      zerble: {
-        position: _stubVec3,
-        heading: 0,
-        speed: 0,
-        radius: 0,
-      },
-      crowd: { npcs: [] },
-      registry: {
-        entries: new Map(),
-        colliders: () => [],
-      },
-      bubbles: null,
-      smiles: null,
-      puppets: { colliders: [] },
-      band:    { colliders: [] },
-      kids:    { colliders: [] },
-      wooks:   { colliders: [] },
-      getRunning: () => true,
-      getTimeOfDay: () => tod,
-    });
+    // Time-of-day slider + preset buttons (mirroring the in-game ToD block
+     //  from the backtick debug menu). The full debug overlay is intentionally
+     // omitted from the sandbox — the entity panel above is the entire UI.
+    {
+      const slider = document.getElementById('tod-slider');
+      const readout = document.getElementById('tod-readout');
+      const updateReadout = () => {
+        const t = parseFloat(slider.value);
+        readout.textContent = `t=${t.toFixed(2)} night=${tod.nightness.toFixed(2)}`;
+      };
+      slider.addEventListener('input', () => {
+        tod.setT(parseFloat(slider.value));
+        updateReadout();
+      });
+      for (const btn of document.querySelectorAll('.tod-preset')) {
+        btn.addEventListener('click', () => {
+          const t = parseFloat(btn.dataset.t);
+          tod.setT(t);
+          slider.value = String(t);
+          updateReadout();
+        });
+      }
+      // Initial sync — set the slider value to whatever TimeOfDay starts at,
+      // and prime the readout so it's not blank before any interaction.
+      slider.value = String(tod.t);
+      updateReadout();
+      // Keep the readout fresh as the auto-advance ticks (when the user
+      // hasn't pinned a value via slider/buttons).
+      setInterval(updateReadout, 250);
+    }
 
     // Render loop
     const clock = new THREE.Clock();

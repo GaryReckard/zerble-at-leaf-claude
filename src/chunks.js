@@ -24,6 +24,7 @@ import { getForestAt, buildForestChunk, chunkInForest, forestAnimatables, forest
 import { buildCampsite } from './models/campsite.js';
 import { buildTent } from './models/tent.js';
 import { buildFoodTruck, FOOD_TRUCK_SCALE } from './models/foodTruck.js';
+import { buildSugarShack, SUGAR_SHACK_WIDTH, SUGAR_SHACK_DEPTH } from './models/sugarShack.js';
 import { buildHammock as buildHammockModel } from './models/hammock.js';
 import { buildEntranceArch as buildEntranceArchModel } from './models/entranceArch.js';
 import { buildStage as buildStageModel, placeBandOnStage } from './models/stage.js';
@@ -706,12 +707,45 @@ function buildFoodPlaza(ctx) {
   // 3-5 food trucks arranged around a central area. Trucks are scaled up
   // visually (FOOD_TRUCK_SCALE) — push the ring outward + scale colliders to
   // match so we don't end up parked-on-truck-roof.
+  //
+  // Roughly one in three plazas gets a Sugar Shack swapped in for one of the
+  // ring positions. Determined per-chunk so a given plaza is stable across
+  // reloads. The shack is wider than a truck, so we shift its ring slot
+  // outward and size its collider to the actual footprint.
   const count = 3 + Math.floor(ctx.rng() * 3);
   const centerX = ctx.cxWorld;
   const centerZ = ctx.czWorld;
   const ring = 14 * FOOD_TRUCK_SCALE;
+  const wantShack = ctx.rng() < 0.35;
+  const shackSlot = wantShack ? Math.floor(ctx.rng() * count) : -1;
   for (let i = 0; i < count; i++) {
     const ang = (i / count) * Math.PI * 2 + ctx.rng() * 0.4;
+    if (i === shackSlot) {
+      // Shack is ~12m wide vs truck's ~10m; nudge outward so it doesn't poke
+      // into the plaza's center walkable area.
+      const shackRing = ring + 2.5;
+      const x = centerX + Math.cos(ang) * shackRing;
+      const z = centerZ + Math.sin(ang) * shackRing;
+      const shack = buildSugarShack(ctx.rng);
+      shack.position.set(x, 0, z);
+      shack.rotation.y = Math.atan2(centerX - x, centerZ - z); // front faces inward
+      ctx.group.add(shack);
+
+      // Collider sized to the actual canopy. The shack is rectangular, not
+      // round, so the radius is a compromise — half the diagonal of the
+      // footprint gives a slight overlap on the corners which is fine.
+      const half = Math.hypot(SUGAR_SHACK_WIDTH, SUGAR_SHACK_DEPTH) / 2;
+      registry.add({
+        kind: 'truck',           // reuses the truck toast + sfx — "don't hit the food trucks"
+        position: new THREE.Vector3(x, 1.5, z),
+        footprint: half + 0.5,
+        collider: { radius: half - 0.2, damage: 10 },
+        attractor: { radius: half + 6, weight: 1.4 },
+        chunkKey: ctx.key,
+      });
+      continue;
+    }
+
     const x = centerX + Math.cos(ang) * ring;
     const z = centerZ + Math.sin(ang) * ring;
     const truck = buildFoodTruck(ctx.rng);
@@ -777,6 +811,18 @@ function buildDrumCircle(ctx) {
   );
   fire.position.set(x, 0.6, z);
   ctx.group.add(fire);
+
+  // Proxy PointLight — small chunk-level drum-circle pit. Single light per
+  // cluster, modest intensity (the emissive fire mesh already carries the
+  // visual; this just lets nearby props pick up some warm orange). PERF-
+  // gated. Lifecycle is tied to the chunk: when the chunk unloads, the
+  // group is removed from the scene and the light stops contributing.
+  if (PERF.contextLights) {
+    const proxy = new THREE.PointLight(0xff8540, 1.5, 12, 1.2);
+    proxy.position.set(x, 1.0, z);
+    proxy.castShadow = false;
+    ctx.group.add(proxy);
+  }
 
   // Stones around fire
   for (let i = 0; i < 8; i++) {

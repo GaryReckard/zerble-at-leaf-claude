@@ -16,6 +16,7 @@
 // recognise the silhouette ("oh, a campsite") without burning draw calls.
 
 import * as THREE from 'three';
+import { PERF } from '../perf.js';
 
 // ---------- Shared palettes ----------
 
@@ -555,6 +556,22 @@ export function buildCampsite(rng = Math.random, size = 'medium') {
   root.add(fire.group);
   animatables.push(fire);
 
+  // Proxy PointLight — one per campsite, sitting at the firepit. Stands in
+  // for the cumulative glow of the firepit + every tiki torch on the
+  // perimeter. Intensity ramps with nightness (handled in
+  // updateCampsiteProps) so the light is dim at noon and roaring at
+  // midnight. PERF-gated so low-tier devices skip it and lean on emissive
+  // + bloom to carry the visual.
+  if (PERF.contextLights) {
+    const proxy = new THREE.PointLight(0xffb060, 0, 14, 1.2);
+    proxy.position.set(0, 1.2, 0);                  // just above the firepit
+    proxy.castShadow = false;                       // shadow-casting is too expensive at scale
+    root.add(proxy);
+    // Tag this animatable so updateCampsiteProps knows to modulate the
+    // intensity by nightness.
+    animatables.push({ kind: 'contextLight', light: proxy, base: 1.6 });
+  }
+
   // Helper: place a prop at polar (r, theta) and face it toward the centre.
   function placeAt(propGroup, r, theta, faceCenter = true) {
     propGroup.position.set(Math.cos(theta) * r, 0, Math.sin(theta) * r);
@@ -663,6 +680,13 @@ export function updateCampsiteProps(t, nightness, props) {
       if (p.flame) {
         p.flame.scale.y = 1 + 0.15 * Math.sin(t * 12 + p.phase);
       }
+    }
+    if (p.kind === 'contextLight' && p.light) {
+      // Proxy campsite light: dark by day, warm by night, with a slow
+      // breathing flicker so it doesn't feel mathematically static. The
+      // ^2 on nightness keeps the light off until dusk really sets in.
+      const flick = 0.85 + 0.15 * Math.sin(t * 4 + (p.phase || 0));
+      p.light.intensity = (p.base || 1.6) * (nightness * nightness) * flick;
     }
   }
 }

@@ -118,6 +118,28 @@ body {
   opacity: 1;
 }
 
+/* Tappable toast — used for the wook trip offer so touch devices can accept.
+   #hud is pointer-events: none, so we have to re-enable it here. The pulsing
+   border + cursor:pointer signal that this toast is interactive (the other
+   200ms drive-by toasts in the game are not). */
+#toast.tappable {
+  pointer-events: auto;
+  cursor: pointer;
+  border-color: rgba(111, 207, 106, 0.85);
+  box-shadow: 0 0 0 0 rgba(111, 207, 106, 0.55);
+  animation: toast-tap-pulse 1.4s ease-out infinite;
+}
+
+#toast.tappable:active {
+  transform: translateX(-50%) scale(0.96);
+}
+
+@keyframes toast-tap-pulse {
+  0%   { box-shadow: 0 0 0 0 rgba(111, 207, 106, 0.55); }
+  70%  { box-shadow: 0 0 0 14px rgba(111, 207, 106, 0); }
+  100% { box-shadow: 0 0 0 0 rgba(111, 207, 106, 0); }
+}
+
 #hit-flash {
   position: absolute;
   inset: 0;

@@ -78,10 +78,10 @@ composer.addPass(new OutputPass());
 // HUD toasts here. Keeping the copy in main.js means the trip module stays
 // game-agnostic (no HUD imports inside it).
 const WOOK_OFFER_TEXTS = [
-  "🌿 the wook smiles and extends a hand... press [Y] to accept",
-  "🌿 the wook offers you something. press [Y] to take it",
-  "🌿 the wook is sharing the vibe. press [Y] to receive",
-  "🌿 the wook nods knowingly. press [Y] to partake",
+  "🌿 the wook smiles and extends a hand... tap to accept",
+  "🌿 the wook offers you something. tap to take it",
+  "🌿 the wook is sharing the vibe. tap to receive",
+  "🌿 the wook nods knowingly. tap to partake",
 ];
 const WOOK_DECLINE_TEXTS = {
   moved:     "the wook watches you drive away",
@@ -105,7 +105,14 @@ const TRIP_NARRATIVE_TEXTS = [
 ];
 Trip.onOffer = () => {
   const msg = WOOK_OFFER_TEXTS[Math.floor(Math.random() * WOOK_OFFER_TEXTS.length)];
-  HUD.toast(msg, 9000);
+  // Toast is tappable so touch devices can accept. Desktop players can still
+  // hit Y — both paths route through Trip.acceptOffer() and the toast clears
+  // either way (a Y press replaces the toast via Trip.onAccept).
+  HUD.toast(msg, 9000, {
+    onTap: () => {
+      if (Trip.state === 'awaiting_confirm') Trip.acceptOffer();
+    },
+  });
 };
 Trip.onAccept = () => {
   HUD.toast("...", 1500);

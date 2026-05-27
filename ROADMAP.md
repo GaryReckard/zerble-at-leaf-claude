@@ -67,7 +67,6 @@ The MIDI player (M key) ships with a single shared PolySynth(FMSynth) for all tr
 
 ## Performance
 
-- **Lambert fallback via wrapper module.** `src/litFallback.js` currently tries to reassign `THREE.MeshStandardMaterial` at boot for low-tier. ES module namespace objects are frozen per spec, so the assignment throws on Safari mobile (and any strict module implementation) — we now try/catch and degrade to full PBR on those devices. A proper fix routes every `import * as THREE from 'three'` through a `./threeShim.js` wrapper that re-exports a mutable copy of THREE with `MeshStandardMaterial` pre-swapped. ~50 import-site changes across `src/` + `src/models/`, but it means low-tier mobile actually gets the perf benefit.
 - **Crowd InstancedMesh churn.** When NPCs change state, their per-instance matrix flag has to flip. Worth profiling on low-end devices to see if writes per frame are an issue.
 - **Forest tree count on low tier.** PERF tier currently scales chunk draw radius and crowd density but not forest tree density. Dense forests on mid-spec phones might benefit from a tier-gated thin-out.
 - **LOD on distant trees / tents.** Beyond ~60m the polygon detail is invisible; could swap to billboard or low-poly replacements.

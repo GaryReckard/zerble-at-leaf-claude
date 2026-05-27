@@ -4,7 +4,9 @@ import * as THREE from 'three';
 // Low-tier material downgrade (Standard → Lambert). Must run before any
 // model module imports so the constructor swap is in place when the first
 // `new THREE.MeshStandardMaterial(...)` fires at module-evaluation time.
-import './litFallback.js';
+// Tier-aware Three.js material swap now happens transparently via the
+// 'three' importmap entry pointing at src/threeShim.js — no explicit
+// import needed.
 import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
 import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
 import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';

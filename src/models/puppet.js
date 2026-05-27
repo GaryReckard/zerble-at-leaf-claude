@@ -139,44 +139,62 @@ export function buildPuppet(seed = 0) {
 // members, parasol marshal). Now includes legs + arms so the silhouette
 // reads as a person instead of a capsule pill. Optional opts.armPose lets
 // the band member tilt arms to grip an instrument.
+//
+// NPC materials are pooled by color: two NPCs with the same shirt color
+// share the same MeshStandardMaterial instance. With dozens of NPCs in a
+// chunk this avoids hundreds of redundant material allocations and gives
+// three.js a chance to batch identically-materialed meshes into single
+// draw calls. Per threejs-materials skill: "Reuse materials: same material
+// = batched draw calls."
+const _npcMatPool = new Map();
+function _npcMat(hex, roughness, key) {
+  const cacheKey = `${key}:${hex.toString(16)}`;
+  let m = _npcMatPool.get(cacheKey);
+  if (!m) {
+    m = new THREE.MeshStandardMaterial({
+      color: hex, roughness, flatShading: true,
+    });
+    m.userData.shared = true;
+    _npcMatPool.set(cacheKey, m);
+  }
+  return m;
+}
+const _SHOE_MAT = new THREE.MeshStandardMaterial({ color: 0x111, roughness: 0.8 });
+_SHOE_MAT.userData.shared = true;
+const _EYE_MAT = new THREE.MeshStandardMaterial({ color: 0x111, roughness: 0.8 });
+_EYE_MAT.userData.shared = true;
+// Shared geometries — same vertex buffer used across every NPC instance.
+const _LEG_GEO    = new THREE.CylinderGeometry(0.10, 0.10, 0.65, 8); _LEG_GEO.userData.shared = true;
+const _SHOE_GEO   = new THREE.BoxGeometry(0.16, 0.07, 0.24);          _SHOE_GEO.userData.shared = true;
+const _TORSO_GEO  = new THREE.CapsuleGeometry(0.26, 0.55, 4, 8);     _TORSO_GEO.userData.shared = true;
+const _UPPER_GEO  = new THREE.CapsuleGeometry(0.08, 0.30, 4, 6);     _UPPER_GEO.userData.shared = true;
+const _LOWER_GEO  = new THREE.CapsuleGeometry(0.07, 0.28, 4, 6);     _LOWER_GEO.userData.shared = true;
+const _HEAD_GEO   = new THREE.IcosahedronGeometry(0.26, 1);          _HEAD_GEO.userData.shared = true;
+const _EYE_GEO    = new THREE.SphereGeometry(0.028, 6, 6);            _EYE_GEO.userData.shared = true;
+
 export function buildSimpleNPC(shirtHex, skinHex, opts = {}) {
   const { armPose = 'rest', pantsHex = 0x223a5c } = opts;
   const g = new THREE.Group();
 
-  const shirtMat = new THREE.MeshStandardMaterial({
-    color: shirtHex, roughness: 0.9, flatShading: true,
-  });
-  const skinMat = new THREE.MeshStandardMaterial({
-    color: skinHex, roughness: 0.9, flatShading: true,
-  });
-  const pantsMat = new THREE.MeshStandardMaterial({
-    color: pantsHex, roughness: 0.92, flatShading: true,
-  });
+  const shirtMat = _npcMat(shirtHex, 0.9,  'shirt');
+  const skinMat  = _npcMat(skinHex,  0.9,  'skin');
+  const pantsMat = _npcMat(pantsHex, 0.92, 'pants');
 
   // ----- Legs -----
   for (const lx of [-0.12, 0.12]) {
-    const leg = new THREE.Mesh(
-      new THREE.CylinderGeometry(0.10, 0.10, 0.65, 8),
-      pantsMat,
-    );
+    const leg = new THREE.Mesh(_LEG_GEO, pantsMat);
     leg.position.set(lx, 0.32, 0);
     // Slim leg cylinder — skip shadow. Torso + head cast the readable
     // NPC silhouette; legs underneath barely contribute.
     g.add(leg);
     // Shoes
-    const shoe = new THREE.Mesh(
-      new THREE.BoxGeometry(0.16, 0.07, 0.24),
-      new THREE.MeshStandardMaterial({ color: 0x111, roughness: 0.8 }),
-    );
+    const shoe = new THREE.Mesh(_SHOE_GEO, _SHOE_MAT);
     shoe.position.set(lx, 0.03, -0.06);
     g.add(shoe);
   }
 
   // ----- Torso -----
-  const torso = new THREE.Mesh(
-    new THREE.CapsuleGeometry(0.26, 0.55, 4, 8),
-    shirtMat,
-  );
+  const torso = new THREE.Mesh(_TORSO_GEO, shirtMat);
   torso.position.y = 1.0;
   torso.castShadow = true;
   g.add(torso);
@@ -190,9 +208,7 @@ export function buildSimpleNPC(shirtHex, skinHex, opts = {}) {
     const shoulder = new THREE.Group();
     shoulder.position.set(sx * 0.30, 1.20, 0);
     shoulder.rotation.z = sx * 0.05;
-    const upper = new THREE.Mesh(
-      new THREE.CapsuleGeometry(0.08, 0.30, 4, 6), shirtMat,
-    );
+    const upper = new THREE.Mesh(_UPPER_GEO, shirtMat);
     upper.position.y = -0.18;
     shoulder.add(upper);
     // Elbow pivot at the bottom of the upper arm.
@@ -207,9 +223,7 @@ export function buildSimpleNPC(shirtHex, skinHex, opts = {}) {
       elbow.rotation.x = 1.6;        // sharp elbow bend brings hands to face
     }
     shoulder.add(elbow);
-    const lower = new THREE.Mesh(
-      new THREE.CapsuleGeometry(0.07, 0.28, 4, 6), skinMat,
-    );
+    const lower = new THREE.Mesh(_LOWER_GEO, skinMat);
     lower.position.y = -0.18;        // hangs below the elbow pivot
     elbow.add(lower);
     // Skip shadow on arms — they're skinny capsules; torso/head shadow
@@ -218,17 +232,14 @@ export function buildSimpleNPC(shirtHex, skinHex, opts = {}) {
   }
 
   // ----- Head -----
-  const head = new THREE.Mesh(
-    new THREE.IcosahedronGeometry(0.26, 1), skinMat,
-  );
+  const head = new THREE.Mesh(_HEAD_GEO, skinMat);
   head.position.y = 1.65;
   head.castShadow = true;
   g.add(head);
 
   // ----- Face dots — two eyes facing local -Z (forward) -----
-  const eyeMat = new THREE.MeshStandardMaterial({ color: 0x111, roughness: 0.8 });
   for (const ex of [-0.08, 0.08]) {
-    const eye = new THREE.Mesh(new THREE.SphereGeometry(0.028, 6, 6), eyeMat);
+    const eye = new THREE.Mesh(_EYE_GEO, _EYE_MAT);
     eye.position.set(ex, 1.68, -0.22);
     g.add(eye);
   }

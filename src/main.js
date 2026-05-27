@@ -5,6 +5,8 @@ import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
 import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
 import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
 import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
+import { ShaderPass } from 'three/addons/postprocessing/ShaderPass.js';
+import { FXAAShader } from 'three/addons/shaders/FXAAShader.js';
 
 import { Input } from './input.js';
 import { Touch } from './touch.js';
@@ -40,9 +42,15 @@ import * as AdaptiveQuality from './adaptiveQuality.js';
 const canvas = document.getElementById('game');
 
 // ---------- Renderer ----------
+// MSAA (renderer-level antialias) is expensive on integrated / mobile GPUs,
+// especially at pixelRatio 2. Per the threejs-postprocessing skill's "FXAA
+// over MSAA" guidance: on mid/low tiers we turn MSAA off here and add an
+// FXAAPass below to do anti-aliasing in screen space — much cheaper. High
+// tier keeps MSAA since its hardware can handle it and the result is sharper.
+const useMSAA = PERF.name === 'high';
 const renderer = new THREE.WebGLRenderer({
   canvas,
-  antialias: true,
+  antialias: useMSAA,
   powerPreference: 'high-performance',
 });
 renderer.setPixelRatio(Math.min(window.devicePixelRatio, PERF.pixelRatioCap));
@@ -71,6 +79,21 @@ composer.addPass(bloomPass);
 // Trip ShaderPass sits between bloom and output. At intensity=0 it's a no-op.
 Trip.init();
 composer.addPass(Trip.pass);
+
+// FXAA fallback when we don't have MSAA (mid/low tier). FXAA is a single
+// screen-space pass — way cheaper than MSAA at pixelRatio 2. Resolution is
+// passed in pixel units, kept in sync with renderer size on resize().
+let fxaaPass = null;
+if (!useMSAA) {
+  fxaaPass = new ShaderPass(FXAAShader);
+  const pixelRatio = renderer.getPixelRatio();
+  fxaaPass.material.uniforms.resolution.value.set(
+    1 / (window.innerWidth * pixelRatio),
+    1 / (window.innerHeight * pixelRatio),
+  );
+  composer.addPass(fxaaPass);
+}
+
 composer.addPass(new OutputPass());
 
 // ---------- Wook offer prompt + trip narration wiring ----------
@@ -578,6 +601,10 @@ function handleResize() {
   camera.aspect = w / h;
   camera.updateProjectionMatrix();
   bloomPass.setSize(w * 0.5, h * 0.5);
+  if (fxaaPass) {
+    const pr = renderer.getPixelRatio();
+    fxaaPass.material.uniforms.resolution.value.set(1 / (w * pr), 1 / (h * pr));
+  }
 }
 window.addEventListener('resize', handleResize);
 window.addEventListener('orientationchange', () => {

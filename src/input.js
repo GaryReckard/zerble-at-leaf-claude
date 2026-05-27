@@ -52,12 +52,17 @@ export const Input = {
     return held.has(k);
   },
 
-  // Honk edge: either a keyboard SPACE keydown OR a touch-honk tap this frame.
+  // Edge press: keyboard keydown OR a per-key touch latch this frame. SPACE
+  // is honk; M is music-toggle. Other keys are keyboard-only.
   consumePressed(k) {
     const kbdEdge = edges.has(k);
     if (kbdEdge) edges.delete(k);
     if (k === 'SPACE') {
       const touchEdge = Touch._consumeHonk();
+      return kbdEdge || touchEdge;
+    }
+    if (k === 'M') {
+      const touchEdge = Touch._consumeMusic();
       return kbdEdge || touchEdge;
     }
     return kbdEdge;

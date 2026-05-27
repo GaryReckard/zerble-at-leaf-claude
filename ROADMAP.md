@@ -23,6 +23,16 @@ Markov/motif-based phrase generation so the melody actually develops instead of 
 - **Shuffled variant order** — currently rotates 0→1→2→0→1→2. Picking the next variant from a weighted shuffle (avoiding immediate repeats) would feel less mechanical.
 - **Stage-music presets that drift** — even within a single source, the lead can occasionally swap timbre (triangle → sine → square) at section boundaries.
 
+### MIDI player follow-ups
+
+The MIDI player (M key) ships with a single shared PolySynth(FMSynth) for all tracks of a parsed MIDI. Worth exploring:
+
+- **Per-channel instruments.** Map MIDI channels to distinct synths (or `Tone.Sampler` with a soundfont) so drums sound like drums and a bass sounds like a bass instead of all-FMSynth-everything. Drives the timbre toward "playable instrument" instead of "synth interpretation."
+- **General MIDI program map.** Honor program-change messages in the MIDI file — e.g. program 0 = acoustic grand → sampler, program 32 = acoustic bass → bass synth, channel 10 = drums → drum kit sampler. Big jump in playback fidelity for arranged MIDIs.
+- **Per-track muting in the debug overlay.** Toggle individual MIDI tracks on/off for live remixing during a trip.
+- **Pre-render reverb impulse for blast-mode swell.** `Tone.Reverb.decay` is fixed at construction; swelling decay during a trip currently leans on wet ramp. A second `Reverb` with a long decay routed in parallel would let us crossfade for a true "cathedral opens" effect.
+- **Granular synthesis chain for peak moments.** At the climax, route the synth through a granular/glitch effect (Tone has nothing native — would need a custom `AudioWorklet`) for that "reality fracturing" feel. Significant scope — punt unless someone wants to chase the high.
+
 ---
 
 ## Trip / wook
@@ -73,4 +83,4 @@ Markov/motif-based phrase generation so the melody actually develops instead of 
 ## Out of scope (worth flagging)
 
 - **Bundler.** Tempting but adds a build step, breaks the "open index.html and it just works" property. Stay no-build until performance forces the issue.
-- **Audio files.** Same — adding sample-based audio means an asset pipeline and a CDN story. Synthesized stays the constraint.
+- **Sample-based audio (mp3/wav).** Adding recorded audio means an asset pipeline and a CDN story. Synthesized stays the constraint for game SFX + stage music. MIDI playback uses Tone.js synthesis — no samples shipped.

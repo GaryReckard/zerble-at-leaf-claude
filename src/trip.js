@@ -296,6 +296,17 @@ export const Trip = {
     return this.state === 'fading_in' || this.state === 'sustaining' || this.state === 'fading_out';
   },
 
+  // Progress across the full trip (fadeIn + sustain + fadeOut) as a 0..1
+  // value. Mirrors what _writeDynamicCurves uses to drive the visual effect
+  // curves. External systems (like the MIDI player) read this to shape
+  // their own per-effect personality curves in lockstep with the visuals.
+  // Returns 0 when no trip is active.
+  progress() {
+    if (!this.isActive()) return 0;
+    const totalDuration = this.fadeIn + this.duration + this.fadeOut;
+    return Math.max(0, Math.min(1, this._tripElapsed / totalDuration));
+  },
+
   setPreset(name) {
     const presets = {
       microdose: {
@@ -391,11 +402,13 @@ export const Trip = {
       + 0.2 * Math.sin(p * Math.PI * 2 * 2.5 + 3.12)
     );
 
-    // 8. Posterize — meander 0..0.25 most of the trip, sharp spike to ~0.95
-    //    around p=1/3 ("around the peak").
+    // 8. Posterize — meander 0..0.25 most of the trip, sharp spike to ~0.9
+    //    around p=1/3 ("around the peak"). Capped at 0.9 so even the climax
+    //    leaves a touch of tonal nuance — going all the way to 1.0 flattens
+    //    the world to too few color bands and reads as a bug, not a peak.
     const meander = 0.1 + 0.15 * (0.5 + 0.5 * Math.sin(p * Math.PI * 2 * 3));
     const spike = 0.85 * Math.exp(-Math.pow((p - 1 / 3) / 0.03, 2));
-    live.posterize = Math.min(1, meander + spike);
+    live.posterize = Math.min(0.9, meander + spike);
 
     // Push to uniforms
     const u = this.pass.uniforms;

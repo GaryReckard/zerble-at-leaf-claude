@@ -1062,9 +1062,30 @@ export class Crowd {
   }
 
   applyHonk(zerble) {
+    // If Zerble is parked, any NPC standing in front of him (forward-side
+    // of the cart) within SCATTER_RANGE flips to 'fleeing' so they hustle
+    // out of his way. The happiness/smile loop still runs for everyone
+    // else (and for the scatter victims it just skips since 'fleeing'
+    // disqualifies them in the check below — they get a chance to smile
+    // again later when they calm down). We treat "parked" as |speed| < 0.5.
+    const SCATTER_RANGE = 9;
+    const SCATTER_RANGE_SQ = SCATTER_RANGE * SCATTER_RANGE;
+    const isParked = Math.abs(zerble.speed || 0) < 0.5;
+    const fwd = zerble.forwardWorld;
+
     for (const npc of this.npcs) {
       const dx = npc.pos.x - zerble.position.x;
       const dz = npc.pos.z - zerble.position.z;
+
+      // Scatter pass — only when parked, only NPCs in front of the cart.
+      if (isParked && fwd && npc.state !== 'riding' && npc.state !== 'boarding') {
+        const d2 = dx * dx + dz * dz;
+        if (d2 < SCATTER_RANGE_SQ && (dx * fwd.x + dz * fwd.z) > 0) {
+          npc.state = 'fleeing';
+          npc.stateTimer = 1.5;
+        }
+      }
+
       const d = Math.hypot(dx, dz);
       if (d < HONK_RANGE && npc.smileTimeCooldown <= 0 && npc.state !== 'fleeing') {
         const k = 1 - d / HONK_RANGE;

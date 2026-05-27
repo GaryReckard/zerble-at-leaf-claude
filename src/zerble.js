@@ -486,6 +486,10 @@ export class Zerble {
       // the dome's hue cycle isn't locked to its spin.
       phase: 0,
       colorPhase: 0,
+      // Bubble-blast mode (G key) — when true, the disco light gets much
+      // brighter, locks to a bright white-pink, and the dome strobes. Eased
+      // toward this value in update() so toggling doesn't pop the light.
+      blastLevel: 0,
     };
 
     // (Round headlights removed — the new LED bar above replaces them.)
@@ -1045,25 +1049,39 @@ export class Zerble {
 
     // ----- Disco light — color cycle + slow spin + nightness-gated spot --
     if (this._disco) {
-      this._disco.phase += dt * 0.7;
-      this._disco.colorPhase += dt * 2.1;
-      // Dome spins around its local Y (its aim direction) — looks like
-      // the rotating prism inside the real fixture.
+      // Blast mode (G held): ease toward target so the transition is smooth.
+      const blastTarget = this._bubbleBlast ? 1 : 0;
+      this._disco.blastLevel += (blastTarget - this._disco.blastLevel) * Math.min(1, dt * 8);
+      const bl = this._disco.blastLevel;
+
+      // In blast mode the dome spins faster and the hue cycle accelerates so
+      // the strobe is unmistakable. Normal: 0.7 + 2.1; blast: ~2× both.
+      this._disco.phase += dt * (0.7 + bl * 1.8);
+      this._disco.colorPhase += dt * (2.1 + bl * 4.0);
       this._disco.dome.rotation.y = this._disco.phase;
-      // Hue chase through the standard RGB-Y-C-M loop.
+
+      // Hue cycle. Blast mode pushes saturation to 1.0 and lightness up so
+      // the dome looks like it's "white-hot" rather than tinted.
       const hue = (this._disco.colorPhase * 0.15) % 1;
-      const c = _tmpDiscoColor.setHSL(hue, 0.95, 0.55);
+      const sat = 0.95;
+      const lit = 0.55 + bl * 0.30;
+      const c = _tmpDiscoColor.setHSL(hue, sat, lit);
       this._disco.domeMat.color.copy(c);
       this._disco.domeMat.emissive.copy(c);
-      // Dome intensity pulses gently regardless of nightness so it's
-      // visible during the day too.
-      this._disco.domeMat.emissiveIntensity = 1.5 + Math.sin(t * 5) * 0.6;
-      // The SpotLight only kicks on as it gets dark — otherwise direct
-      // sunlight washes it out.
+      // Blast strobes the dome much faster + brighter (4-7 vs 1.5-2.1).
+      const baseE = 1.5 + Math.sin(t * 5) * 0.6;
+      const blastE = 4.0 + Math.sin(t * 18) * 3.0;
+      this._disco.domeMat.emissiveIntensity = baseE * (1 - bl) + blastE * bl;
+
+      // SpotLight follows the dome color, intensity scales with night + blast.
+      // Blast adds a +14 daytime kicker so the spot is visible even at noon
+      // (normal gating ramps from night only). Easy "more bubbles, more party"
+      // feedback signal even in bright sun.
       const discoNight = THREE.MathUtils.smoothstep(nightness, 0.2, 0.8);
       this._disco.light.color.copy(c);
-      this._disco.light.intensity = discoNight * 6.5
-        * (0.7 + 0.3 * Math.sin(t * 3 + 1.2));
+      const nightI = discoNight * 6.5 * (0.7 + 0.3 * Math.sin(t * 3 + 1.2));
+      const blastI = (3 + Math.abs(Math.sin(t * 14)) * 14) * bl;  // strobing kicker
+      this._disco.light.intensity = nightI + blastI;
     }
 
     // ----- Eye-glow brightness key control (I/O) ----------------------
@@ -1122,6 +1140,13 @@ export class Zerble {
 
   canHonk() {
     return this.honkCooldown <= 0;
+  }
+
+  // Bubble-blast (G key) toggle. Sets a boolean that the disco-light tick
+  // eases toward, so the visual ramps in/out smoothly. main.js calls this
+  // every frame with Input.isDown('G').
+  setBubbleBlast(on) {
+    this._bubbleBlast = !!on;
   }
 
   honk() {

@@ -59,6 +59,13 @@ export class PuppetParade {
       const puppet = buildPuppet(i);
       const ahead = i * 4.5;  // spacing along the path
       puppet.userData.distance = -ahead;
+      // Honk-scatter offset: while dodgeTimer > 0, the puppet's path-derived
+      // position gets nudged perpendicular by (dodgeDirX, dodgeDirZ) * eased
+      // amount, then snaps back as the timer winds down. Path progression
+      // keeps running underneath so the parade still marches through.
+      puppet.userData.dodgeTimer = 0;
+      puppet.userData.dodgeDirX = 0;
+      puppet.userData.dodgeDirZ = 0;
       this.group.add(puppet);
       this.puppets.push(puppet);
     }
@@ -74,6 +81,27 @@ export class PuppetParade {
     this._tmpB = new THREE.Vector3();
   }
 
+  // Honk-scatter: puppets in front of parked Zerble get a temporary lateral
+  // dodge offset. They keep walking along their path but sidestep by ~2.5m
+  // for ~1.4s, then ease back.
+  scatter(zerble) {
+    if (!zerble || !zerble.forwardWorld) return;
+    const FRONT_RANGE = 12;
+    const FRONT_RANGE_SQ = FRONT_RANGE * FRONT_RANGE;
+    const fx = zerble.forwardWorld.x;
+    const fz = zerble.forwardWorld.z;
+    for (const p of this.puppets) {
+      const dx = p.position.x - zerble.position.x;
+      const dz = p.position.z - zerble.position.z;
+      if (dx * dx + dz * dz > FRONT_RANGE_SQ) continue;
+      if (dx * fx + dz * fz <= 0) continue;
+      const inv = 1 / Math.sqrt(dx * dx + dz * dz || 0.0001);
+      p.userData.dodgeTimer = 1.4;
+      p.userData.dodgeDirX = dx * inv;
+      p.userData.dodgeDirZ = dz * inv;
+    }
+  }
+
   update(dt) {
     const totalLen = pathLength(this.path);
     for (let i = 0; i < this.puppets.length; i++) {
@@ -81,6 +109,17 @@ export class PuppetParade {
       p.userData.distance = (p.userData.distance + this.speed * dt + totalLen * 100) % totalLen;
       const { pos, dir } = samplePath(this.path, p.userData.distance, this._tmpA, this._tmpB);
       p.position.copy(pos);
+      // Apply dodge offset on top of the path position. Triangle pulse
+      // (ramps up, holds, eases out) over the dodge timer's lifetime.
+      if (p.userData.dodgeTimer > 0) {
+        p.userData.dodgeTimer -= dt;
+        const ratio = Math.max(0, p.userData.dodgeTimer / 1.4);  // 1 → 0
+        // Bell curve: peaks mid-dodge so the offset eases in and out.
+        const env = Math.sin((1 - ratio) * Math.PI);
+        const DODGE_DIST = 2.5;
+        p.position.x += p.userData.dodgeDirX * DODGE_DIST * env;
+        p.position.z += p.userData.dodgeDirZ * DODGE_DIST * env;
+      }
       // Their "front" geometry (eyes/mouth) is at local -Z, so face the direction of travel
       // by setting yaw so that local -Z points along dir.
       const yaw = Math.atan2(-dir.x, -dir.z);
@@ -155,6 +194,34 @@ export class BrassBand {
     this._tmpA = new THREE.Vector3();
     this._tmpB = new THREE.Vector3();
 
+    // Unit-level honk-scatter offset. The whole formation sidesteps together
+    // when any member is in front of parked Zerble.
+    this._dodgeTimer = 0;
+    this._dodgeDirX = 0;
+    this._dodgeDirZ = 0;
+  }
+
+  scatter(zerble) {
+    if (!zerble || !zerble.forwardWorld) return;
+    const FRONT_RANGE = 14;        // bigger range because the formation spans ~6m
+    const FRONT_RANGE_SQ = FRONT_RANGE * FRONT_RANGE;
+    const fx = zerble.forwardWorld.x;
+    const fz = zerble.forwardWorld.z;
+    // Trigger if ANY member is in front + in range. Use member positions
+    // (set by last update tick) — they reflect the current marching pose.
+    for (const m of this.members) {
+      const dx = m.position.x - zerble.position.x;
+      const dz = m.position.z - zerble.position.z;
+      if (dx * dx + dz * dz > FRONT_RANGE_SQ) continue;
+      if (dx * fx + dz * fz <= 0) continue;
+      // Direction = away from Zerble, derived from this triggering member.
+      const inv = 1 / Math.sqrt(dx * dx + dz * dz || 0.0001);
+      this._dodgeTimer = 1.6;
+      this._dodgeDirX = dx * inv;
+      this._dodgeDirZ = dz * inv;
+      return;  // one trigger sidesteps the whole unit
+    }
+
     // Second-line groove that follows the band around the world. The seed
     // is just a constant so the band's tune is stable across reloads — only
     // one brass band exists in the game so per-band variation is moot.
@@ -172,13 +239,25 @@ export class BrassBand {
     const cos = Math.cos(yaw);
     const sin = Math.sin(yaw);
 
+    // Unit-level dodge offset (honk scatter). Sidestep ~3m perpendicular for
+    // the dodge timer's lifetime; bell-curve envelope eases in and out.
+    let dodgeOX = 0, dodgeOZ = 0;
+    if (this._dodgeTimer > 0) {
+      this._dodgeTimer -= dt;
+      const ratio = Math.max(0, this._dodgeTimer / 1.6);
+      const env = Math.sin((1 - ratio) * Math.PI);
+      const DODGE_DIST = 3.0;
+      dodgeOX = this._dodgeDirX * DODGE_DIST * env;
+      dodgeOZ = this._dodgeDirZ * DODGE_DIST * env;
+    }
+
     for (let i = 0; i < this.members.length; i++) {
       const m = this.members[i];
       const off = m.userData.formationOff;
       // Rotate the offset into the band's heading
       const ox = off.x * cos + off.z * sin;
       const oz = -off.x * sin + off.z * cos;
-      m.position.set(leadPos.x + ox, 0, leadPos.z + oz);
+      m.position.set(leadPos.x + ox + dodgeOX, 0, leadPos.z + oz + dodgeOZ);
       m.rotation.y = yaw;
 
       // Marching bob
@@ -214,15 +293,22 @@ export class KidGaggle {
     this.kids = [];
     this.colliders = [];
 
-    // Two gaggles, each near a stage
-    const centers = [
-      new THREE.Vector3(0, 0, -40),
-      new THREE.Vector3(-40, 0, 30),
-      new THREE.Vector3(40, 0, 30),
-    ];
+    // Eight gaggles spread across the festival. The anchor-drift logic in
+    // update() pulls each kid's center toward Zerble over time, so wherever
+    // the player wanders they'll see roughly this many kids around them.
+    // Plus the recycle loop below re-anchors kids that lag too far behind.
+    const GAGGLE_COUNT = 8;
+    const centers = [];
+    for (let i = 0; i < GAGGLE_COUNT; i++) {
+      const ang = (i / GAGGLE_COUNT) * TAU + Math.random() * 0.3;
+      // 25-75m out from origin so gaggles fan out across the visible startup
+      // area rather than all clustering near the stages.
+      const r = 25 + Math.random() * 50;
+      centers.push(new THREE.Vector3(Math.cos(ang) * r, 0, Math.sin(ang) * r));
+    }
 
     for (const c of centers) {
-      const gaggleSize = 4 + Math.floor(Math.random() * 3);
+      const gaggleSize = 5 + Math.floor(Math.random() * 4);  // 5-8 kids
       for (let i = 0; i < gaggleSize; i++) {
         const k = buildKid();
         k.position.copy(c);
@@ -232,6 +318,9 @@ export class KidGaggle {
         k.userData.heading = Math.random() * TAU;
         k.userData.turnTimer = Math.random() * 2;
         k.userData.speed = 3 + Math.random() * 2;
+        // Honk-scatter timer: while > 0, the kid runs away from Zerble at
+        // FLEE_SPEED. Set by KidGaggle.scatter() from main.js on honk.
+        k.userData.scatterTimer = 0;
         this.group.add(k);
         this.kids.push(k);
         this.colliders.push({
@@ -244,30 +333,88 @@ export class KidGaggle {
     }
   }
 
+  // Honk-scatter trigger called from main.js when the player honks while
+  // parked. Any kid in front of Zerble (within FRONT_RANGE, dot with the
+  // cart's forward axis > 0) gets a short flee timer that overrides their
+  // bubble-chase / cluster behavior for ~1.2s. Kids behind the cart are
+  // left alone — they were the ones we WANTED back there at the vent.
+  scatter(zerble) {
+    if (!zerble || !zerble.forwardWorld) return;
+    const FRONT_RANGE = 10;
+    const FRONT_RANGE_SQ = FRONT_RANGE * FRONT_RANGE;
+    const fx = zerble.forwardWorld.x;
+    const fz = zerble.forwardWorld.z;
+    for (const k of this.kids) {
+      const dx = k.position.x - zerble.position.x;
+      const dz = k.position.z - zerble.position.z;
+      if (dx * dx + dz * dz > FRONT_RANGE_SQ) continue;
+      // Dot > 0 means the kid is on the forward side of Zerble.
+      if (dx * fx + dz * fz <= 0) continue;
+      k.userData.scatterTimer = 1.2;
+      // Pre-aim them away so the first frame doesn't waste time turning.
+      k.userData.heading = Math.atan2(dx, -dz);
+      k.userData.turnTimer = 0.8;
+    }
+  }
+
   // dt: frame delta. bubbles/zerble are optional — when present, kids go
   // gaga for bubbles (steer toward the nearest one) and the whole gaggle
   // slowly drifts toward wherever Zerble is so they don't get stuck at
   // their birth anchor once he's wandered off.
   update(dt, bubbles, zerble) {
+    // Recycle kids whose position has fallen far behind Zerble. The anchor
+    // lerp drags centers toward the player but individual wandering can
+    // still leave a kid stranded after a fast drive. Mirrors the wook
+    // recycle behavior — re-anchor to a fresh spot 30-80m around Zerble.
+    if (zerble) {
+      const RECYCLE_DIST2 = 200 * 200;
+      const RECYCLE_NEAR = 30;
+      const RECYCLE_FAR  = 80;
+      for (const k of this.kids) {
+        const ddx = k.position.x - zerble.position.x;
+        const ddz = k.position.z - zerble.position.z;
+        if (ddx * ddx + ddz * ddz > RECYCLE_DIST2) {
+          const ang = Math.random() * TAU;
+          const r = RECYCLE_NEAR + Math.random() * (RECYCLE_FAR - RECYCLE_NEAR);
+          const nx = zerble.position.x + Math.cos(ang) * r;
+          const nz = zerble.position.z + Math.sin(ang) * r;
+          k.position.set(nx, 0, nz);
+          k.userData.center.set(nx, 0, nz);
+          k.userData.scatterTimer = 0;
+        }
+      }
+    }
+
     // Collect live bubble positions once per frame so we don't iterate the
     // whole pool inside every kid's loop.
     const bubblePositions = [];
     if (bubbles) bubbles.forEachAlive((b) => bubblePositions.push(b.pos));
 
-    // Kid gaggles slowly drift their anchor toward Zerble so they actually
-    // follow him around the festival instead of marooning at their spawn.
+    // Kid gaggles drift their anchor toward Zerble so they follow him
+    // around the festival. The pull is stronger when Zerble is parked
+    // (lerp ~3× faster) so the gaggle actually congregates around him for
+    // bubble play instead of lagging way behind. Anchor TARGETS the bubble
+    // vent (zerble.nozzleWorld), not the cart center — that way wander
+    // naturally happens around the back where the bubbles spawn, without
+    // forcing kids onto an explicit orbit. They still chase any bubble in
+    // range; if no bubble is near, they just play / mill around behind.
+    const REST_SPEED = 0.5;                // |zerble.speed| below this = parked
+    const isParked = zerble && Math.abs(zerble.speed || 0) < REST_SPEED;
     if (zerble) {
-      // Each gaggle anchor is shared by reference across its kids — but to
-      // keep things simple here we lerp each kid's anchor individually.
+      const targetX = isParked && zerble.nozzleWorld ? zerble.nozzleWorld.x : zerble.position.x;
+      const targetZ = isParked && zerble.nozzleWorld ? zerble.nozzleWorld.z : zerble.position.z;
+      const lerpRate = isParked ? 0.8 : 0.25;
+      const lerpAmt = Math.min(1, dt * lerpRate);
       for (const k of this.kids) {
-        k.userData.center.x += (zerble.position.x - k.userData.center.x) * Math.min(1, dt * 0.25);
-        k.userData.center.z += (zerble.position.z - k.userData.center.z) * Math.min(1, dt * 0.25);
+        k.userData.center.x += (targetX - k.userData.center.x) * lerpAmt;
+        k.userData.center.z += (targetZ - k.userData.center.z) * lerpAmt;
       }
     }
 
     const BUBBLE_ATTRACT_RANGE = 9;        // start chasing a bubble within this
     const BUBBLE_GRAB_RANGE = 0.7;         // close enough to "play with" it
     const BUBBLE_ATTRACT_SPEED = 4.2;      // sprint speed when chasing
+    const FLEE_SPEED = 5.0;                // honk-scatter sprint speed
 
     for (let i = 0; i < this.kids.length; i++) {
       const k = this.kids[i];
@@ -283,7 +430,17 @@ export class KidGaggle {
         }
       }
 
-      if (chaseD < BUBBLE_ATTRACT_RANGE && chaseD > BUBBLE_GRAB_RANGE) {
+      // Tick scatter timer first so the test below sees a fresh value.
+      if (k.userData.scatterTimer > 0) k.userData.scatterTimer -= dt;
+      const fleeing = k.userData.scatterTimer > 0 && zerble;
+
+      if (fleeing) {
+        // Run away from Zerble. Lock heading on entry (set by scatter())
+        // and just sprint along it — keeps the burst lively without
+        // re-aiming every frame.
+        k.position.x += Math.sin(k.userData.heading) * FLEE_SPEED * dt;
+        k.position.z += -Math.cos(k.userData.heading) * FLEE_SPEED * dt;
+      } else if (chaseD < BUBBLE_ATTRACT_RANGE && chaseD > BUBBLE_GRAB_RANGE) {
         // Chase the bubble! Set heading toward it and sprint.
         const inv = 1 / (chaseD || 1);
         // userData.heading uses: dx = sin(h), dz = -cos(h)  →  h = atan2(dx, -dz)
@@ -384,6 +541,13 @@ export class Wooks {
       w.userData.phase = Math.random() * TAU;
       w.userData.speed = 0.4 + Math.random() * 0.4;
 
+      // Honk-scatter dodge timer. While > 0, the wook walks straight away
+      // from Zerble instead of orbiting its anchor. When it expires we
+      // re-anchor to the new position so orbit resumes from there.
+      w.userData.dodgeTimer = 0;
+      w.userData.dodgeDirX = 0;
+      w.userData.dodgeDirZ = 0;
+
       this.group.add(w);
       this.wooks.push(w);
       this.colliders.push({
@@ -392,6 +556,29 @@ export class Wooks {
         damage: 5,
         kind: 'wook',
       });
+    }
+  }
+
+  // Honk-scatter trigger. Wooks in front of a parked Zerble (within
+  // FRONT_RANGE) get a short dodge timer + direction-away vector. Mirrors
+  // KidGaggle.scatter — same convention: dot(rel, zerble.forwardWorld) > 0
+  // means in front, since forwardWorld points along the cart's nose.
+  scatter(zerble) {
+    if (!zerble || !zerble.forwardWorld) return;
+    const FRONT_RANGE = 10;
+    const FRONT_RANGE_SQ = FRONT_RANGE * FRONT_RANGE;
+    const fx = zerble.forwardWorld.x;
+    const fz = zerble.forwardWorld.z;
+    for (const w of this.wooks) {
+      const dx = w.position.x - zerble.position.x;
+      const dz = w.position.z - zerble.position.z;
+      const d2 = dx * dx + dz * dz;
+      if (d2 > FRONT_RANGE_SQ) continue;
+      if (dx * fx + dz * fz <= 0) continue;
+      const inv = 1 / Math.sqrt(d2 || 0.0001);
+      w.userData.dodgeTimer = 1.4;
+      w.userData.dodgeDirX = dx * inv;
+      w.userData.dodgeDirZ = dz * inv;
     }
   }
 
@@ -470,8 +657,24 @@ export class Wooks {
     for (let i = 0; i < this.wooks.length; i++) {
       const w = this.wooks[i];
       const isApproaching = (i === approachIdx && zerblePos);
+      const isDodging = w.userData.dodgeTimer > 0;
 
-      if (isApproaching) {
+      if (isDodging) {
+        // Walk straight away from Zerble at dodge speed. Overrides orbit
+        // AND approach so a honked-at "approaching" wook also backs off.
+        const DODGE_SPEED = 3.5;
+        w.position.x += w.userData.dodgeDirX * DODGE_SPEED * dt;
+        w.position.z += w.userData.dodgeDirZ * DODGE_SPEED * dt;
+        // Face direction of travel.
+        w.rotation.y = Math.atan2(-w.userData.dodgeDirX, -w.userData.dodgeDirZ);
+        w.userData.dodgeTimer -= dt;
+        if (w.userData.dodgeTimer <= 0) {
+          // Re-anchor at the new position so the orbit resumes from here
+          // instead of snapping back to the old spot.
+          w.userData.anchor.set(w.position.x, 0, w.position.z);
+          w.userData.phase = 0;
+        }
+      } else if (isApproaching) {
         // Walk toward Zerble. Stop ~1.5m short so we don't standing-on-his-head.
         const dx = zerblePos.x - w.position.x;
         const dz = zerblePos.z - w.position.z;

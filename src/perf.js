@@ -45,6 +45,8 @@ const TABLE = {
     crowdMax: 180,
     chunkLoadRadius: 1,
     chunkUnloadRadius: 2,
+    // Bubble pool — small on low so transmission shader cost stays bounded.
+    bubblePoolMax: 200,
   },
   mid: {
     name: 'mid',
@@ -58,6 +60,7 @@ const TABLE = {
     crowdMax: 320,
     chunkLoadRadius: 2,
     chunkUnloadRadius: 3,
+    bubblePoolMax: 350,
   },
   high: {
     name: 'high',
@@ -71,6 +74,10 @@ const TABLE = {
     crowdMax: 500,
     chunkLoadRadius: 2,
     chunkUnloadRadius: 3,
+    // Roomy enough that blast mode is visibly denser than ambient — the
+    // old 200 cap was already saturated at normal play, so G had no
+    // visible effect even though the spawn rate doubled.
+    bubblePoolMax: 600,
   },
 };
 

@@ -25,7 +25,7 @@ import { getForestAt, buildForestChunk, chunkInForest, forestAnimatables, forest
 import { buildCampsite } from './models/campsite.js';
 import { buildTent } from './models/tent.js';
 import { buildFoodTruck, FOOD_TRUCK_SCALE } from './models/foodTruck.js';
-import { buildSugarShack, SUGAR_SHACK_WIDTH, SUGAR_SHACK_DEPTH } from './models/sugarShack.js';
+import { buildSugarShack, SUGAR_SHACK_WIDTH, SUGAR_SHACK_DEPTH, sugarShackCooks } from './models/sugarShack.js';
 import { buildHammock as buildHammockModel } from './models/hammock.js';
 import { buildEntranceArch as buildEntranceArchModel } from './models/entranceArch.js';
 import { buildStage as buildStageModel, placeBandOnStage } from './models/stage.js';
@@ -283,6 +283,9 @@ export class ChunkManager {
     }
     for (let i = stageBeamRefs.length - 1; i >= 0; i--) {
       if (stageBeamRefs[i].chunkKey === key) stageBeamRefs.splice(i, 1);
+    }
+    for (let i = sugarShackCooks.length - 1; i >= 0; i--) {
+      if (sugarShackCooks[i].chunkKey === key) sugarShackCooks.splice(i, 1);
     }
     // Sweep forest animatables (campsite firepit / torch flicker state).
     for (let i = forestAnimatables.length - 1; i >= 0; i--) {
@@ -758,6 +761,8 @@ function buildFoodPlaza(ctx) {
       shack.position.set(x, 0, z);
       shack.rotation.y = Math.atan2(centerX - x, centerZ - z); // front faces inward
       ctx.group.add(shack);
+      // Tag the cook patrol entry so chunk unload can sweep it.
+      if (shack.userData.cookEntry) shack.userData.cookEntry.chunkKey = ctx.key;
 
       // Collider sized to the actual canopy. The shack is rectangular, not
       // round, so the radius is a compromise — half the diagonal of the
@@ -1111,6 +1116,29 @@ function buildStage(ctx, x, z, isMain) {
     attractor: { radius: 14 * scale, weight: isMain ? 3.5 : 2.0 },
     chunkKey: ctx.key,
   });
+
+  // Guaranteed audience — spawn NPCs directly in front of the stage instead
+  // of relying on ambient-crowd attraction. Without this a stage can be
+  // completely empty if ambient spawns happen to scatter away from it. The
+  // audience fans out in a wide arc, denser near the front rail.
+  if (ctx.crowd) {
+    const audienceCount = isMain ? 22 : 12;
+    const frontZ = z + d / 2 + 4 * scale;
+    const arcWidth = 14 * scale;
+    for (let i = 0; i < audienceCount; i++) {
+      // Three-row fan: front row close, back rows further out. Random per-NPC
+      // jitter so they don't look gridded.
+      const row = i < audienceCount * 0.4 ? 0 : (i < audienceCount * 0.75 ? 1 : 2);
+      const rowDist = 1.5 + row * 3.0;
+      const u = (Math.random() - 0.5) * arcWidth;
+      const v = Math.random() * 2.5;
+      ctx.crowd.spawn({
+        pos: new THREE.Vector3(x + u, 0, frontZ + rowDist + v),
+        chunkKey: ctx.key,
+        rng: ctx.rng,
+      });
+    }
+  }
 
   // ----- Spatial music for this stage -----
   // Seed mixes chunk coords + stage flag so main vs side stages get distinct music.

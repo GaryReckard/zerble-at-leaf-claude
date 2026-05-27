@@ -1,8 +1,13 @@
 // Bubble particle system. InstancedMesh of transmissive spheres with simple physics.
 
 import * as THREE from 'three';
+import { PERF } from './perf.js';
 
-const MAX_BUBBLES = 200;
+// Pool size is tier-aware (see PERF.bubblePoolMax). The previous fixed 200
+// was already saturated at normal play — every G-key blast just churned
+// existing bubbles instead of producing a denser cloud. High tier now sees
+// 600 so blast mode actually reads as a visible fountain.
+const MAX_BUBBLES = PERF.bubblePoolMax || 200;
 const SPAWN_PER_SEC = 40;
 const GRAVITY = -0.45;
 const BUOYANCY = 1.0;
@@ -87,6 +92,15 @@ export class Bubbles {
     this._tmpPos = new THREE.Vector3();
     this._tmpQuat = new THREE.Quaternion();
     this._tmpScale = new THREE.Vector3();
+
+    // Blast mode — when on, spawn rate is multiplied by BLAST_MULT for a
+    // dramatic bubble fountain. Toggled per-frame from main.js based on the
+    // G key. ~2.8× sits between the requested 2-3×.
+    this.blastMode = false;
+  }
+
+  setBlast(on) {
+    this.blastMode = !!on;
   }
 
   // dt: frame delta. zerble: cart for spawn pose. nightness: 0..1 from the
@@ -102,8 +116,12 @@ export class Bubbles {
     }
     _windT += dt;
     // Spawn rate scales with cart speed — at rest, slow ambient drip; moving, full stream.
+    // Blast mode (G key) multiplies the rate ~2.8× regardless of speed for
+    // an extra-thick bubble fountain.
     const speed = Math.abs(zerble.speed);
-    const rate = SPAWN_PER_SEC * (0.55 + Math.min(1, speed / 8) * 0.45);
+    const BLAST_MULT = 2.8;
+    const blast = this.blastMode ? BLAST_MULT : 1.0;
+    const rate = SPAWN_PER_SEC * (0.55 + Math.min(1, speed / 8) * 0.45) * blast;
     this._spawnAcc += rate * dt;
 
     while (this._spawnAcc >= 1) {

@@ -18,6 +18,8 @@ const state = {
   boost: false,
   // one-shot honk press, consumed by Input.consumePressed('SPACE').
   honkLatched: false,
+  // one-shot music-toggle press, consumed by Input.consumePressed('M').
+  musicLatched: false,
   // accumulated camera drag, consumed per frame.
   camYawDelta: 0,
   camPitchDelta: 0,
@@ -40,12 +42,14 @@ let dragLastY = 0;
 
 let honkTouchId = null;
 let boostTouchId = null;
+let musicTouchId = null;
 
 let installed = false;
 let $stickBase = null;
 let $stickKnob = null;
 let $btnHonk = null;
 let $btnBoost = null;
+let $btnMusic = null;
 
 export const Touch = {
   state,
@@ -69,6 +73,7 @@ export const Touch = {
     $stickKnob = document.getElementById('stick-knob');
     $btnHonk = document.getElementById('btn-honk');
     $btnBoost = document.getElementById('btn-boost');
+    $btnMusic = document.getElementById('btn-music');
 
     if (!$stickBase || !$stickKnob || !$btnHonk || !$btnBoost) return;
 
@@ -94,6 +99,12 @@ export const Touch = {
     $btnBoost.addEventListener('touchend', onBoostEnd, { passive: false });
     $btnBoost.addEventListener('touchcancel', onBoostEnd, { passive: false });
 
+    if ($btnMusic) {
+      $btnMusic.addEventListener('touchstart', onMusicStart, { passive: false });
+      $btnMusic.addEventListener('touchend', onMusicEnd, { passive: false });
+      $btnMusic.addEventListener('touchcancel', onMusicEnd, { passive: false });
+    }
+
     // ----- Camera drag (anywhere outside the controls) -----
     // We listen on the canvas so taps on HUD elements (toast, score panel)
     // don't get hijacked.
@@ -116,6 +127,13 @@ export const Touch = {
   _consumeHonk() {
     const v = state.honkLatched;
     state.honkLatched = false;
+    return v;
+  },
+
+  // Consumed each frame by Input.consumePressed('M').
+  _consumeMusic() {
+    const v = state.musicLatched;
+    state.musicLatched = false;
     return v;
   },
 
@@ -245,6 +263,25 @@ function onBoostEnd(e) {
   }
 }
 
+function onMusicStart(e) {
+  e.preventDefault();
+  if (musicTouchId !== null) return;
+  musicTouchId = e.changedTouches[0].identifier;
+  state.musicLatched = true;
+  $btnMusic.classList.add('pressed');
+}
+
+function onMusicEnd(e) {
+  e.preventDefault();
+  for (const t of e.changedTouches) {
+    if (t.identifier === musicTouchId) {
+      musicTouchId = null;
+      $btnMusic.classList.remove('pressed');
+      return;
+    }
+  }
+}
+
 // ---------- Canvas drag (camera orbit/tilt) ----------
 
 function onCanvasStart(e) {
@@ -255,7 +292,7 @@ function onCanvasStart(e) {
   // Pick the first changedTouch — ignore if it landed on a control element.
   const t = e.changedTouches[0];
   const target = t.target;
-  if (target && (target.closest('#stick-base') || target.closest('#btn-honk') || target.closest('#btn-boost') || target.closest('#btn-cam'))) {
+  if (target && (target.closest('#stick-base') || target.closest('#btn-honk') || target.closest('#btn-boost') || target.closest('#btn-cam') || target.closest('#btn-music'))) {
     return;
   }
   e.preventDefault();

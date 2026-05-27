@@ -47,6 +47,56 @@ const FACADE_HEIGHT = WALL_H + 2.50;
 export const SUGAR_SHACK_WIDTH = FACADE_WIDTH;  // collider should cover signage width
 export const SUGAR_SHACK_DEPTH = DEPTH + 1.0;   // include facade depth
 
+// Module-level registry of cook patrol entries. Follows the same pattern as
+// `stagePerformers` in chunks.js: buildSugarShack pushes here, main loop
+// calls updateSugarShackCooks each frame, chunk unload sweeps by chunkKey.
+// Each entry: { cook, waypoints, currentIdx, targetIdx, holdLeft, walkSpeed, chunkKey }
+export const sugarShackCooks = [];
+
+// Tick all cooks — walk toward the current target waypoint at walkSpeed,
+// idle for the waypoint's hold duration on arrival, then pick a different
+// waypoint at random. Cook position is in shack-local coordinates; the
+// shack itself can translate/rotate freely and the cook tags along.
+export function updateSugarShackCooks(dt) {
+  for (let i = 0; i < sugarShackCooks.length; i++) {
+    const e = sugarShackCooks[i];
+    if (e.holdLeft > 0) {
+      e.holdLeft -= dt;
+      if (e.holdLeft <= 0) {
+        // Pick a different waypoint than the current one. With 5 wps and
+        // a uniform random pick, collisions average 1-in-5 — cheap retry.
+        let next = e.currentIdx;
+        let tries = 0;
+        while (next === e.currentIdx && tries++ < 6) {
+          next = Math.floor(Math.random() * e.waypoints.length);
+        }
+        e.targetIdx = next;
+      }
+      continue;
+    }
+    const wp = e.waypoints[e.targetIdx];
+    const dx = wp.x - e.cook.position.x;
+    const dz = wp.z - e.cook.position.z;
+    const d = Math.hypot(dx, dz);
+    if (d < 0.05) {
+      // Arrived — snap to position + waypoint facing, start idle hold.
+      e.cook.position.x = wp.x;
+      e.cook.position.z = wp.z;
+      e.cook.rotation.y = wp.facing;
+      e.currentIdx = e.targetIdx;
+      e.holdLeft = wp.holdMin + Math.random() * (wp.holdMax - wp.holdMin);
+      continue;
+    }
+    const step = Math.min(e.walkSpeed * dt, d);
+    const inv = 1 / d;
+    e.cook.position.x += dx * inv * step;
+    e.cook.position.z += dz * inv * step;
+    // Face direction of travel: NPC local -Z is forward, so yaw rotates
+    // -Z to align with (dx, dz). yaw = atan2(-dx, -dz).
+    e.cook.rotation.y = Math.atan2(-dx, -dz);
+  }
+}
+
 // ==================== Sign textures ====================
 
 const _texCache = new Map();
@@ -84,67 +134,69 @@ function buildHeaderBannerTexture() {
     const c = document.createElement('canvas');
     // Halved from 2048×512 → 1024×256 (per the r/threejs perf thread: iOS
     // can crash on textures > 2048, and 1024 is generally sufficient for
-    // signs viewed from 5+m at game scale). Font auto-shrink in fitFont()
-    // keeps the text proportionally crisp at the smaller canvas size.
+    // signs viewed from 5+m at game scale). Everything below is authored
+    // against a 2048×512 reference layout and multiplied by S, so the same
+    // numbers also work if we ever bump the canvas back up.
     c.width = 1024;
     c.height = 256;
+    const S = c.width / 2048;
     const cx = c.getContext('2d');
 
     // Beige wood background with subtle horizontal grain.
     cx.fillStyle = '#f0e2c0';
     cx.fillRect(0, 0, c.width, c.height);
     cx.strokeStyle = 'rgba(140, 100, 50, 0.10)';
-    cx.lineWidth = 2;
-    for (let y = 0; y < c.height; y += 14) {
+    cx.lineWidth = 2 * S;
+    for (let y = 0; y < c.height; y += 14 * S) {
       cx.beginPath(); cx.moveTo(0, y); cx.lineTo(c.width, y); cx.stroke();
     }
     // Thin dark border.
     cx.strokeStyle = 'rgba(70, 50, 30, 0.5)';
-    cx.lineWidth = 6;
-    cx.strokeRect(12, 12, c.width - 24, c.height - 24);
+    cx.lineWidth = 6 * S;
+    cx.strokeRect(12 * S, 12 * S, c.width - 24 * S, c.height - 24 * S);
 
     cx.textAlign = 'center';
     cx.textBaseline = 'middle';
 
     // "FESTIVAL FAMOUS" — small caps, pinkish, near top
     cx.fillStyle = '#a63a4a';
-    fitFont(cx, 'FESTIVAL · FAMOUS', 84, 'bold', c.width - 80);
-    cx.fillText('FESTIVAL · FAMOUS', c.width / 2, 95);
+    fitFont(cx, 'FESTIVAL · FAMOUS', 84 * S, 'bold', c.width - 80 * S);
+    cx.fillText('FESTIVAL · FAMOUS', c.width / 2, 95 * S);
 
     // "the SUGAR SHACK" — hand-painted feel, very large
     // "the" smaller and offset left like a cursive flourish
     cx.fillStyle = '#5b3a1f';
-    cx.font = 'italic bold 120px "Brush Script MT", "Snell Roundhand", "Trebuchet MS", cursive';
+    cx.font = `italic bold ${120 * S}px "Brush Script MT", "Snell Roundhand", "Trebuchet MS", cursive`;
     const theW = cx.measureText('the').width;
-    fitFont(cx, 'SUGAR SHACK', 220, 'bold', c.width - theW - 100);
+    fitFont(cx, 'SUGAR SHACK', 220 * S, 'bold', c.width - theW - 100 * S);
     const shackW = cx.measureText('SUGAR SHACK').width;
-    const totalW = theW + 50 + shackW;
+    const totalW = theW + 50 * S + shackW;
     const startX = (c.width - totalW) / 2 + theW / 2;
-    cx.font = 'italic bold 120px "Brush Script MT", "Snell Roundhand", "Trebuchet MS", cursive';
-    cx.fillText('the', startX - 30, 250);
-    fitFont(cx, 'SUGAR SHACK', 220, 'bold', c.width - theW - 100);
-    cx.fillText('SUGAR SHACK', startX + theW / 2 + 50 + shackW / 2, 270);
+    cx.font = `italic bold ${120 * S}px "Brush Script MT", "Snell Roundhand", "Trebuchet MS", cursive`;
+    cx.fillText('the', startX - 30 * S, 250 * S);
+    fitFont(cx, 'SUGAR SHACK', 220 * S, 'bold', c.width - theW - 100 * S);
+    cx.fillText('SUGAR SHACK', startX + theW / 2 + 50 * S + shackW / 2, 270 * S);
 
     // "BREAKFAST ALL DAY + NIGHT" — small caps, brown, bottom
     cx.fillStyle = '#5b3a1f';
-    fitFont(cx, 'BREAKFAST  ALL  DAY  +  NIGHT', 76, 'bold', c.width - 80);
-    cx.fillText('BREAKFAST  ALL  DAY  +  NIGHT', c.width / 2, 430);
+    fitFont(cx, 'BREAKFAST  ALL  DAY  +  NIGHT', 76 * S, 'bold', c.width - 80 * S);
+    cx.fillText('BREAKFAST  ALL  DAY  +  NIGHT', c.width / 2, 430 * S);
 
     // Decorative red dots flanking the title (the "berry" garnishes).
     cx.fillStyle = '#c63a2a';
-    cx.beginPath(); cx.arc(c.width * 0.18, 95, 16, 0, Math.PI * 2); cx.fill();
-    cx.beginPath(); cx.arc(c.width * 0.82, 95, 16, 0, Math.PI * 2); cx.fill();
+    cx.beginPath(); cx.arc(c.width * 0.18, 95 * S, 16 * S, 0, Math.PI * 2); cx.fill();
+    cx.beginPath(); cx.arc(c.width * 0.82, 95 * S, 16 * S, 0, Math.PI * 2); cx.fill();
 
     // Sun (yellow circle) before "BREAKFAST" and crescent moon after "NIGHT".
     cx.fillStyle = '#f4c430';
-    cx.beginPath(); cx.arc(c.width * 0.25, 430, 22, 0, Math.PI * 2); cx.fill();
+    cx.beginPath(); cx.arc(c.width * 0.25, 430 * S, 22 * S, 0, Math.PI * 2); cx.fill();
     cx.fillStyle = '#dcdce4';
     cx.beginPath();
-    cx.arc(c.width * 0.75, 430, 22, 0, Math.PI * 2);
+    cx.arc(c.width * 0.75, 430 * S, 22 * S, 0, Math.PI * 2);
     cx.fill();
     cx.fillStyle = '#f0e2c0';
     cx.beginPath();
-    cx.arc(c.width * 0.75 + 8, 425, 20, 0, Math.PI * 2);
+    cx.arc(c.width * 0.75 + 8 * S, 425 * S, 20 * S, 0, Math.PI * 2);
     cx.fill();
 
     return finishCanvasTexture(c);
@@ -158,35 +210,38 @@ function buildMenuPlankTexture() {
     // Halved from 2048×384 → 1024×192. Same reasoning as the header
     // banner: 1024 is the safe upper-bound for cross-device textures,
     // and the menu items are short hand-painted strings that stay legible.
+    // Everything below is authored against a 2048×384 reference layout and
+    // multiplied by S so positions/sizes scale with the canvas.
     c.width = 1024;
     c.height = 192;
+    const S = c.width / 2048;
     const cx = c.getContext('2d');
 
     // Worn orange-brown wood with horizontal grain.
     cx.fillStyle = '#a8682e';
     cx.fillRect(0, 0, c.width, c.height);
     cx.strokeStyle = 'rgba(60, 30, 10, 0.22)';
-    cx.lineWidth = 2;
-    for (let y = 0; y < c.height; y += 16) {
+    cx.lineWidth = 2 * S;
+    for (let y = 0; y < c.height; y += 16 * S) {
       cx.beginPath();
       // Wobbly grain
       cx.moveTo(0, y);
-      for (let x = 0; x < c.width; x += 64) {
-        cx.lineTo(x, y + Math.sin(x * 0.013 + y * 0.07) * 3);
+      for (let x = 0; x < c.width; x += 64 * S) {
+        cx.lineTo(x, y + Math.sin(x * 0.013 + y * 0.07) * 3 * S);
       }
       cx.stroke();
     }
     // Knots — small darker ovals.
     cx.fillStyle = 'rgba(60, 30, 10, 0.45)';
     for (let i = 0; i < 6; i++) {
-      const kx = (i + 0.5) * (c.width / 6) + (i % 2 === 0 ? 40 : -40);
-      const ky = 60 + (i * 71) % (c.height - 120);
-      cx.beginPath(); cx.ellipse(kx, ky, 18, 10, 0, 0, Math.PI * 2); cx.fill();
+      const kx = (i + 0.5) * (c.width / 6) + (i % 2 === 0 ? 40 * S : -40 * S);
+      const ky = 60 * S + (i * 71 * S) % (c.height - 120 * S);
+      cx.beginPath(); cx.ellipse(kx, ky, 18 * S, 10 * S, 0, 0, Math.PI * 2); cx.fill();
     }
     // Outer border.
     cx.strokeStyle = 'rgba(0,0,0,0.55)';
-    cx.lineWidth = 8;
-    cx.strokeRect(10, 10, c.width - 20, c.height - 20);
+    cx.lineWidth = 8 * S;
+    cx.strokeRect(10 * S, 10 * S, c.width - 20 * S, c.height - 20 * S);
 
     cx.textAlign = 'center';
     cx.textBaseline = 'middle';
@@ -204,12 +259,12 @@ function buildMenuPlankTexture() {
       const cxX = (i + 0.5) * slotW;
       const n = item.lines.length;
       // 3-line items get slightly smaller font to fit vertically.
-      const fontSize = n === 3 ? 92 : 120;
+      const fontSize = (n === 3 ? 92 : 120) * S;
       cx.fillStyle = item.color;
       const lineHeight = fontSize * 1.05;
       const totalH = n * lineHeight;
       for (let j = 0; j < n; j++) {
-        fitFont(cx, item.lines[j], fontSize, 'bold', slotW - 40);
+        fitFont(cx, item.lines[j], fontSize, 'bold', slotW - 40 * S);
         const y = c.height / 2 - totalH / 2 + (j + 0.5) * lineHeight;
         cx.fillText(item.lines[j], cxX, y);
       }
@@ -463,15 +518,18 @@ function buildApronCook(rng = Math.random) {
   strap.rotation.z = Math.PI;
   g.add(strap);
 
-  // Short cropped hair.
+  // Short cropped hair. The simple NPC head is a 0.26-radius sphere centered
+  // at y=1.65, so its crown sits at y≈1.91 — the dome needs to clear that or
+  // the bald scalp pokes through. Centered at 1.82 with scale.y=0.55 puts the
+  // hair's top at y≈1.97, comfortably over the head.
   const hairColors = [0x2a2018, 0x5a3920, 0x7b5a3a, 0xb8956a];
   const hairMat = new THREE.MeshStandardMaterial({
     color: hairColors[Math.floor(rng() * hairColors.length)],
     roughness: 0.85, flatShading: true,
   });
   const hair = new THREE.Mesh(new THREE.SphereGeometry(0.27, 10, 8), hairMat);
-  hair.position.set(0, 1.74, 0.0);
-  hair.scale.set(1.0, 0.5, 1.0);
+  hair.position.set(0, 1.82, 0.03);
+  hair.scale.set(1.02, 0.55, 1.02);
   g.add(hair);
 
   return g;
@@ -891,18 +949,50 @@ export function buildSugarShack(rng = Math.random) {
   }
 
   // ---- Workers ----
-  // Two figures inside the tent, in the center walkway, facing the customer
-  // (+Z). Tom on the left near the counter, the apron cook deeper inside
-  // working a back station.
+  // Two figures inside the tent, in the center walkway. Tom holds the
+  // counter facing the customer (+Z); the apron cook patrols between the
+  // four cooking stations and a counter spot in a random progression so
+  // there's always someone moving inside the tent.
   const tom = buildTom();
   tom.rotation.y = Math.PI;                                // face +Z (customer)
   tom.position.set(-0.45, 0, DEPTH / 2 - COUNTER_D - 0.6);
   g.add(tom);
 
   const cook = buildApronCook(rng);
-  cook.rotation.y = Math.PI - 0.2;                         // turned slightly so the two don't look identical
-  cook.position.set(0.45, 0, DEPTH / 2 - COUNTER_D - 2.4);
   g.add(cook);
+
+  // Patrol waypoints in shack-local coordinates. Each entry: x, z, facing,
+  // and a hold time range (seconds) for how long the cook idles at that
+  // spot before moving on. Facing yaw makes the cook's local -Z point at
+  // the appropriate surface: PI/2 for left-wall stations, -PI/2 for right,
+  // PI for the counter (faces customer).
+  const FRONT_Z = DEPTH / 2 - COUNTER_D - 1.2;             // = 2.15
+  const BACK_Z  = DEPTH / 2 - COUNTER_D - 3.4;             // = -0.05
+  const CTR_Z   = DEPTH / 2 - COUNTER_D - 0.6;             // = 2.75 (Tom's row)
+  const SIDE_X  = 0.75;                                    // walkway offset from center
+  const waypoints = [
+    { x: -SIDE_X, z: FRONT_Z, facing:  Math.PI / 2, holdMin: 2.0, holdMax: 5.0 }, // L-front
+    { x: -SIDE_X, z: BACK_Z,  facing:  Math.PI / 2, holdMin: 2.0, holdMax: 5.0 }, // L-back
+    { x:  SIDE_X, z: FRONT_Z, facing: -Math.PI / 2, holdMin: 2.0, holdMax: 5.0 }, // R-front
+    { x:  SIDE_X, z: BACK_Z,  facing: -Math.PI / 2, holdMin: 2.0, holdMax: 5.0 }, // R-back
+    { x:  0.55,   z: CTR_Z,   facing:  Math.PI,     holdMin: 3.0, holdMax: 6.0 }, // counter (next to Tom)
+  ];
+  // Start at a random waypoint, already in position.
+  const startIdx = Math.floor(rng() * waypoints.length);
+  cook.position.set(waypoints[startIdx].x, 0, waypoints[startIdx].z);
+  cook.rotation.y = waypoints[startIdx].facing;
+  const cookEntry = {
+    cook,
+    waypoints,
+    currentIdx: startIdx,
+    targetIdx: startIdx,
+    holdLeft: 1.0 + rng() * 3.0,
+    walkSpeed: 1.1 + rng() * 0.4,
+    chunkKey: null,                                        // set by chunks.js
+  };
+  sugarShackCooks.push(cookEntry);
+  // Stash a back-reference so chunks.js can tag chunkKey after building.
+  g.userData.cookEntry = cookEntry;
 
   // ---- String lights along each long tent eave ----
   // 20 identical emissive bulbs collapsed to a single InstancedMesh — one

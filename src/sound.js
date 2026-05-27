@@ -15,6 +15,7 @@ import { mulberry32 } from './rng.js';
 let ctx = null;
 let masterGain = null;
 let musicBus = null;     // shared bus for stage music sources (so we can balance vs. SFX)
+let musicDuckGain = null; // downstream attenuator — ducks when an external player (MIDI) is active
 let sfxBus = null;       // shared bus for all SFX (engine, collisions, honks, bumps)
 let engineNodes = null;
 let initialized = false;
@@ -166,7 +167,15 @@ export const Sound = {
     // headroom boost to "carry" — dropping to 1.2 cuts the in-your-face
     // feel near the main stage without making distant stages disappear.
     musicBus.gain.value = 1.2;
-    musicBus.connect(masterGain);
+
+    // Downstream duck node — MIDI player ramps this to ~0.2 while it's
+    // playing so the in-world stage music doesn't fight the foreground
+    // music. User's saved volume preference still lives on musicBus.gain;
+    // the duck node is purely a runtime multiplier on top.
+    musicDuckGain = ctx.createGain();
+    musicDuckGain.gain.value = 1.0;
+    musicBus.connect(musicDuckGain);
+    musicDuckGain.connect(masterGain);
 
     sfxBus = ctx.createGain();
     sfxBus.gain.value = 1.0;
@@ -366,6 +375,18 @@ export const Sound = {
   setMasterVolume(v) { if (masterGain) masterGain.gain.value = v; this._saveVolumes(); },
   setMusicVolume(v)  { if (musicBus)   musicBus.gain.value   = v; this._saveVolumes(); },
   setSfxVolume(v)    { if (sfxBus)     sfxBus.gain.value     = v; this._saveVolumes(); },
+
+  // Runtime music attenuator — independent of the user's saved volume.
+  // The MIDI player calls this with ~0.18 on start and 1.0 on stop so the
+  // in-world stage music ducks under the foreground MIDI instead of
+  // fighting it. Ramped to avoid pops.
+  setMusicDuck(factor) {
+    if (!musicDuckGain || !ctx) return;
+    const now = ctx.currentTime;
+    musicDuckGain.gain.cancelScheduledValues(now);
+    musicDuckGain.gain.setValueAtTime(musicDuckGain.gain.value, now);
+    musicDuckGain.gain.linearRampToValueAtTime(factor, now + 0.4);
+  },
   getMasterVolume()  { return masterGain ? masterGain.gain.value : 0.55; },
   getMusicVolume()   { return musicBus   ? musicBus.gain.value   : 1.6; },
   getSfxVolume()     { return sfxBus     ? sfxBus.gain.value     : 1.0; },

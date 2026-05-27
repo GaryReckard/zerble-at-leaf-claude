@@ -22,8 +22,10 @@ import { updateCampsiteProps } from './models/campsite.js';
 import { updateLeafDrumCircle } from './models/leafDrumCircle.js';
 import { updateTribalFigures } from './models/tribalFigures.js';
 import { updateStagePerformers, updateStageLightShow, stageLightLenses } from './chunks.js';
+import { updateSugarShackCooks } from './models/sugarShack.js';
 import { Zerble } from './zerble.js';
 import { Bubbles } from './bubbles.js';
+import { MidiPlayer } from './midiPlayer.js';
 import { Smiles } from './smiles.js';
 import { Crowd } from './crowd.js';
 import { Lurleen } from './lurleen.js';
@@ -163,6 +165,10 @@ scene.add(zerble.root);
 
 const bubbles = new Bubbles();
 scene.add(bubbles.mesh);
+
+// MIDI player — Tone.js loads lazily on the first M press so startup stays
+// fast. Trip._envelope drives the warp chain each frame (see tick body).
+const midi = new MidiPlayer();
 
 const smiles = new Smiles();
 scene.add(smiles.group);
@@ -320,6 +326,17 @@ function tickBody(dt) {
       zerble.honk();
       honkAge = 0;
       crowd.applyHonk(zerble);
+      // Other collidable people in front of a parked Zerble also scatter.
+      // crowd.applyHonk handles its own NPC pool; the obstacles module owns
+      // kids, wooks, puppets, and the brass band — each has its own
+      // scatter() that respects its own motion (path-following, formation,
+      // free wander). All of them dodge perpendicular-away from Zerble.
+      if (Math.abs(zerble.speed || 0) < 0.5) {
+        kids.scatter(zerble);
+        wooks.scatter(zerble);
+        puppets.scatter(zerble);
+        band.scatter(zerble);
+      }
       if (bellHonk)      Sound.playBicycleBell();
       else if (hornHonk) Sound.playClownHorn();
       else               Sound.playHonk();   // SPACE → random
@@ -339,6 +356,26 @@ function tickBody(dt) {
       if (Trip.state === 'awaiting_confirm') Trip.acceptOffer();
     }
 
+    // M toggles the MIDI music player. First press lazy-loads Tone.js
+    // from the CDN (~250KB) and starts the AudioContext; the M press
+    // itself counts as the user gesture browsers require.
+    if (Input.consumePressed('M')) {
+      midi.toggle(HUD);
+    }
+    // Feed both the trip's envelope (fade-in/out gate) AND its progress
+    // (0..1 position across the full trip) into the MIDI player each frame.
+    // The two-layer design mirrors Trip._writeDynamicCurves for visuals: the
+    // envelope gates the warp in/out, the progress shapes each effect's own
+    // personality curve. Peak audio climax lands at progress ≈ 1/3, same
+    // as the visual posterize spike.
+    midi.setTripState(Trip._envelope || 0, Trip.progress());
+
+    // G key (held) cranks the bubble machine to ~2.8× output AND switches
+    // the disco light into a fast, bright-white strobe so the effect reads
+    // even in bright sunlight. Per-frame: hold for blast, release for normal.
+    const blasting = Input.isDown('G');
+    bubbles.setBlast(blasting);
+    zerble.setBubbleBlast(blasting);
     bubbles.update(dt, zerble, nightness);
     if (!npcsFrozen()) crowd.update(dt, zerble, bubbles);
     smiles.update(dt, zerble, (n) => {
@@ -365,6 +402,7 @@ function tickBody(dt) {
     const nowS = performance.now() * 0.001;
     updateStagePerformers(nowS);
     updateStageLightShow(nowS, nightness, zerble.position);
+    updateSugarShackCooks(dt);
 
     // Distance-gate per-frame animatable updates. A campsite ember pulse /
     // tiki-flame flicker / drum-circle figure animation 80m behind the
@@ -430,10 +468,13 @@ function tickBody(dt) {
     if (zerble.invulnLeft <= 0) {
       // Build a per-frame collider list for nearby crowd NPCs so Zerble can actually
       // bump them. Skip riders + anyone more than 5m away (cheap broad-phase reject).
+      // Disembarking NPCs are also skipped entirely for the ~5s disembark window —
+      // they're trying to clear Zerble's space, so colliding with them as they
+      // hop off (or Zerble starting to roll forward into them) was unfair damage.
       const npcColliders = [];
       const broadphaseR2 = 36; // 6m broadphase
       for (const n of crowd.npcs) {
-        if (n.state === 'riding' || n.state === 'boarding') continue;
+        if (n.state === 'riding' || n.state === 'boarding' || n.state === 'disembarking') continue;
         const dx = n.pos.x - zerble.position.x;
         const dz = n.pos.z - zerble.position.z;
         if (dx * dx + dz * dz > broadphaseR2) continue;
@@ -519,18 +560,29 @@ function scheduleNext() {
 // to count as "driving into" — anything below this is a glancing/passive touch.
 const APPROACH_DAMAGE_THRESHOLD = 1.2;
 
+// Soft "people" collider kinds — when Zerble is parked, these never push him
+// around. Otherwise a curious NPC walking up to the cart would shove it
+// across the grass. Hard kinds (truck, tent, stage, arch, puppet, lurleen)
+// always block.
+const SOFT_PEOPLE_KINDS = new Set(['person', 'kid', 'wook', 'brass']);
+
 function resolveCollision(zerble, colliders) {
   // forward = (-sin(h), 0, -cos(h)); velocity = forward * speed
   const fx = -Math.sin(zerble.heading);
   const fz = -Math.cos(zerble.heading);
   const velX = fx * zerble.speed;
   const velZ = fz * zerble.speed;
+  const zerbleParked = Math.abs(zerble.speed) < APPROACH_DAMAGE_THRESHOLD;
 
   for (const c of colliders) {
     // Passive colliders (e.g. the wook walking up to dose Zerble) are visible
     // but don't push Zerble or deal damage — otherwise their physical radius
     // would prevent Zerble from being inside the proximity trigger range.
     if (c.passive) continue;
+    // Parked Zerble can be crowded by people without being pushed around.
+    // (Approach-damage already needs Zerble to be moving fast, so this only
+    // suppresses the non-damaging position-nudge path below.)
+    if (zerbleParked && SOFT_PEOPLE_KINDS.has(c.kind)) continue;
     const tox = c.position.x - zerble.position.x;
     const toz = c.position.z - zerble.position.z;
     const d = Math.hypot(tox, toz);

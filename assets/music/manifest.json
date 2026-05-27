@@ -1,0 +1,4 @@
+{
+  "_readme": "Drop .mid files in this folder and add entries below. Random pick on each M press. Filenames are relative to assets/music/. With no entries, the M key plays a built-in procedural test loop.",
+  "tracks": ["music-1.mid","music-2.mid"]
+}

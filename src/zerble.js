@@ -674,6 +674,13 @@ export class Zerble {
     mc.stroke();
     const mondrianTex = new THREE.CanvasTexture(mondrianCanvas);
     mondrianTex.colorSpace = THREE.SRGBColorSpace;
+    // RepeatWrapping fixes the gray inner-rim faces: the ExtrudeGeometry's
+    // side walls have UVs that often exceed 1.0 (cumulative arc length /
+    // depth), and with the default ClampToEdge they were sampling a single
+    // column of the texture. Repeat tiling lets the inner walls catch the
+    // Mondrian colors instead of looking flat gray.
+    mondrianTex.wrapS = THREE.RepeatWrapping;
+    mondrianTex.wrapT = THREE.RepeatWrapping;
     const frameMat = new THREE.MeshStandardMaterial({
       map: mondrianTex, roughness: 0.45, metalness: 0.1, flatShading: true,
     });
@@ -724,8 +731,10 @@ export class Zerble {
     });
     const lensGeo = new THREE.PlaneGeometry(FRAME_W - FRAME_T * 2, FRAME_H - FRAME_T * 2);
 
-    // Two eye frames + lenses (matching eye x positions ±0.10).
-    for (const lx of [-0.10, 0.10]) {
+    // Two eye frames + lenses — moved inward from ±0.10 to ±0.085 so the
+    // bridge between them is short enough to be a single connecting piece.
+    const FRAME_X = 0.085;
+    for (const lx of [-FRAME_X, FRAME_X]) {
       const rim = new THREE.Mesh(rimGeo, frameMat);
       // Extrusion extends +Z by default; offset back so the rim is
       // centered around the lens plane (lens at z=0 in glasses-local).
@@ -736,21 +745,33 @@ export class Zerble {
       glasses.add(lens);
     }
 
-    // Nose bridge between the two rims.
+    // Nose bridge — sized to actually span the gap between the two rims'
+    // inner edges. Inner edges sit at ±(FRAME_X - FRAME_W/2) = ±0.0325;
+    // bridge width 0.075 gives a small overlap into each rim so the join
+    // reads continuous rather than two pieces almost touching.
+    const bridgeWidth = (FRAME_X - FRAME_W / 2) * 2 + 0.012;
     const bridge = new THREE.Mesh(
-      new THREE.BoxGeometry(0.04, 0.014, FRAME_D),
+      new THREE.BoxGeometry(bridgeWidth, 0.014, FRAME_D),
       frameMat,
     );
     bridge.position.set(0, 0.018, -FRAME_D / 2);
     glasses.add(bridge);
 
-    // Temple arms — chunky and slightly tilted up, extending back over
-    // the head. They tuck into the head sphere on the back end, which
-    // reads visually as "arms going over the ears."
+    // Temple arms — chunky boxes attached to the outer edges of the rims
+    // and splayed outward at ~9° so the far ends sit wider than the
+    // mounting points. BoxGeometry has proper UVs on all six faces so the
+    // Mondrian texture wraps the arm cleanly on every visible side.
     const armGeo = new THREE.BoxGeometry(0.018, 0.014, 0.22);
-    for (const lx of [-0.155, 0.155]) {
+    const armOuterX = FRAME_X + FRAME_W / 2 - 0.005;     // mount at the rim outer edge
+    const ARM_SPLAY = 0.16;                              // ~9° outward
+    for (const side of [-1, 1]) {
       const arm = new THREE.Mesh(armGeo, frameMat);
-      arm.position.set(lx, 0.004, 0.09);
+      arm.position.set(side * armOuterX, 0.004, 0.09);
+      // Rotate around Y so the back end of the arm splays outward. For
+      // the left arm (side=-1) we want +X→-X tilt as the arm extends +Z,
+      // which means a negative rotation.y. side multiplier gives the right
+      // sign automatically for both arms.
+      arm.rotation.y = -side * ARM_SPLAY;
       glasses.add(arm);
     }
 

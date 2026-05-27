@@ -525,6 +525,10 @@ function tapestryTexture(c1, c2, rng) {
     for (let x = 4; x < 64; x += 10) ctx.fillRect(x, 0, 3, 64);
   }
   const tex = new THREE.CanvasTexture(_tapestryCanvas);
+  // SRGB tagging matches the canvas's native color space — without this
+  // three.js does an extra linear → sRGB conversion in the shader for
+  // colored textures, which is wrong AND slower.
+  tex.colorSpace = THREE.SRGBColorSpace;
   tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
   tex.needsUpdate = true;
   // We use a NEW canvas per call — but CanvasTexture clones the source pixels

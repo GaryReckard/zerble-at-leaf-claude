@@ -4,6 +4,12 @@ All notable changes to Zerble at the Festival. Newest at top. Following [Keep a 
 
 ## [Unreleased]
 
+### Performance (pass 3 — r/threejs thread nuggets)
+- **Texture clamp to 1024.** Sugar Shack header banner (2048×512 → 1024×256) and menu plank (2048×384 → 1024×192) were the only canvases over 1024. Per the thread: iOS can crash on textures > 2048; 1024 is the safe cross-device upper bound. Font auto-shrink in `fitFont()` keeps text crisp.
+- **MeshStandardMaterial → MeshLambertMaterial on low tier.** `src/litFallback.js` monkey-patches the constructor at boot when `PERF.name === 'low'`. PBR is per-fragment; Lambert is per-vertex diffuse — single highest-ROI material change for integrated GPUs. Tradeoff (roughness/metalness dropped) is invisible on Zerble's flat-shaded surfaces.
+- **Chunk-load budget.** `ChunkManager.update()` used to synchronously build every uncached chunk in the load ring on a single frame; crossing a corner at boost speed (~28 m/s) demanded 3-5 chunks in one tick — long enough to stutter movement mid-boost. Now budgeted to 1 chunk per frame after boot, closest-first. The 3x3 ring backfills over ~3 frames (50ms).
+- **Per-tier perf budgets in the HUD.** Backtick debug panel now shows draws and tris next to their per-tier budget (low 80/150k, mid 200/400k, high 400/1.2M) with `ok` / `!` / `!!` markers. Catches regressions visually as new content lands.
+
 ### Performance (pass 2)
 - **`renderer.info` overlay** in the backtick debug panel — live draw calls, triangles, geometry/texture/heap counts.
 - **Dispose-safe shared resources.** Module-level cached materials/geometries (`SHACK_MATS`, `STRING_BULB_GEO`, campsite `matFor`, NPC pool, torch+chair pools, food truck pool) are tagged `userData.shared`. Chunk + lake unload disposal walks skip them, so a Sugar Shack chunk unloading doesn't free materials that other chunks still need.

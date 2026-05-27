@@ -13,6 +13,37 @@ import * as THREE from 'three';
 import { Sound } from './sound.js';
 import { Analytics } from './analytics.js';
 import { getForestAt } from './forests.js';
+import { PERF } from './perf.js';
+
+// Per-tier perf budgets. Numbers come from the r/threejs perf thread
+// guidance — these are "stay under or you're hurting low-end devices"
+// targets, not hard limits. The HUD colors the live counts against
+// these so it's obvious at a glance whether the current scene is in or
+// out of budget.
+//
+//   triangles: low 150k / mid 400k / high 1.2M
+//   draws:     low 80   / mid 200   / high 400
+const PERF_BUDGETS = {
+  low:  { tris: 150_000, draws: 80  },
+  mid:  { tris: 400_000, draws: 200 },
+  high: { tris: 1_200_000, draws: 400 },
+};
+
+// Format a count with a budget marker — green if under 75%, yellow if
+// 75–100%, red if over. Returns the string with terminal-style
+// brackets/symbols; the panel is monospace text so ANSI codes won't
+// render — we use ` ok`, ` !`, ` !!` markers instead.
+function fmtWithBudget(value, budget) {
+  if (typeof value !== 'number') return String(value);
+  const pretty = value.toLocaleString();
+  if (!budget) return pretty;
+  const pct = value / budget;
+  let marker;
+  if (pct < 0.75)      marker = 'ok';
+  else if (pct < 1.0)  marker = '! ';
+  else                 marker = '!!';
+  return `${pretty} / ${budget.toLocaleString()} [${marker}]`;
+}
 
 const PANEL_ID = 'debug-panel';
 const TRIP_PANEL_ID = 'trip-panel';
@@ -524,10 +555,19 @@ function updatePanel(dt) {
     ? `  heap ${(performance.memory.usedJSHeapSize / 1048576).toFixed(0)}MB`
     : '';
 
+  // Per-tier budgets from the r/threejs perf thread. The current tier's
+  // numbers get inlined next to draws/tris so it's obvious at a glance
+  // whether the scene fits the budget. Markers: ok (<75%) / ! (75-100%) /
+  // !! (over budget).
+  const budget = PERF_BUDGETS[PERF.name] || null;
+  const drawsStr = budget ? fmtWithBudget(drawCalls, budget.draws) : String(drawCalls);
+  const trisStr  = budget ? fmtWithBudget(triangles, budget.tris)  : (typeof triangles === 'number' ? triangles.toLocaleString() : String(triangles));
+
   state.textEl.textContent =
     `~ debug (P pause · . step · C colliders · G god · F freeze)\n` +
     `fps          ${fps}    ${state.paused ? '[PAUSED]' : ''}\n` +
-    `draws        ${drawCalls}  tris ${typeof triangles === 'number' ? triangles.toLocaleString() : triangles}\n` +
+    `draws        ${drawsStr}\n` +
+    `tris         ${trisStr}\n` +
     `gpu mem      geo ${geoCount}  tex ${texCount}${heap}\n` +
     `running      ${running}\n` +
     `pos          ${z.position.x.toFixed(1)}, ${z.position.z.toFixed(1)}\n` +

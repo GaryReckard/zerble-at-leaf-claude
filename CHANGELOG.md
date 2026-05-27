@@ -4,7 +4,16 @@ All notable changes to Zerble at the Festival. Newest at top. Following [Keep a 
 
 ## [Unreleased]
 
-### Performance
+### Performance (pass 2)
+- **`renderer.info` overlay** in the backtick debug panel — live draw calls, triangles, geometry/texture/heap counts.
+- **Dispose-safe shared resources.** Module-level cached materials/geometries (`SHACK_MATS`, `STRING_BULB_GEO`, campsite `matFor`, NPC pool, torch+chair pools, food truck pool) are tagged `userData.shared`. Chunk + lake unload disposal walks skip them, so a Sugar Shack chunk unloading doesn't free materials that other chunks still need.
+- **Distance-gated per-frame updates.** Campsite ember pulses, tiki flicker, drum-circle figure animation skip entirely when their cluster is > 75m from Zerble.
+- **Adaptive quality monitor** (`src/adaptiveQuality.js`). Rolling 90-frame window. If avg frame > 24ms for ~1s, drops a quality level (bloom → shadows → half pixel ratio). Recovers if frame budget < 15ms sustained. HUD toast on transitions.
+- **InstancedMesh.** Sugar Shack string bulbs (20 per shack → 1 draw); forest drum-circle bench rings (~45 meshes → 2 draws).
+- **MSAA → FXAA on mid/low tier.** High tier keeps renderer antialias; mid/low get `antialias: false` + a screen-space `FXAAPass`. Way cheaper at pixelRatio 2.
+- **Material + geometry pooling rollout.** `puppet.js` (every NPC shares geometry buffers, materials pooled by color), `campsite.js` torches + chairs (every torch/chair shares its primitive buffers), `foodTruck.js` (every truck shares buffers + materials pooled by color). Typical scene geometry count dropped ~21% (3686 → 2919).
+
+### Performance (pass 1)
 - **Shadow-cast audit.** `castShadow = true` count across the codebase dropped from 115 to 56 — cut on tent poles, sign boards, brackets, light fixtures, NPC limbs, Lurleen's raffia strands (was 280-560 per cart!), camp chairs, firepit stones, drum-circle benches, lamppost cylinders, and Zerble's smaller detail bits. Large objects (tent roofs, main walls, body capsules, banners, tree crowns, chassis) still cast.
 - **Trip post-process pass disables itself** when the envelope is at zero — saves a full-screen render every frame the player isn't tripping.
 - **Sugar Shack material + geometry pooling.** Hoisted ~20 per-build `MeshStandardMaterial` allocations to a module-level `SHACK_MATS` cache; string-light bulb sphere geometry and supply-can cylinder geometry are now shared too. Multiple shacks in view share draw calls.

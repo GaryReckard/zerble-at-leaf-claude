@@ -203,39 +203,61 @@ export function buildLeafDrumCircle(rng = Math.random, opts = {}) {
   // Centreline opposite the entrance: drummers face the fire and the
   // arriving player. Each ring is a row of discrete log cylinders so the
   // silhouette reads as "logs laid end-to-end" rather than a smooth torus.
+  //
+  // All logs across all 3 rings collapse into ONE InstancedMesh (same
+  // geometry + material). Same for the support wedges. Saves ~30-50 draw
+  // calls per drum circle. Per threejs-geometry skill's "InstancedMesh for
+  // many identical objects."
   const benchCentre = facingAngle + Math.PI;
+  // Two-pass: first count, then allocate the instance buffers, then write.
+  let logTotal = 0;
+  let supportTotal = 0;
   for (let ring = 0; ring < BENCH_RADII.length; ring++) {
     const r = BENCH_RADII[ring];
-    const arcLen = Math.PI * r;                  // semicircle arc length
+    const arcLen = Math.PI * r;
+    const logCountInRing = Math.max(5, Math.round(arcLen / (BENCH_LOG_LEN * 1.1)));
+    logTotal += logCountInRing;
+    supportTotal += Math.floor((logCountInRing + 1) / 2);  // every-other
+  }
+  const logsInstance = new THREE.InstancedMesh(_halfLogGeo, BENCH_LOG_MAT, logTotal);
+  // Support geometry built once per drum circle (still shared across all
+  // supports within it). Could hoist to module level but with tier-gated
+  // drum circles being rare, this is fine.
+  const supportGeo = new THREE.CylinderGeometry(0.07, 0.08, 0.35, 5);
+  const supportsInstance = new THREE.InstancedMesh(supportGeo, BENCH_LOG_MAT, supportTotal);
+  const _bmat = new THREE.Matrix4();
+  const _be = new THREE.Euler();
+  const _bq = new THREE.Quaternion();
+  const _bp = new THREE.Vector3();
+  const _bs = new THREE.Vector3(1, 1, 1);
+  let logIdx = 0;
+  let supportIdx = 0;
+  for (let ring = 0; ring < BENCH_RADII.length; ring++) {
+    const r = BENCH_RADII[ring];
+    const arcLen = Math.PI * r;
     const logCountInRing = Math.max(5, Math.round(arcLen / (BENCH_LOG_LEN * 1.1)));
     for (let i = 0; i < logCountInRing; i++) {
-      // Spread evenly across the half-circle.
-      const t = (i + 0.5) / logCountInRing;        // 0..1 across the arc
+      const t = (i + 0.5) / logCountInRing;
       const a = benchCentre - Math.PI / 2 + t * Math.PI;
       const cx = Math.cos(a) * r;
       const cz = Math.sin(a) * r;
-
-      // Half-log: ExtrudeGeometry already lays the log along Z with flat
-      // top up. Just rotate around Y to align the long axis with the
-      // bench arc's tangent at this point.
-      const log = new THREE.Mesh(_halfLogGeo, BENCH_LOG_MAT);
-      log.position.set(cx, BENCH_Y, cz);
-      log.rotation.y = -a + (Math.sin(i * 7.3 + ring) * 0.06);
-      // Half-log benches — many per circle; skip shadow casting.
-      group.add(log);
-
-      // Small wedge supports under each end so the log doesn't visibly
-      // float. Only on every other log to keep mesh count down.
+      _bp.set(cx, BENCH_Y, cz);
+      _be.set(0, -a + (Math.sin(i * 7.3 + ring) * 0.06), 0);
+      _bq.setFromEuler(_be);
+      _bmat.compose(_bp, _bq, _bs);
+      logsInstance.setMatrixAt(logIdx++, _bmat);
       if (i % 2 === 0) {
-        const support = new THREE.Mesh(
-          new THREE.CylinderGeometry(0.07, 0.08, 0.35, 5),
-          BENCH_LOG_MAT,
-        );
-        support.position.set(cx + Math.cos(a + Math.PI / 2) * 0.5, 0.18, cz + Math.sin(a + Math.PI / 2) * 0.5);
-        group.add(support);
+        _bp.set(cx + Math.cos(a + Math.PI / 2) * 0.5, 0.18, cz + Math.sin(a + Math.PI / 2) * 0.5);
+        _bq.identity();
+        _bmat.compose(_bp, _bq, _bs);
+        supportsInstance.setMatrixAt(supportIdx++, _bmat);
       }
     }
   }
+  logsInstance.instanceMatrix.needsUpdate = true;
+  supportsInstance.instanceMatrix.needsUpdate = true;
+  group.add(logsInstance);
+  group.add(supportsInstance);
 
   // ---- Smoke column (discoverability beacon) ----
   // Tall semi-transparent grey cylinder rising from the firepit. Visible

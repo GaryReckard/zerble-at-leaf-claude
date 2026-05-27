@@ -898,28 +898,37 @@ export function buildSugarShack(rng = Math.random) {
   g.add(cook);
 
   // ---- String lights along each long tent eave ----
-  // All 20 bulbs share the same sphere geometry + emissive material
-  // (module-level constants). Same draw call gets batched on the GPU.
+  // 20 identical emissive bulbs collapsed to a single InstancedMesh — one
+  // draw call regardless of count. Per threejs-geometry skill's
+  // "InstancedMesh for many identical objects" guidance.
   const lightCount = 10;
+  const totalBulbs = lightCount * 2;
+  const bulbInstance = new THREE.InstancedMesh(
+    STRING_BULB_GEO, SHACK_MATS.stringBulb, totalBulbs,
+  );
+  const _bulbMatrix = new THREE.Matrix4();
+  let bulbIdx = 0;
   for (let i = 0; i < lightCount; i++) {
     const t = (i + 0.5) / lightCount;
     const z = -DEPTH / 2 + DEPTH * t;
     for (const sx of [-WIDTH / 2 + 0.05, WIDTH / 2 - 0.05]) {
-      const bulb = new THREE.Mesh(STRING_BULB_GEO, SHACK_MATS.stringBulb);
-      bulb.position.set(sx, WALL_H - 0.05, z);
-      g.add(bulb);
-      // Fancy-lights opt-in: real PointLight per bulb. Each is tiny —
-      // short distance, low intensity — so 20 of them together approximate
-      // a soft string-light wash instead of doubling up on the proxy.
+      _bulbMatrix.makeTranslation(sx, WALL_H - 0.05, z);
+      bulbInstance.setMatrixAt(bulbIdx++, _bulbMatrix);
+      // Fancy-lights opt-in: real PointLight per bulb (still per-instance
+      // since lights aren't instanced). Each is tiny — short distance,
+      // low intensity — so 20 of them together approximate a soft string-
+      // light wash instead of doubling up on the proxy.
       if (PERF.fancyLights) {
         const bulbLight = new THREE.PointLight(0xfff0c0, 0.18, 1.6, 1.5);
-        bulbLight.position.copy(bulb.position);
+        bulbLight.position.set(sx, WALL_H - 0.05, z);
         bulbLight.castShadow = false;
         g.add(bulbLight);
         registerContextLight(bulbLight);
       }
     }
   }
+  bulbInstance.instanceMatrix.needsUpdate = true;
+  g.add(bulbInstance);
   // One PointLight stands in for the cumulative glow of all 20 bulbs along
   // both eaves. A real light per bulb would be ~40 lights per shack — way
   // too many. This single light is hung at front-center of the tent so it

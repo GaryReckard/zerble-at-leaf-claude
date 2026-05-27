@@ -761,9 +761,18 @@ export class Zerble {
     // and splayed outward at ~9° so the far ends sit wider than the
     // mounting points. BoxGeometry has proper UVs on all six faces so the
     // Mondrian texture wraps the arm cleanly on every visible side.
-    const armGeo = new THREE.BoxGeometry(0.018, 0.014, 0.22);
-    const armOuterX = FRAME_X + FRAME_W / 2 - 0.005;     // mount at the rim outer edge
+    //
+    // Rotating the box around its center shifts the near end INWARD
+    // (toward the centerline) by arm-half-length × sin(splay) ≈ 17.5mm.
+    // If we mounted the box at the rim's outer edge, the near end would
+    // land back inside the lens area and clip. Compensate by pushing the
+    // mount center outward by that same shift PLUS a small margin so the
+    // arm visibly tucks just outside the rim/lens edge.
+    const ARM_LEN = 0.22;
+    const armGeo = new THREE.BoxGeometry(0.018, 0.014, ARM_LEN);
     const ARM_SPLAY = 0.16;                              // ~9° outward
+    const splayShift = (ARM_LEN / 2) * Math.sin(ARM_SPLAY);
+    const armOuterX = FRAME_X + FRAME_W / 2 + splayShift + 0.004;
     for (const side of [-1, 1]) {
       const arm = new THREE.Mesh(armGeo, frameMat);
       arm.position.set(side * armOuterX, 0.004, 0.09);

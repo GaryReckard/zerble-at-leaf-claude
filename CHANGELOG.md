@@ -2,7 +2,7 @@
 
 All notable changes to Zerble at the Festival. Newest at top. Following [Keep a Changelog](https://keepachangelog.com); the project isn't versioned yet, so entries are grouped by date.
 
-## [Unreleased]
+## 2026-05-27
 
 ### Added — MIDI player + trip warp
 - **MIDI music player (M key).** Lazy-loaded Tone.js 14 + @tonejs/midi 2 via ESM CDN — zero startup cost until the first M press. Reads `assets/music/manifest.json`, random pick from the tracks list, scheduled through `Tone.Transport` and looped. Manifest entries accept either bare filenames (`"music-1.mid"`) or `{file, name}` objects. Procedural test loop plays when the manifest is empty so M always does something. Mobile gets a ♪ button alongside HONK/BOOST/CAM; touch tap latches the same press as the keyboard.

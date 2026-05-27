@@ -82,8 +82,12 @@ function fitFont(cx, str, targetSize, weight = 'bold', maxW = Infinity, family =
 function buildHeaderBannerTexture() {
   return cachedTexture('headerBanner', () => {
     const c = document.createElement('canvas');
-    c.width = 2048;
-    c.height = 512;
+    // Halved from 2048×512 → 1024×256 (per the r/threejs perf thread: iOS
+    // can crash on textures > 2048, and 1024 is generally sufficient for
+    // signs viewed from 5+m at game scale). Font auto-shrink in fitFont()
+    // keeps the text proportionally crisp at the smaller canvas size.
+    c.width = 1024;
+    c.height = 256;
     const cx = c.getContext('2d');
 
     // Beige wood background with subtle horizontal grain.
@@ -151,8 +155,11 @@ function buildHeaderBannerTexture() {
 function buildMenuPlankTexture() {
   return cachedTexture('menuPlank', () => {
     const c = document.createElement('canvas');
-    c.width = 2048;
-    c.height = 384;
+    // Halved from 2048×384 → 1024×192. Same reasoning as the header
+    // banner: 1024 is the safe upper-bound for cross-device textures,
+    // and the menu items are short hand-painted strings that stay legible.
+    c.width = 1024;
+    c.height = 192;
     const cx = c.getContext('2d');
 
     // Worn orange-brown wood with horizontal grain.

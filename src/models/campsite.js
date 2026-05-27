@@ -138,6 +138,17 @@ export function buildCampTent(rng = Math.random) {
 // Stylized folding chair: 4 angled legs forming an X-frame, a seat plane,
 // and a back-rest plane. ~0.55m wide, 0.85m tall.
 
+// Camp chair geometries — every chair shares these. With 6+ chairs per
+// campsite × multiple visible campsites that's hundreds of redundant
+// CylinderGeometry/BoxGeometry buffers without sharing.
+const _CHAIR_LEG_GEO  = new THREE.CylinderGeometry(0.025, 0.025, 0.7, 6);
+const _CHAIR_ARM_GEO  = new THREE.CylinderGeometry(0.022, 0.022, 0.4, 6);
+const _CHAIR_SEAT_GEO = new THREE.BoxGeometry(0.55, 0.04, 0.45);
+const _CHAIR_BACK_GEO = new THREE.BoxGeometry(0.55, 0.45, 0.04);
+for (const g of [_CHAIR_LEG_GEO, _CHAIR_ARM_GEO, _CHAIR_SEAT_GEO, _CHAIR_BACK_GEO]) {
+  g.userData.shared = true;
+}
+
 export function buildCampChair(rng = Math.random) {
   const group = new THREE.Group();
   const color = CHAIR_COLORS[Math.floor(rng() * CHAIR_COLORS.length)];
@@ -145,9 +156,8 @@ export function buildCampChair(rng = Math.random) {
   const metal = matFor(0x222626, { roughness: 0.5 });
 
   // X-frame legs — 4 thin cylinders crossing under the seat
-  const legGeo = new THREE.CylinderGeometry(0.025, 0.025, 0.7, 6);
   for (let i = 0; i < 4; i++) {
-    const leg = new THREE.Mesh(legGeo, metal);
+    const leg = new THREE.Mesh(_CHAIR_LEG_GEO, metal);
     const sx = (i % 2 === 0) ? -1 : 1;
     const sz = (i < 2) ? -1 : 1;
     leg.position.set(sx * 0.20, 0.35, sz * 0.18);
@@ -158,27 +168,20 @@ export function buildCampChair(rng = Math.random) {
   }
 
   // Seat — flat slab
-  const seat = new THREE.Mesh(
-    new THREE.BoxGeometry(0.55, 0.04, 0.45),
-    fabric,
-  );
+  const seat = new THREE.Mesh(_CHAIR_SEAT_GEO, fabric);
   seat.position.set(0, 0.45, 0);
   // Camp chair seat/back — small detail meshes, skip shadow casting.
   group.add(seat);
 
   // Back — flat slab leaning slightly back
-  const back = new THREE.Mesh(
-    new THREE.BoxGeometry(0.55, 0.45, 0.04),
-    fabric,
-  );
+  const back = new THREE.Mesh(_CHAIR_BACK_GEO, fabric);
   back.position.set(0, 0.7, -0.22);
   back.rotation.x = -0.12;
   group.add(back);
 
   // Arms — two short cylinders flanking the seat
-  const armGeo = new THREE.CylinderGeometry(0.022, 0.022, 0.4, 6);
   for (const sx of [-1, 1]) {
-    const arm = new THREE.Mesh(armGeo, metal);
+    const arm = new THREE.Mesh(_CHAIR_ARM_GEO, metal);
     arm.position.set(sx * 0.28, 0.55, -0.05);
     arm.rotation.x = Math.PI / 2;
     group.add(arm);
@@ -296,38 +299,41 @@ export function buildChiminea(rng = Math.random) {
 // Bamboo pole + flame tuft. Flame is emissive and animated separately
 // (caller bobs the scale or material on a timer).
 
+// Torch component geometries — every tiki torch in the world shares the
+// same buffer for poles / joints / cups. Was creating 5 fresh
+// CylinderGeometry buffers per torch (4 torches × 10+ visible campsites
+// = ~200 redundant geos).
+const _TORCH_POLE_GEO  = new THREE.CylinderGeometry(0.04, 0.04, 1.7, 6);
+const _TORCH_JOINT_GEO = new THREE.CylinderGeometry(0.055, 0.055, 0.04, 6);
+const _TORCH_CUP_GEO   = new THREE.CylinderGeometry(0.10, 0.08, 0.12, 8);
+const _TORCH_FLAME_GEO = new THREE.ConeGeometry(0.10, 0.32, 8);
+for (const g of [_TORCH_POLE_GEO, _TORCH_JOINT_GEO, _TORCH_CUP_GEO, _TORCH_FLAME_GEO]) {
+  g.userData.shared = true;
+}
+
 export function buildTikiTorch(rng = Math.random) {
   const group = new THREE.Group();
 
-  const bamboo = matFor(0xa37a3a);
-  const pole = new THREE.Mesh(
-    new THREE.CylinderGeometry(0.04, 0.04, 1.7, 6),
-    bamboo,
-  );
+  const pole = new THREE.Mesh(_TORCH_POLE_GEO, matFor(0xa37a3a));
   pole.position.y = 0.85;
   // Tiki torch pole — 4cm thin bamboo, shadow contribution invisible.
   group.add(pole);
 
   // Two thin "joint" rings on the bamboo for visual interest
   for (const y of [0.50, 1.10]) {
-    const joint = new THREE.Mesh(
-      new THREE.CylinderGeometry(0.055, 0.055, 0.04, 6),
-      matFor(0x6a4a1a),
-    );
+    const joint = new THREE.Mesh(_TORCH_JOINT_GEO, matFor(0x6a4a1a));
     joint.position.y = y;
     group.add(joint);
   }
 
   // Reservoir cup at the top
-  const cup = new THREE.Mesh(
-    new THREE.CylinderGeometry(0.10, 0.08, 0.12, 8),
-    matFor(0x4a3018),
-  );
+  const cup = new THREE.Mesh(_TORCH_CUP_GEO, matFor(0x4a3018));
   cup.position.y = 1.78;
   group.add(cup);
 
-  // Flame — emissive teardrop. Phase used by central updater to bob/flicker
-  // independently per torch.
+  // Flame — emissive teardrop. Phase + flame material are per-torch (each
+  // flame flickers independently via emissive/opacity animation in the
+  // central updater); geometry is shared.
   const flameMat = new THREE.MeshStandardMaterial({
     color: 0xffb04a,
     emissive: 0xff5a1a,
@@ -336,10 +342,7 @@ export function buildTikiTorch(rng = Math.random) {
     transparent: true,
     opacity: 0.95,
   });
-  const flame = new THREE.Mesh(
-    new THREE.ConeGeometry(0.10, 0.32, 8),
-    flameMat,
-  );
+  const flame = new THREE.Mesh(_TORCH_FLAME_GEO, flameMat);
   flame.position.y = 2.0;
   group.add(flame);
   const phase = rng() * Math.PI * 2;

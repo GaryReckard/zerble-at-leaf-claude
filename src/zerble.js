@@ -767,11 +767,11 @@ export class Zerble {
     for (const side of [-1, 1]) {
       const arm = new THREE.Mesh(armGeo, frameMat);
       arm.position.set(side * armOuterX, 0.004, 0.09);
-      // Rotate around Y so the back end of the arm splays outward. For
-      // the left arm (side=-1) we want +X→-X tilt as the arm extends +Z,
-      // which means a negative rotation.y. side multiplier gives the right
-      // sign automatically for both arms.
-      arm.rotation.y = -side * ARM_SPLAY;
+      // Positive rotation.y tilts local +Z (the arm's long axis) toward
+      // +X. Right arm (+X side) wants +Z to tilt MORE +X as it extends
+      // back → positive rotation. Left arm (-X side) wants +Z to tilt
+      // toward -X → negative rotation. `side * ARM_SPLAY` gives both.
+      arm.rotation.y = side * ARM_SPLAY;
       glasses.add(arm);
     }
 

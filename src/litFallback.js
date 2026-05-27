@@ -61,16 +61,29 @@ function install() {
     return mat;
   }
 
-  // Keep the constructor identity so `new THREE.MeshStandardMaterial(...)`
-  // still returns *something*. We can't actually change `instanceof` checks
-  // without a Proxy, but everywhere in our code we use the constructor's
-  // return value directly, never identity-check it.
-  THREE.MeshStandardMaterial = LambertShim;
-
-  // Expose the original for any code that needs the real thing.
-  THREE.MeshStandardMaterial._original = OriginalStandard;
-
-  console.info('[perf] Lambert fallback installed — MeshStandardMaterial → MeshLambertMaterial');
+  // Try to swap the exported constructor. ES module namespace objects are
+  // frozen per spec (non-writable, non-configurable exports), so this
+  // assignment throws on strict implementations (notably Safari mobile,
+  // and any browser running with strict module semantics). Chrome desktop
+  // historically tolerated it, which is why this used to work everywhere.
+  //
+  // If the swap fails, low-tier just runs with the original PBR material.
+  // That's a perf regression on those devices but the game still RUNS,
+  // which is the important part. A proper fix would route every model file
+  // through a wrapper module that re-exports a mutable THREE — significant
+  // churn for a tier-specific optimization. Tracking in ROADMAP.md.
+  try {
+    THREE.MeshStandardMaterial = LambertShim;
+    THREE.MeshStandardMaterial._original = OriginalStandard;
+    console.info('[perf] Lambert fallback installed — MeshStandardMaterial → MeshLambertMaterial');
+  } catch (e) {
+    console.warn(
+      '[perf] Lambert fallback unavailable on this browser (module namespace is frozen). ' +
+      'Low-tier devices will run with full MeshStandardMaterial. ' +
+      'See ROADMAP.md → "Lambert fallback via wrapper module" for the proper fix.',
+      e
+    );
+  }
 }
 
 if (PERF.name === 'low') {

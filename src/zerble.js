@@ -639,6 +639,9 @@ export class Zerble {
     // plane in front of both iris (z=-0.25) and sclera (z=-0.22).
     const glasses = new THREE.Group();
     glasses.position.set(0, 0.78, -0.26);
+    // +20% chunkier per Gary's "embiggen" request — frames widen, lenses
+    // grow, temples lengthen all in proportion.
+    glasses.scale.setScalar(1.2);
     driver.add(glasses);
 
     // Mondrian frame texture — drawn into a canvas once per shack-er,

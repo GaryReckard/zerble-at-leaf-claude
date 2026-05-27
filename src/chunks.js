@@ -199,16 +199,42 @@ export class ChunkManager {
     const ccx = Math.round(playerPos.x / CHUNK_SIZE);
     const ccz = Math.round(playerPos.z / CHUNK_SIZE);
 
-    // Load nearby chunks
+    // Load nearby chunks. First pass (boot): generate the entire ring
+    // synchronously so the world isn't empty at start. Subsequent frames:
+    // budget to BUDGET_PER_FRAME chunks, with closer chunks prioritized.
+    //
+    // Why: at boost speed (~28 m/s) the player crosses a chunk every ~2.8s,
+    // and crossing a corner can demand 3-5 fresh chunks in one frame.
+    // Generating that synchronously stalls the main thread long enough to
+    // *feel* like the cart's movement stutters mid-boost. Spreading the
+    // load over a few frames is invisible; the player keeps moving smoothly
+    // and the new chunks pop in 50-100ms later.
+    const firstLoad = this.loaded.size === 0;
+    const BUDGET_PER_FRAME = 1;
+    let budget = firstLoad ? Infinity : BUDGET_PER_FRAME;
+
+    // Build a candidate list sorted by squared distance to the player, so
+    // we always generate the closest missing chunk first under budget.
+    const candidates = [];
     for (let dx = -LOAD_RADIUS; dx <= LOAD_RADIUS; dx++) {
       for (let dz = -LOAD_RADIUS; dz <= LOAD_RADIUS; dz++) {
         const cx = ccx + dx;
         const cz = ccz + dz;
         const key = chunkKey(cx, cz);
         if (!this.loaded.has(key)) {
-          this._generate(cx, cz);
+          // Distance from player to chunk center, squared.
+          const cxw = cx * CHUNK_SIZE;
+          const czw = cz * CHUNK_SIZE;
+          const ddx = cxw - playerPos.x;
+          const ddz = czw - playerPos.z;
+          candidates.push({ cx, cz, d2: ddx * ddx + ddz * ddz });
         }
       }
+    }
+    candidates.sort((a, b) => a.d2 - b.d2);
+    for (const c of candidates) {
+      if (budget-- <= 0) break;
+      this._generate(c.cx, c.cz);
     }
 
     // Unload distant chunks (hysteresis: only beyond UNLOAD_RADIUS, so we don't

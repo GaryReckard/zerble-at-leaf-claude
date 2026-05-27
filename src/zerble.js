@@ -631,6 +631,126 @@ export class Zerble {
       driver.add(iris);
     }
 
+    // ---- Mondrian-pattern Wayfarer shades ----
+    // White frame with primary-color rectangles + black grid lines (the
+    // pattern is painted into a canvas texture); blue-tinted gradient
+    // lenses at 60% opacity so the eyes still peek through. Sits just
+    // forward of the eyes — `glasses.position.z = -0.26` puts the lens
+    // plane in front of both iris (z=-0.25) and sclera (z=-0.22).
+    const glasses = new THREE.Group();
+    glasses.position.set(0, 0.78, -0.26);
+    driver.add(glasses);
+
+    // Mondrian frame texture — drawn into a canvas once per shack-er,
+    // er, per Zerble. Small enough (256² · ~6KB) that we don't bother
+    // hoisting to module level.
+    const mondrianCanvas = document.createElement('canvas');
+    mondrianCanvas.width = 256;
+    mondrianCanvas.height = 256;
+    const mc = mondrianCanvas.getContext('2d');
+    mc.fillStyle = '#ffffff';
+    mc.fillRect(0, 0, 256, 256);
+    mc.fillStyle = '#f5a623';
+    mc.fillRect(140, 20, 90, 80);
+    mc.fillRect(20, 180, 80, 60);
+    mc.fillStyle = '#d04030';
+    mc.fillRect(0, 0, 50, 60);
+    mc.fillRect(180, 180, 76, 76);
+    mc.fillStyle = '#4a90e2';
+    mc.fillRect(60, 60, 60, 90);
+    mc.fillStyle = '#f5e030';
+    mc.fillRect(120, 150, 40, 30);
+    mc.strokeStyle = '#1a1a1a';
+    mc.lineWidth = 10;
+    mc.beginPath();
+    mc.moveTo(0, 60);  mc.lineTo(256, 60);
+    mc.moveTo(0, 150); mc.lineTo(256, 150);
+    mc.moveTo(60, 0);  mc.lineTo(60, 256);
+    mc.moveTo(140, 0); mc.lineTo(140, 256);
+    mc.moveTo(180, 0); mc.lineTo(180, 256);
+    mc.stroke();
+    const mondrianTex = new THREE.CanvasTexture(mondrianCanvas);
+    mondrianTex.colorSpace = THREE.SRGBColorSpace;
+    const frameMat = new THREE.MeshStandardMaterial({
+      map: mondrianTex, roughness: 0.45, metalness: 0.1, flatShading: true,
+    });
+    const lensMat = new THREE.MeshStandardMaterial({
+      color: 0x6fa9e8,
+      emissive: 0x1a2f55,
+      emissiveIntensity: 0.25,
+      roughness: 0.15,
+      transparent: true,
+      opacity: 0.55,
+      side: THREE.DoubleSide,
+    });
+
+    // Eye-rim shape — rounded rectangle with a rounded rectangular hole.
+    // ExtrudeGeometry gives us a chunky frame in one mesh per side.
+    const FRAME_W = 0.105;   // each lens width
+    const FRAME_H = 0.075;   // each lens height
+    const FRAME_T = 0.014;   // rim thickness
+    const FRAME_D = 0.018;   // extrusion depth (front-to-back)
+    function makeRimShape() {
+      const w = FRAME_W / 2, h = FRAME_H / 2, r = 0.012;
+      const outer = new THREE.Shape();
+      outer.moveTo(-w + r, -h);
+      outer.lineTo( w - r, -h);
+      outer.quadraticCurveTo( w, -h,  w, -h + r);
+      outer.lineTo( w, h - r);
+      outer.quadraticCurveTo( w, h,  w - r, h);
+      outer.lineTo(-w + r, h);
+      outer.quadraticCurveTo(-w, h, -w, h - r);
+      outer.lineTo(-w, -h + r);
+      outer.quadraticCurveTo(-w, -h, -w + r, -h);
+      const iw = w - FRAME_T, ih = h - FRAME_T, ir = 0.008;
+      const inner = new THREE.Path();
+      inner.moveTo(-iw + ir, -ih);
+      inner.lineTo( iw - ir, -ih);
+      inner.quadraticCurveTo( iw, -ih,  iw, -ih + ir);
+      inner.lineTo( iw, ih - ir);
+      inner.quadraticCurveTo( iw, ih,  iw - ir, ih);
+      inner.lineTo(-iw + ir, ih);
+      inner.quadraticCurveTo(-iw, ih, -iw, ih - ir);
+      inner.lineTo(-iw, -ih + ir);
+      inner.quadraticCurveTo(-iw, -ih, -iw + ir, -ih);
+      outer.holes.push(inner);
+      return outer;
+    }
+    const rimGeo = new THREE.ExtrudeGeometry(makeRimShape(), {
+      depth: FRAME_D, bevelEnabled: false, curveSegments: 4,
+    });
+    const lensGeo = new THREE.PlaneGeometry(FRAME_W - FRAME_T * 2, FRAME_H - FRAME_T * 2);
+
+    // Two eye frames + lenses (matching eye x positions ±0.10).
+    for (const lx of [-0.10, 0.10]) {
+      const rim = new THREE.Mesh(rimGeo, frameMat);
+      // Extrusion extends +Z by default; offset back so the rim is
+      // centered around the lens plane (lens at z=0 in glasses-local).
+      rim.position.set(lx, 0, -FRAME_D / 2);
+      glasses.add(rim);
+      const lens = new THREE.Mesh(lensGeo, lensMat);
+      lens.position.set(lx, 0, 0);
+      glasses.add(lens);
+    }
+
+    // Nose bridge between the two rims.
+    const bridge = new THREE.Mesh(
+      new THREE.BoxGeometry(0.04, 0.014, FRAME_D),
+      frameMat,
+    );
+    bridge.position.set(0, 0.018, -FRAME_D / 2);
+    glasses.add(bridge);
+
+    // Temple arms — chunky and slightly tilted up, extending back over
+    // the head. They tuck into the head sphere on the back end, which
+    // reads visually as "arms going over the ears."
+    const armGeo = new THREE.BoxGeometry(0.018, 0.014, 0.22);
+    for (const lx of [-0.155, 0.155]) {
+      const arm = new THREE.Mesh(armGeo, frameMat);
+      arm.position.set(lx, 0.004, 0.09);
+      glasses.add(arm);
+    }
+
     // Hands on a steering wheel (just suggested)
     const handMat = new THREE.MeshStandardMaterial({ color: 0xd9a26e, roughness: 0.9 });
     for (const hx of [-0.18, 0.18]) {

@@ -50,6 +50,9 @@ function matFor(hex, opts = {}) {
       flatShading: true,
       side: opts.side ?? THREE.FrontSide,
     });
+    // Mark shared so chunk-unload disposal walks skip these — the cache
+    // outlives any single chunk and re-uses materials across forests / lakes.
+    m.userData.shared = true;
     _matCache.set(key, m);
   }
   return m;

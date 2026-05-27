@@ -223,16 +223,17 @@ export class ChunkManager {
   }
 
   _unload(key, chunk) {
-    // Dispose all geometries and materials in this chunk's group so the GPU can
-    // free them. We don't share geometries across chunks in this codebase, so
-    // disposing per-chunk is safe.
+    // Dispose all per-chunk geometries and materials so the GPU can free
+    // them. Module-level cached geos/mats are tagged `userData.shared` —
+    // those survive across chunks so we skip them (disposing would force a
+    // shader recompile next frame for any other chunk using the same mat).
     chunk.group.traverse((obj) => {
       if (obj.isMesh) {
-        obj.geometry?.dispose();
+        if (!obj.geometry?.userData?.shared) obj.geometry?.dispose();
         const m = obj.material;
         if (Array.isArray(m)) {
-          for (const sub of m) sub?.dispose?.();
-        } else {
+          for (const sub of m) if (!sub?.userData?.shared) sub?.dispose?.();
+        } else if (!m?.userData?.shared) {
           m?.dispose?.();
         }
       }

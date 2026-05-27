@@ -368,7 +368,14 @@ export function buildLake(scene, mcx, mcz, rng, opts = {}) {
     if (lakeAnimatableEntries.length > 0) {
       // Flatten so the updater walks one list per lake (not per-camp).
       const flat = lakeAnimatableEntries.flat();
-      lakeAnimatables.push({ lakeKey, animatables: flat });
+      lakeAnimatables.push({
+        lakeKey,
+        animatables: flat,
+        // Use macrocell center as a coarse position for distance gating in
+        // main.js — fine for "is this lakeside campsite worth ticking?".
+        centerX: (mcx + 0.5) * LAKE_CELL,
+        centerZ: (mcz + 0.5) * LAKE_CELL,
+      });
     }
   }
 
@@ -518,12 +525,14 @@ function angDiff(a, b) {
 function destroyLake(scene, lake) {
   lake.group.traverse((o) => {
     if (o.isMesh) {
-      o.geometry?.dispose();
-      // Materials are shared across the lake's meshes so disposing once is enough,
-      // but it's cheap to call dispose repeatedly.
+      // Skip shared (module-level cached) geos/mats — see chunks._unload.
+      if (!o.geometry?.userData?.shared) o.geometry?.dispose();
       const m = o.material;
-      if (Array.isArray(m)) m.forEach((mm) => mm?.dispose?.());
-      else m?.dispose?.();
+      if (Array.isArray(m)) {
+        m.forEach((mm) => { if (!mm?.userData?.shared) mm?.dispose?.(); });
+      } else if (!m?.userData?.shared) {
+        m?.dispose?.();
+      }
     }
   });
   scene.remove(lake.group);

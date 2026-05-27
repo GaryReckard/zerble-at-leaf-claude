@@ -493,8 +493,13 @@ const SHACK_MATS = {
   supply:       new THREE.MeshStandardMaterial({ color: 0xd4c8a8, roughness: 0.8,  flatShading: true }),
   stringBulb:   new THREE.MeshStandardMaterial({ color: 0xfff0c0, emissive: 0xffe066, emissiveIntensity: 1.2, roughness: 0.4 }),
 };
+// Mark shared so chunk-unload disposal walks skip them — these survive the
+// whole session and get reused across every Sugar Shack instance.
+for (const mat of Object.values(SHACK_MATS)) mat.userData.shared = true;
 const STRING_BULB_GEO = new THREE.SphereGeometry(0.07, 8, 6);
+STRING_BULB_GEO.userData.shared = true;
 const SUPPLY_CAN_GEO  = new THREE.CylinderGeometry(0.12, 0.12, 0.32, 12);
+SUPPLY_CAN_GEO.userData.shared = true;
 
 // Light bracket — a TRIANGULAR FRAME (two wooden poles, not a solid plate)
 // projecting forward from the banner side, meeting at an apex point in

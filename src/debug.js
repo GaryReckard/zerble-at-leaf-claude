@@ -508,9 +508,27 @@ function updatePanel(dt) {
     ? `t=${tod.t.toFixed(2)} night=${tod.nightness.toFixed(2)}`
     : 'n/a';
 
+  // renderer.info — draw calls / triangles / GPU memory. Each frame three.js
+  // resets `render.calls` and `render.triangles` when the next render starts,
+  // so we sample BEFORE the panel updates (which runs after the frame's
+  // render). Memory counts (geometries/textures) are cumulative current
+  // allocation, not per-frame.
+  const r = h.renderer;
+  const info = r && r.info;
+  const drawCalls = info ? info.render.calls : '-';
+  const triangles = info ? info.render.triangles : '-';
+  const geoCount  = info ? info.memory.geometries : '-';
+  const texCount  = info ? info.memory.textures : '-';
+  // performance.memory is Chrome-only; treat as best-effort.
+  const heap = (typeof performance !== 'undefined' && performance.memory)
+    ? `  heap ${(performance.memory.usedJSHeapSize / 1048576).toFixed(0)}MB`
+    : '';
+
   state.textEl.textContent =
     `~ debug (P pause · . step · C colliders · G god · F freeze)\n` +
     `fps          ${fps}    ${state.paused ? '[PAUSED]' : ''}\n` +
+    `draws        ${drawCalls}  tris ${typeof triangles === 'number' ? triangles.toLocaleString() : triangles}\n` +
+    `gpu mem      geo ${geoCount}  tex ${texCount}${heap}\n` +
     `running      ${running}\n` +
     `pos          ${z.position.x.toFixed(1)}, ${z.position.z.toFixed(1)}\n` +
     `heading      ${(z.heading * 180 / Math.PI).toFixed(0)}°  speed ${z.speed.toFixed(2)}\n` +

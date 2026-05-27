@@ -328,20 +328,41 @@ function tickBody(dt) {
     updateStagePerformers(nowS);
     updateStageLightShow(nowS, nightness, zerble.position);
 
+    // Distance-gate per-frame animatable updates. A campsite ember pulse /
+    // tiki-flame flicker / drum-circle figure animation 80m behind the
+    // player isn't visible, so don't pay the per-mesh material write +
+    // intensity math. Threshold tuned to comfortably cover the visible
+    // area at any FOV without ticking distant chunks.
+    const SKIP_DIST_SQ = 75 * 75;
+    const _px = zerble.position.x;
+    const _pz = zerble.position.z;
+    function _farFromPlayer(centerX, centerZ) {
+      if (centerX == null) return false;        // safety: keep ticking older entries
+      const dx = centerX - _px;
+      const dz = centerZ - _pz;
+      return dx * dx + dz * dz > SKIP_DIST_SQ;
+    }
+
     // Campsite props (firepit ember pulse + tiki torch flicker) for both
     // forest-clearing campsites and lakeside ones. Two separate lists owned
     // by their respective systems (chunk vs lake lifecycle); single update fn.
     for (let i = 0; i < forestAnimatables.length; i++) {
-      updateCampsiteProps(nowS, nightness, forestAnimatables[i].animatables);
+      const e = forestAnimatables[i];
+      if (_farFromPlayer(e.centerX, e.centerZ)) continue;
+      updateCampsiteProps(nowS, nightness, e.animatables);
     }
     for (let i = 0; i < lakeAnimatables.length; i++) {
-      updateCampsiteProps(nowS, nightness, lakeAnimatables[i].animatables);
+      const e = lakeAnimatables[i];
+      if (_farFromPlayer(e.centerX, e.centerZ)) continue;
+      updateCampsiteProps(nowS, nightness, e.animatables);
     }
     // LEAF drum-circle fire pulse + PointLight flicker + tribal figures
     // (drummers bobbing, dancers orbiting, firekeeper poking the fire).
     // One updater call set per visible drum circle.
     for (let i = 0; i < forestDrumCircles.length; i++) {
       const entry = forestDrumCircles[i];
+      const fc = entry.fireCenter;
+      if (fc && _farFromPlayer(fc.x, fc.z)) continue;
       updateLeafDrumCircle(nowS, nightness, entry.dc);
       if (entry.figures && entry.figures.length > 0) {
         updateTribalFigures(nowS, nightness, entry.figures);

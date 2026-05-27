@@ -398,6 +398,8 @@ function placePathLanterns(ctx, forest, startX, startZ, rng) {
     forestAnimatables.push({
       chunkKey: ctx.key,
       animatables: torchAnimatables,
+      centerX: ctx.cxWorld,
+      centerZ: ctx.czWorld,
     });
   }
 }
@@ -734,6 +736,8 @@ function pushCampsiteAnimatables(ctx, camp) {
   forestAnimatables.push({
     chunkKey: ctx.key,
     animatables: camp.animatables,
+    centerX: ctx.cxWorld,
+    centerZ: ctx.czWorld,
   });
 }
 

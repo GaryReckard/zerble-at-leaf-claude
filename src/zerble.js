@@ -542,7 +542,33 @@ export class Zerble {
     // Tiny driver head — body shadow already represents the driver.
     driver.add(head);
 
-    // (No hat — driver goes hatless)
+    // (No hat — driver wears their own hair instead.)
+
+    // Brown hair, parted on the LEFT. Driver faces -Z, so driver-left = -X.
+    // Built as TWO icosahedra: a fuller main mass covering crown + back +
+    // right side, plus a smaller, shorter patch on the left. The size
+    // asymmetry reads as a side-part silhouette without needing a literal
+    // "part line" mesh (which wouldn't read at game-camera distance).
+    const hairMat = new THREE.MeshStandardMaterial({
+      color: 0x4a3220, roughness: 1.0, flatShading: true,
+    });
+    const hairMain = new THREE.Mesh(
+      new THREE.IcosahedronGeometry(0.30, 1), hairMat,
+    );
+    // Slight +X offset = "swept to the right". Scale flattens it into a
+    // crown shape; the head's icosa-radius of 0.28 + this 0.30 leaves a
+    // ~2cm fluffy halo.
+    hairMain.position.set(0.025, 0.86, 0.03);
+    hairMain.scale.set(1.05, 0.62, 1.05);
+    driver.add(hairMain);
+    // Shorter, flatter left-side patch — the bit of hair that lies down
+    // across the part line. Without it the silhouette reads symmetric.
+    const hairLeft = new THREE.Mesh(
+      new THREE.IcosahedronGeometry(0.18, 0), hairMat,
+    );
+    hairLeft.position.set(-0.16, 0.78, 0.02);
+    hairLeft.scale.set(1.0, 0.55, 1.0);
+    driver.add(hairLeft);
 
     // Beard — dense cluster of icospheres, wide arc under chin hanging well below the head
     const beardMatA = new THREE.MeshStandardMaterial({ color: 0x4a352a, roughness: 1, flatShading: true });

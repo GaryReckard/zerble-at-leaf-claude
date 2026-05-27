@@ -35,6 +35,7 @@ import { PERF } from './perf.js';
 import { Trip } from './trip.js';
 import { Analytics } from './analytics.js';
 import * as ContextLights from './contextLights.js';
+import * as AdaptiveQuality from './adaptiveQuality.js';
 
 const canvas = document.getElementById('game');
 
@@ -195,6 +196,16 @@ let running = false;
 
 // Touch overlay (no-op on desktop; reveals thumbstick/buttons on touch devices).
 Touch.install();
+
+// Adaptive quality monitor — drops bloom / shadows / pixel ratio when the
+// frame budget slips, ramps back up if it recovers. Hooks installed once;
+// per-frame `tick(dt)` lives at the bottom of tickBody().
+AdaptiveQuality.install({
+  renderer,
+  composer,
+  bloomPass,
+  hud: HUD,
+});
 
 // iOS Safari still fires deprecated GestureEvents for pinch — those can zoom
 // the page even with user-scalable=no. Swallow them so the canvas stays
@@ -461,6 +472,10 @@ function tickBody(dt) {
   // so it doesn't pay the per-fragment lighting cost in the shader. Per
   // threejs-lighting skill's "limit light count" guidance.
   ContextLights.update(zerble.position);
+
+  // Adaptive quality watches frame time and drops bloom / shadows /
+  // pixel ratio if the budget slips, ramps back if it recovers.
+  AdaptiveQuality.tick(dt);
 
   composer.render();
 }

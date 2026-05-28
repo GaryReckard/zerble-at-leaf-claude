@@ -318,8 +318,21 @@ export class KidGaggle {
         k.position.z += (Math.random() - 0.5) * 8;
         k.userData.center = c.clone();
         k.userData.heading = Math.random() * TAU;
+        // displayedYaw is what actually rotates the mesh — it lerps toward
+        // userData.heading instead of snapping. Without this, any time the
+        // heading flips ~180° (chasing a bubble that just passed behind
+        // them, or hitting a wander-direction reroll), the model would
+        // instantly spin around — looked like a glitch.
+        k.userData.displayedYaw = k.userData.heading;
         k.userData.turnTimer = Math.random() * 2;
         k.userData.speed = 3 + Math.random() * 2;
+        // Chase-stickiness: once a kid commits to a bubble, they stick with
+        // it for ~0.4s before re-considering. Otherwise two roughly
+        // equidistant bubbles would cause the "nearest" pick to flip every
+        // frame, whipping the kid back and forth.
+        k.userData.chaseHoldTimer = 0;
+        k.userData.chaseDirX = 0;
+        k.userData.chaseDirZ = 0;
         // Honk-scatter timer: while > 0, the kid runs away from Zerble at
         // FLEE_SPEED. Set by KidGaggle.scatter() from main.js on honk.
         k.userData.scatterTimer = 0;
@@ -447,6 +460,11 @@ export class KidGaggle {
       const k = this.kids[i];
 
       // ---- Find nearest live bubble (if any) ----
+      // Chase stickiness: if we're already locked onto a bubble (chaseHoldTimer > 0),
+      // bias the search to prefer the previously-chased direction. Without this,
+      // two roughly equidistant bubbles cause the "nearest" pick to flip frame-
+      // to-frame, whipping the kid's heading back and forth.
+      if (k.userData.chaseHoldTimer > 0) k.userData.chaseHoldTimer -= dt;
       let chaseDx = 0, chaseDz = 0, chaseD = Infinity;
       for (const bp of bubblePositions) {
         const dx = bp.x - k.position.x;
@@ -515,14 +533,32 @@ export class KidGaggle {
         k.position.x += Math.sin(k.userData.heading) * FLEE_SPEED * dt;
         k.position.z += -Math.cos(k.userData.heading) * FLEE_SPEED * dt;
       } else if (chaseD < BUBBLE_ATTRACT_RANGE && chaseD > BUBBLE_GRAB_RANGE) {
-        // Chase the bubble! Set heading toward it and sprint.
+        // Chase the bubble! If chase-stickiness is still active AND last
+        // chase direction is close to the current nearest, blend toward
+        // the new direction smoothly instead of snapping — kills the
+        // "two-bubble flicker" where the nearest pick oscillates between
+        // candidates a degree apart in distance.
         const inv = 1 / (chaseD || 1);
+        const newDirX = chaseDx * inv;
+        const newDirZ = chaseDz * inv;
+        if (k.userData.chaseHoldTimer > 0) {
+          // Blend old direction toward new (lerp), keeps motion smooth
+          const lerp = Math.min(1, dt * 4);
+          k.userData.chaseDirX = k.userData.chaseDirX + (newDirX - k.userData.chaseDirX) * lerp;
+          k.userData.chaseDirZ = k.userData.chaseDirZ + (newDirZ - k.userData.chaseDirZ) * lerp;
+        } else {
+          // No active chase — commit to this bubble for ~0.4s before
+          // reconsidering.
+          k.userData.chaseDirX = newDirX;
+          k.userData.chaseDirZ = newDirZ;
+          k.userData.chaseHoldTimer = 0.4;
+        }
         // userData.heading uses: dx = sin(h), dz = -cos(h)  →  h = atan2(dx, -dz)
-        k.userData.heading = Math.atan2(chaseDx * inv, -chaseDz * inv);
+        k.userData.heading = Math.atan2(k.userData.chaseDirX, -k.userData.chaseDirZ);
         k.userData.turnTimer = 0.4 + Math.random() * 0.4;
         const stepSpeed = BUBBLE_ATTRACT_SPEED;
-        k.position.x += Math.sin(k.userData.heading) * stepSpeed * dt;
-        k.position.z += -Math.cos(k.userData.heading) * stepSpeed * dt;
+        k.position.x += k.userData.chaseDirX * stepSpeed * dt;
+        k.position.z += k.userData.chaseDirZ * stepSpeed * dt;
       } else {
         // Default wander behavior with periodic course changes
         k.userData.turnTimer -= dt;
@@ -551,12 +587,23 @@ export class KidGaggle {
       // every frame. Kid radius treated as 0.4m for the overlap check.
       pushOutOfHardColliders(k, 0.4);
 
-      k.rotation.y = k.userData.heading;
+      // Smooth-rotate the displayed yaw toward heading via shortest-arc
+      // lerp. Snapping rotation = visible 180° flips whenever heading
+      // changes sign (chase target switch, wander reroll). The lerp lets
+      // the heading whip internally without showing it.
+      let yawDiff = k.userData.heading - k.userData.displayedYaw;
+      // Wrap diff into [-π, π] so we always rotate the short way around
+      while (yawDiff > Math.PI) yawDiff -= TAU;
+      while (yawDiff < -Math.PI) yawDiff += TAU;
+      k.userData.displayedYaw += yawDiff * Math.min(1, dt * 9);
+      k.rotation.y = k.userData.displayedYaw;
 
-      // Lil hop — bouncier when chasing a bubble (they're excited). Bounce
-      // rate dropped to 2/3 of the original (felt fidgety before).
-      const bouncy = chaseD < BUBBLE_ATTRACT_RANGE ? 0.22 : 0.15;
-      const tMs = performance.now() * 0.008 + i;          // was 0.012
+      // Lil hop — bouncier when chasing (they're excited). Amplitudes
+      // toned down further (was 0.22 / 0.15, now 0.13 / 0.08) so kids
+      // look animated, not spasmodic. Rate is performance.now() * 0.008
+      // (already reduced from 0.012).
+      const bouncy = chaseD < BUBBLE_ATTRACT_RANGE ? 0.13 : 0.08;
+      const tMs = performance.now() * 0.008 + i;
       k.children[0].position.y = 0.55 + Math.abs(Math.sin(tMs * 2)) * bouncy;
 
       this.colliders[i].position.copy(k.position);
@@ -1120,7 +1167,7 @@ export class Frisbees {
     };
   }
 
-  update(dt, zerblePos) {
+  update(dt, zerblePos, nightness = 0) {
     // Recycle pairs that drifted too far from Zerble
     if (zerblePos) {
       for (const p of this.pairs) {
@@ -1128,6 +1175,12 @@ export class Frisbees {
         const dz = p.anchor.z - zerblePos.z;
         if (dx * dx + dz * dz > FRISBEE_RECYCLE_DIST2) this._recycle(p, zerblePos);
       }
+    }
+
+    // Disc glow — dim by day, bright at night. Same curve as the hula-hoop.
+    const discGlow = 0.05 + nightness * 3.0;
+    for (const p of this.pairs) {
+      if (p.disc.userData.discMat) p.disc.userData.discMat.emissiveIntensity = discGlow;
     }
 
     const tMs = performance.now() * 0.001;

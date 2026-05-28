@@ -256,7 +256,7 @@
     import { buildHammockStandalone } from './src/chunks.js';
     import { buildHammock as buildHammockRaw } from './src/models/hammock.js';
     import { buildSimpleNPC } from './src/models/puppet.js';
-    import { _buildCanoeMeshForSandbox, buildLake } from './src/lakes.js';
+    import { _buildCanoeMeshForSandbox, buildLake, setLakeNightness } from './src/lakes.js';
 import { mulberry32 } from './src/rng.js';
     import { buildTent } from './src/models/tent.js';
     import { buildFoodTruck } from './src/models/foodTruck.js';
@@ -1728,6 +1728,8 @@ import { buildSugarShack } from './src/models/sugarShack.js';
       else requestAnimationFrame(tick);
       const dt = Math.min(clock.getDelta(), 0.05);
       tod.update(dt);
+      // Drive the shared lake water material's night-shimmer uniforms.
+      setLakeNightness(tod.nightness, performance.now() * 0.001);
       if (updateFn) updateFn(dt);
       Trip.update(dt, _tripPos, 0, []);
       // Feed trip progress into the MIDI player's effect chain so they warp

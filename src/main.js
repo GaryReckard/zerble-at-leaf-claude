@@ -19,7 +19,7 @@ import { Touch } from './touch.js';
 import { HUD } from './hud.js';
 import { buildWorld, updateWorld, getTimeOfDay } from './world.js';
 import { forestAnimatables, forestDrumCircles, forestDrumMusic } from './forests.js';
-import { lakeAnimatables } from './lakes.js';
+import { lakeAnimatables, setLakeNightness } from './lakes.js';
 import { updateCampsiteProps } from './models/campsite.js';
 import { updateLeafDrumCircle } from './models/leafDrumCircle.js';
 import { updateTribalFigures } from './models/tribalFigures.js';
@@ -326,6 +326,10 @@ function tickBody(dt) {
     // Push nightness into the audio module so the forest drum engine can
     // gate voices + the crackling-fire bed against the day/night cycle.
     Sound.setNightness(nightness);
+    // Drive the shared lake water material's nightness + time uniforms so
+    // the procedural star shimmer twinkles correctly at night. Zero impact
+    // by day (the shader's nightness² gate short-circuits).
+    setLakeNightness(nightness, performance.now() * 0.001);
 
     // SPACE = random honk (bell or clown). B = always bell. H = always clown.
     // All three share the honk ring + crowd reaction + cooldown.

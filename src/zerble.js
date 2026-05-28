@@ -9,7 +9,13 @@ const BRAKE = 28;          // m/s^2 when reversing throttle vs current direction
 const MAX_SPEED = 18;      // m/s
 const BOOST_MULT = 1.55;
 const REVERSE_MAX = 7;
-const DRAG = 0.92;         // multiplicative drag per second
+// DRAG: multiplicative coefficient applied each second when no throttle.
+// 0.78 = ~63% velocity loss per second. Sharper than the old 0.92 (~28%)
+// so the cart locks to a clean stop instead of creeping for ages. Pairs
+// with a bumped SPEED_SNAP threshold below — anything under 30cm/sec
+// snaps to zero, killing the visible "drift to a stop" tail entirely.
+const DRAG = 0.78;
+const SPEED_SNAP = 0.3;    // |speed| below this snaps to 0 (was 0.05)
 const TURN_RATE = 2.1;     // rad/s at full speed
 const WORLD_BOUND = 230;
 
@@ -980,7 +986,7 @@ export class Zerble {
       this.speed += throttle * a * dt;
     } else {
       this.speed *= Math.pow(DRAG, dt * 4);
-      if (Math.abs(this.speed) < 0.05) this.speed = 0;
+      if (Math.abs(this.speed) < SPEED_SNAP) this.speed = 0;
     }
     this.speed = THREE.MathUtils.clamp(this.speed, maxRev, maxFwd);
 
@@ -1131,8 +1137,12 @@ export class Zerble {
 
   // Called by main on collision.
   applyHit(pushDir) {
-    // Bounce back
-    this.speed = -Math.sign(this.speed || 1) * 4;
+    // Bounce back. Old kickback of -4 m/s combined with soft drag meant
+    // ~3 full seconds of unwanted reverse momentum after a bonk —
+    // genuinely hard to recover from. Knocked down to -2.5 m/s; combined
+    // with the new stronger DRAG, the cart settles back to a stop in
+    // ~1.5s instead.
+    this.speed = -Math.sign(this.speed || 1) * 2.5;
     this.position.x += pushDir.x * 0.6;
     this.position.z += pushDir.z * 0.6;
     this.invulnLeft = 0.7;

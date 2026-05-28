@@ -346,6 +346,18 @@ export class Crowd {
       happiness: 0,
       smileTimeCooldown: 0,
       lastSmilePos: null,    // Zerble's position when this NPC last smiled
+      // Watching state: how long they've been staring at Zerble, what
+      // their personal attention span is, when they get bored and walk
+      // off, etc. All start undefined; populated on first frame in
+      // 'watching' so the values get re-rolled each new engagement.
+      watchTimer: undefined,
+      attentionSpan: undefined,
+      shuffleTimer: undefined,
+      shuffleTarget: null,
+      // After the NPC walks away, they won't re-engage with Zerble for
+      // this many seconds (epoch time). Lets you actually leave a crowd
+      // behind instead of being permanently mobbed.
+      disinterestedUntil: 0,
 
       chunkKey,
     };
@@ -541,7 +553,15 @@ export class Crowd {
     // next frame (since they're still within NOTICE_RANGE of Zerble),
     // and the honk would have no visible effect.
     const fleeingLocked = npc.state === 'fleeing' && npc.stateTimer > 0;
-    if (!fleeingLocked) {
+    // Disinterest cooldown — after an NPC has watched Zerble long enough
+    // (see 'watching' case below), they walk away with a few seconds of
+    // immunity from the proximity machine re-engaging them. Lets you
+    // actually leave a crowd behind instead of being permanently mobbed.
+    const nowSec = performance.now() * 0.001;
+    const disinterested = npc.disinterestedUntil > nowSec;
+    if (!fleeingLocked && !disinterested) {
+      // Exited flee — clear the jitter so the NEXT flee picks a fresh angle.
+      if (npc.state === 'fleeing') npc.fleeJitter = undefined;
       if (dToZerble < NOTICE_RANGE) {
         if (npc.skittish > 0.55 && dToZerble < SMILE_RANGE * 0.6) {
           npc.state = 'fleeing';
@@ -638,10 +658,72 @@ export class Crowd {
       }
 
       case 'watching': {
-        // Face Zerble; tiny dance bob if music-y
+        // Face Zerble; tiny dance bob if music-y. NPCs in 'watching' used
+        // to stand totally still — zombie-like at a glance. Now they:
+        //   1. Mill around with small random shuffles (~2-4s between picks)
+        //   2. Track how long they've been watching, and once
+        //      attentionSpan elapses, walk away with a brief disinterest
+        //      cooldown so they don't immediately get re-engaged.
         const target = Math.atan2(-dx, -dz);
         const diff = wrapAngle(target - npc.yaw);
-        npc.yaw += diff * Math.min(1, dt * 6);
+        // Looser yaw lerp + small per-NPC drift so heads aren't all
+        // tracking in perfect sync.
+        npc.yaw += diff * Math.min(1, dt * 4);
+
+        // Track time spent watching; personality decides patience.
+        if (npc.watchTimer === undefined) {
+          npc.watchTimer = 0;
+          // Attention span: more curious folks watch longer; tired ones
+          // get bored faster. Range roughly 4-14 seconds.
+          npc.attentionSpan = 4 + npc.curiosity * 10 - (1 - npc.energy) * 2;
+        }
+        npc.watchTimer += dt;
+
+        // Mill around — pick a new shuffle target every 2-4s. Targets are
+        // 0.5-1.5m offsets from current pos that bias slightly perpendicular
+        // to the Zerble-facing direction (so they shift side-to-side
+        // rather than walk into the cart).
+        if (npc.shuffleTimer === undefined || npc.shuffleTimer <= 0) {
+          const sideAng = Math.atan2(-dx, -dz) + Math.PI / 2 + (Math.random() - 0.5) * 1.2;
+          const r = 0.5 + Math.random() * 1.0;
+          npc.shuffleTarget = npc.shuffleTarget || new THREE.Vector3();
+          npc.shuffleTarget.set(
+            npc.pos.x + Math.cos(sideAng) * r,
+            0,
+            npc.pos.z + Math.sin(sideAng) * r,
+          );
+          npc.shuffleTimer = 2 + Math.random() * 2;
+        }
+        npc.shuffleTimer -= dt;
+        const sdx = npc.shuffleTarget.x - npc.pos.x;
+        const sdz = npc.shuffleTarget.z - npc.pos.z;
+        const sd = Math.hypot(sdx, sdz);
+        if (sd > 0.05) {
+          desiredX = sdx / sd;
+          desiredZ = sdz / sd;
+          // Very slow shuffle — half the walking speed
+          speed = 0.7 * npc.energy;
+        }
+
+        // Lost interest → walk away with cooldown. Curious NPCs sometimes
+        // upgrade to 'approaching' instead of giving up cold.
+        if (npc.watchTimer > npc.attentionSpan) {
+          npc.watchTimer = undefined;
+          npc.attentionSpan = undefined;
+          npc.shuffleTimer = undefined;
+          // Pick a wander target away from Zerble (3-7m radial)
+          const awayAng = Math.atan2(-dx, -dz) + (Math.random() - 0.5) * 0.8;
+          const awayR = 6 + Math.random() * 4;
+          npc.target.set(
+            npc.pos.x - Math.cos(awayAng) * awayR,
+            0,
+            npc.pos.z - Math.sin(awayAng) * awayR,
+          );
+          npc.state = 'walking';
+          npc.stateTimer = 6 + Math.random() * 4;
+          // Disinterest cooldown — won't re-engage with Zerble for ~6-10s
+          npc.disinterestedUntil = nowSec + 6 + Math.random() * 4;
+        }
         break;
       }
 
@@ -662,25 +744,39 @@ export class Crowd {
       }
 
       case 'fleeing': {
-        // Run perpendicular-away from Zerble (so they get out of his lane)
+        // Run perpendicular-away from Zerble (so they get out of his lane).
+        // To avoid the "starburst" look where everyone moves in clean
+        // radial lines, we mix in a stable per-NPC jitter angle (set
+        // once when fleeing starts) AND a small frame-to-frame wobble.
+        // The result is each NPC takes a slightly different path away —
+        // looks like real scared people, not a particle effect.
+        if (npc.fleeJitter === undefined) {
+          // ±35° stable jitter, picked once per flee event so the NPC's
+          // chosen angle is consistent across the duration. Cleared on
+          // state exit so the next flee picks a fresh angle.
+          npc.fleeJitter = (Math.random() - 0.5) * (Math.PI * 0.4);
+        }
         const inv = 1 / (dToZerble || 1);
-        // Bias 70% direct away, 30% sideways for a more natural scatter
         const awayX = -dx * inv;
         const awayZ = -dz * inv;
-        const sideX = -dz * inv;
-        const sideZ = dx * inv;
-        const sideSign = (npc.idx % 2 === 0) ? 1 : -1;
-        desiredX = awayX * 0.7 + sideX * 0.3 * sideSign;
-        desiredZ = awayZ * 0.7 + sideZ * 0.3 * sideSign;
-        const dn = Math.hypot(desiredX, desiredZ) || 1;
-        desiredX /= dn;
-        desiredZ /= dn;
-        speed = 3.5 * npc.energy;
+        // Rotate the away vector by fleeJitter + a small per-frame wobble
+        // so the path curves a bit instead of being a clean ray.
+        const wobble = Math.sin(performance.now() * 0.004 + npc.idx) * 0.15;
+        const ang = npc.fleeJitter + wobble;
+        const cosA = Math.cos(ang);
+        const sinA = Math.sin(ang);
+        desiredX = awayX * cosA - awayZ * sinA;
+        desiredZ = awayX * sinA + awayZ * cosA;
+        // Per-NPC speed variation (±15%) so even matched-direction
+        // neighbors don't move in lockstep.
+        const speedJitter = 0.85 + (npc.idx % 7) * 0.05;  // 0.85..1.15
+        speed = 3.5 * npc.energy * speedJitter;
         const lookDir = Math.atan2(-desiredX, -desiredZ);
         npc.yaw = lookDir;
         if (dToZerble > NOTICE_RANGE + 4) {
           npc.state = 'idle';
           npc.stateTimer = 2;
+          npc.fleeJitter = undefined;   // reset so next flee picks fresh
         }
         break;
       }

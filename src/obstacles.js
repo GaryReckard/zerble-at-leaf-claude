@@ -11,6 +11,8 @@ import { buildBandMember } from './models/bandMember.js';
 import { buildParasolMarshal } from './models/parasolMarshal.js';
 import { buildKid } from './models/kid.js';
 import { buildWook } from './models/wook.js';
+import { buildHulaHooper } from './models/hulaHooper.js';
+import { buildFrisbeePlayer, buildFrisbeeDisc } from './models/frisbeePlayer.js';
 import { Sound } from './sound.js';
 import { projectOutOfLake } from './lakes.js';
 import { registry } from './registry.js';
@@ -343,25 +345,25 @@ export class KidGaggle {
   }
 
   // Honk-scatter trigger called from main.js when the player honks while
-  // parked. Any kid in front of Zerble (within FRONT_RANGE, dot with the
-  // cart's forward axis > 0) gets a short flee timer that overrides their
-  // bubble-chase / cluster behavior for ~1.2s. Kids behind the cart are
-  // left alone — they were the ones we WANTED back there at the vent.
+  // parked. Any kid within SCATTER_RANGE flees regardless of which side
+  // of Zerble they're on — kids spend most of their time clustered
+  // *behind* the cart chasing bubbles, so a front-only cone would miss
+  // exactly the cohort that needs to scatter. Each kid's pre-aim gets a
+  // ±30° random jitter so the gaggle doesn't all run in a perfect radial
+  // starburst — looks like real scared kids, not a particle effect.
   scatter(zerble) {
-    if (!zerble || !zerble.forwardWorld) return;
-    const FRONT_RANGE = 10;
-    const FRONT_RANGE_SQ = FRONT_RANGE * FRONT_RANGE;
-    const fx = zerble.forwardWorld.x;
-    const fz = zerble.forwardWorld.z;
+    if (!zerble) return;
+    const SCATTER_RANGE = 12;
+    const SCATTER_RANGE_SQ = SCATTER_RANGE * SCATTER_RANGE;
     for (const k of this.kids) {
       const dx = k.position.x - zerble.position.x;
       const dz = k.position.z - zerble.position.z;
-      if (dx * dx + dz * dz > FRONT_RANGE_SQ) continue;
-      // Dot > 0 means the kid is on the forward side of Zerble.
-      if (dx * fx + dz * fz <= 0) continue;
+      if (dx * dx + dz * dz > SCATTER_RANGE_SQ) continue;
       k.userData.scatterTimer = 1.2;
-      // Pre-aim them away so the first frame doesn't waste time turning.
-      k.userData.heading = Math.atan2(dx, -dz);
+      // Pre-aim away from Zerble + ±30° jitter so the scatter pattern
+      // isn't a perfect starburst.
+      const baseHeading = Math.atan2(dx, -dz);
+      k.userData.heading = baseHeading + (Math.random() - 0.5) * (Math.PI / 3);
       k.userData.turnTimer = 0.8;
     }
   }
@@ -551,9 +553,10 @@ export class KidGaggle {
 
       k.rotation.y = k.userData.heading;
 
-      // Lil hop — bouncier when chasing a bubble (they're excited)
+      // Lil hop — bouncier when chasing a bubble (they're excited). Bounce
+      // rate dropped to 2/3 of the original (felt fidgety before).
       const bouncy = chaseD < BUBBLE_ATTRACT_RANGE ? 0.22 : 0.15;
-      const tMs = performance.now() * 0.012 + i;
+      const tMs = performance.now() * 0.008 + i;          // was 0.012
       k.children[0].position.y = 0.55 + Math.abs(Math.sin(tMs * 2)) * bouncy;
 
       this.colliders[i].position.copy(k.position);
@@ -818,3 +821,513 @@ function samplePath(path, distance, outPos, outDir) {
   outDir.set(0, 0, 1);
   return { pos: outPos, dir: outDir };
 }
+
+// =================================================================
+// HULA-HOOPERS  — gyrating, glowing-hoop festival performers
+// =================================================================
+//
+// Hoopers attach themselves to attractor POIs (stages, drum circles, fire
+// pits) within a moderate radius around Zerble. Each attractor permits at
+// most MAX_PER_ATTRACTOR hoopers; the average is 0-1 (we roll for a slot,
+// most attractors come up empty).
+//
+// They don't walk — once placed, they hold position and gyrate. The hoop
+// spins around their hips and tilts subtly. At night the hoop's emissive
+// kicks up so it reads as a glow stick in the dark.
+//
+// Other crowd NPCs avoid them via a registered footprint (radius = hoop +
+// margin). Hooper colliders deal modest damage so Zerble shouldn't roll
+// through them either — they're a soft hazard, not a parade.
+
+const HOOPER_ATTRACTOR_KINDS = new Set([
+  'stage', 'stage_front', 'drum_circle', 'firepit', 'leaf_drum_circle',
+]);
+const HOOPER_HOOP_RADIUS = 0.58;          // matches model
+const HOOPER_AVOID_RADIUS = HOOPER_HOOP_RADIUS + 0.6;  // crowd footprint
+const HOOPER_MAX = 8;                     // global pool size
+const HOOPER_SEARCH_RANGE = 120;          // attractors within this of Zerble
+const HOOPER_RECYCLE_DIST2 = 220 * 220;   // recycle if drifted this far
+
+export class HulaHoopers {
+  constructor() {
+    this.group = new THREE.Group();
+    this.group.name = 'HulaHoopers';
+    this.hoopers = [];
+    this.colliders = [];
+    this._scanCooldown = 0;
+    this._tmp = new THREE.Vector3();
+  }
+
+  // Called once per frame from main.js.
+  //   zerblePos: Vector3        (player position)
+  //   nightness: 0..1           (drives hoop glow)
+  update(dt, zerblePos, nightness = 0) {
+    this._scanCooldown -= dt;
+    if (zerblePos && this._scanCooldown <= 0) {
+      this._scanCooldown = 2.5;            // re-scan every 2.5s
+      this._rescan(zerblePos);
+    }
+
+    const glow = 0.05 + nightness * 3.0;   // dim by day, bright at night
+
+    for (let i = 0; i < this.hoopers.length; i++) {
+      const h = this.hoopers[i];
+      if (!h.visible) continue;
+      const u = h.userData;
+      // Hip gyration — slow figure-8-ish lean of the body. Was much faster;
+      // dialled way back so it reads as a meditative flow, not jittery.
+      u.phase += dt * u.gyrSpeed;
+      const swayX = Math.sin(u.phase) * 0.16;
+      const swayZ = Math.cos(u.phase * 0.7) * 0.10;
+      u.bodyGroup.rotation.z = swayX;
+      u.bodyGroup.rotation.x = swayZ;
+      u.bodyGroup.position.y = Math.sin(u.phase * 2) * 0.03;
+      // Hoop spin — also slowed; just enough to read as turning, not whirring.
+      u.hoopPivot.rotation.y = u.phase * 1.6;
+      u.hoopPivot.rotation.x = Math.sin(u.phase) * 0.10;
+      u.hoopPivot.rotation.z = Math.cos(u.phase * 1.1) * 0.08;
+      // Bump emissive intensity from day→night
+      u.hoopMat.emissiveIntensity = glow;
+
+      // Slight random drift: every few seconds pick a new tiny offset target
+      // near the anchor, then ease toward it at a snail's pace. Keeps the
+      // hooper from feeling rooted to the spot without abandoning the POI.
+      u.driftTimer -= dt;
+      if (u.driftTimer <= 0) {
+        u.driftTimer = 4 + Math.random() * 5;
+        const ang = Math.random() * TAU;
+        const r = 0.4 + Math.random() * 0.9;
+        u.driftTargetX = u.anchorX + Math.cos(ang) * r;
+        u.driftTargetZ = u.anchorZ + Math.sin(ang) * r;
+      }
+      const ddx = u.driftTargetX - h.position.x;
+      const ddz = u.driftTargetZ - h.position.z;
+      const dd = Math.hypot(ddx, ddz);
+      if (dd > 0.04) {
+        const step = Math.min(dd, 0.25 * dt);   // ~25cm/s — barely a shuffle
+        h.position.x += (ddx / dd) * step;
+        h.position.z += (ddz / dd) * step;
+        // Keep registry footprint in sync so crowd avoidance follows the drift.
+        if (u.footprintId != null) {
+          const fp = registry.entries.get(u.footprintId);
+          if (fp) fp.position.set(h.position.x, 0, h.position.z);
+        }
+      }
+
+      // Collider — at chest height, body radius only (hoop itself isn't solid)
+      this.colliders[i].position.copy(h.position);
+      this.colliders[i].position.y = 0.9;
+    }
+  }
+
+  // Find valid attractor anchors near Zerble and (re)place hoopers that have
+  // no anchor or drifted too far away.
+  _rescan(zerblePos) {
+    // Collect candidate attractors within range, sorted by attractor weight
+    const candidates = [];
+    for (const e of registry.entries.values()) {
+      if (!e.attractor || !HOOPER_ATTRACTOR_KINDS.has(e.kind)) continue;
+      const dx = e.position.x - zerblePos.x;
+      const dz = e.position.z - zerblePos.z;
+      const d2 = dx * dx + dz * dz;
+      if (d2 > HOOPER_SEARCH_RANGE * HOOPER_SEARCH_RANGE) continue;
+      candidates.push({ entry: e, d2 });
+    }
+    // Tally existing hoopers per attractor id
+    const perAttractor = new Map();
+    for (const h of this.hoopers) {
+      const aid = h.userData.attractorId;
+      if (aid != null) perAttractor.set(aid, (perAttractor.get(aid) || 0) + 1);
+    }
+
+    // Recycle stale hoopers (no anchor, or anchor too far from Zerble, or
+    // anchor entry no longer exists in registry).
+    for (const h of this.hoopers) {
+      const u = h.userData;
+      const stillValid = u.attractorId != null && registry.entries.has(u.attractorId);
+      const dx = h.position.x - zerblePos.x;
+      const dz = h.position.z - zerblePos.z;
+      const tooFar = dx * dx + dz * dz > HOOPER_RECYCLE_DIST2;
+      if (!stillValid || tooFar) {
+        if (u.attractorId != null) {
+          const c = perAttractor.get(u.attractorId) || 0;
+          if (c > 0) perAttractor.set(u.attractorId, c - 1);
+        }
+        u.attractorId = null;
+        h.visible = false;
+      }
+    }
+
+    // Try to (re)place any hooper that has no anchor. Most attractors come
+    // up empty (rolling against a low chance), keeping the average to 0-1.
+    for (const h of this.hoopers) {
+      if (h.userData.attractorId != null) continue;
+      // Shuffle candidates for variety
+      shuffleInPlace(candidates);
+      for (const cand of candidates) {
+        const e = cand.entry;
+        const already = perAttractor.get(e.id) || 0;
+        // Cap per attractor; bigger attractors (high weight) get higher cap
+        const maxHere = e.attractor.weight >= 2 ? 3 : (e.attractor.weight >= 1 ? 2 : 1);
+        if (already >= maxHere) continue;
+        // Most candidates roll empty. Weighted by attractor weight so big
+        // stages are more likely to attract a hooper than a tent.
+        const accept = Math.random() < 0.18 * Math.min(2.5, e.attractor.weight);
+        if (!accept) continue;
+        // Place on a ring inside the attractor radius
+        const ang = Math.random() * TAU;
+        const rad = (0.45 + Math.random() * 0.5) * e.attractor.radius;
+        const x = e.position.x + Math.cos(ang) * rad;
+        const z = e.position.z + Math.sin(ang) * rad;
+        // Don't drop onto a hard collider
+        if (registry.closestBuilding(new THREE.Vector3(x, 0, z), HOOPER_AVOID_RADIUS)) continue;
+        h.position.set(x, 0, z);
+        // Face roughly inward toward the attractor center
+        h.rotation.y = Math.atan2(e.position.x - x, e.position.z - z);
+        h.visible = true;
+        h.userData.attractorId = e.id;
+        h.userData.phase = Math.random() * TAU;
+        // Slow gyration — much slower than before (was 1.6-2.4). 0.45-0.75
+        // reads as a calm, flowing hoop dance instead of a fidget.
+        h.userData.gyrSpeed = 0.45 + Math.random() * 0.30;
+        // Drift state: anchor + an offset target inside a ~1m bubble around it
+        h.userData.anchorX = x;
+        h.userData.anchorZ = z;
+        h.userData.driftTargetX = x;
+        h.userData.driftTargetZ = z;
+        h.userData.driftTimer = 2 + Math.random() * 4;
+        // Bump the per-attractor count so the next hooper doesn't double-stack
+        perAttractor.set(e.id, already + 1);
+        // Update the registry footprint entry's position (single shared entry per hooper)
+        if (h.userData.footprintId != null) {
+          const fp = registry.entries.get(h.userData.footprintId);
+          if (fp) fp.position.set(x, 0, z);
+        }
+        break;
+      }
+    }
+  }
+}
+
+// Construct hoopers lazily on first use so the pool isn't allocated until the
+// world is built (otherwise the registry would be empty during _rescan and we
+// might as well not bother). Factory pattern mirrors how main.js owns the
+// other obstacle classes.
+HulaHoopers.create = function create() {
+  const hh = new HulaHoopers();
+  for (let i = 0; i < HOOPER_MAX; i++) {
+    const h = buildHulaHooper();
+    h.visible = false;
+    h.userData.attractorId = null;
+    h.userData.phase = 0;
+    h.userData.gyrSpeed = 1.8;
+    hh.group.add(h);
+    hh.hoopers.push(h);
+    hh.colliders.push({
+      position: new THREE.Vector3(),
+      radius: 0.55,
+      damage: 4,
+      kind: 'hula_hoop',
+    });
+    // Persistent registry footprint so crowd NPCs steer around them. The
+    // footprint position is updated each time the hooper anchors to a new
+    // attractor. While the hooper is hidden, the footprint sits far below
+    // ground so it doesn't push anyone around — simpler than removing and
+    // re-adding the entry every recycle.
+    const fpId = registry.add({
+      kind: 'hula_hoop',
+      position: new THREE.Vector3(0, -1000, 0),
+      footprint: HOOPER_AVOID_RADIUS,
+    });
+    h.userData.footprintId = fpId;
+  }
+  return hh;
+};
+
+function shuffleInPlace(arr) {
+  for (let i = arr.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [arr[i], arr[j]] = [arr[j], arr[i]];
+  }
+}
+
+// =================================================================
+// FRISBEE PLAYERS  — pairs tossing a disc with imperfect aim
+// =================================================================
+//
+// A pair is two players + one disc. The disc has a parabolic trajectory.
+// On toss the disc aims at the receiver ± a small random angle so it
+// regularly lands a meter or two off target — the receiver has to step
+// toward the predicted landing spot to "catch" it. Once the disc lands or
+// is caught, the catcher pauses briefly, then tosses back.
+//
+// We maintain FEW pairs (rare) and recycle them to follow Zerble around
+// like the Wooks do, so you encounter the same low handful as you drive.
+
+const FRISBEE_PAIR_COUNT = 2;
+const FRISBEE_PLAYER_SEPARATION_MIN = 10;
+const FRISBEE_PLAYER_SEPARATION_MAX = 18;
+const FRISBEE_RECYCLE_MIN = 35;
+const FRISBEE_RECYCLE_MAX = 90;
+const FRISBEE_RECYCLE_DIST2 = 200 * 200;
+const FRISBEE_TOSS_SPEED = 9.5;            // horizontal m/s
+const FRISBEE_TOSS_GRAVITY = 9.8;          // m/s²
+const FRISBEE_CATCH_RADIUS = 0.7;
+const FRISBEE_AIM_JITTER = 0.20;           // rad — toss aim spread
+const FRISBEE_PLAYER_SPEED = 2.6;          // m/s — how fast they chase the landing spot
+
+export class Frisbees {
+  constructor() {
+    this.group = new THREE.Group();
+    this.group.name = 'Frisbees';
+    this.pairs = [];
+    this.colliders = [];
+
+    for (let i = 0; i < FRISBEE_PAIR_COUNT; i++) {
+      const pair = this._buildPair();
+      this.group.add(pair.playerA);
+      this.group.add(pair.playerB);
+      this.group.add(pair.disc);
+      this.pairs.push(pair);
+      // One soft collider per player so Zerble bumps them as he would a regular person
+      for (const p of [pair.playerA, pair.playerB]) {
+        const col = {
+          position: new THREE.Vector3(),
+          radius: 0.5,
+          damage: 1,
+          kind: 'person',
+        };
+        p.userData.collider = col;
+        this.colliders.push(col);
+      }
+      // Place this pair far away initially; the first update will recycle them near Zerble.
+      pair.anchor.set(9999, 0, 9999);
+      pair.playerA.position.copy(pair.anchor);
+      pair.playerB.position.copy(pair.anchor);
+      pair.disc.position.copy(pair.anchor);
+    }
+  }
+
+  _buildPair() {
+    const playerA = buildFrisbeePlayer();
+    const playerB = buildFrisbeePlayer();
+    const disc = buildFrisbeeDisc();
+    return {
+      playerA,
+      playerB,
+      disc,
+      anchor: new THREE.Vector3(),
+      // disc state: 'flying' (in the air toward target), 'held' (resting in
+      // the thrower's hand position), 'landed' (on the ground awaiting catcher arrival)
+      discState: 'held',
+      discHolder: playerA,
+      discCatcher: playerB,
+      // Where the disc is headed if 'flying' / where it landed if 'landed':
+      target: new THREE.Vector3(),
+      vel: new THREE.Vector3(),
+      // Catch/toss timing
+      pauseTimer: 1 + Math.random() * 1.5,
+      // The catcher's own predicted-landing spot (recomputed each frame while flying)
+      catcherTarget: new THREE.Vector3(),
+    };
+  }
+
+  update(dt, zerblePos) {
+    // Recycle pairs that drifted too far from Zerble
+    if (zerblePos) {
+      for (const p of this.pairs) {
+        const dx = p.anchor.x - zerblePos.x;
+        const dz = p.anchor.z - zerblePos.z;
+        if (dx * dx + dz * dz > FRISBEE_RECYCLE_DIST2) this._recycle(p, zerblePos);
+      }
+    }
+
+    const tMs = performance.now() * 0.001;
+
+    for (const p of this.pairs) {
+      // Idle micro-bob so they don't look frozen
+      p.playerA.userData.bobPhase = (p.playerA.userData.bobPhase || 0) + dt * 4;
+      p.playerB.userData.bobPhase = (p.playerB.userData.bobPhase || 0) + dt * 4;
+      const aBob = Math.abs(Math.sin(p.playerA.userData.bobPhase)) * 0.04;
+      const bBob = Math.abs(Math.sin(p.playerB.userData.bobPhase + 1.2)) * 0.04;
+      if (p.playerA.userData.bodyGroup) p.playerA.userData.bodyGroup.position.y = aBob;
+      if (p.playerB.userData.bodyGroup) p.playerB.userData.bodyGroup.position.y = bBob;
+
+      // Face each other (or the disc, if flying/landed)
+      const lookAt = (player, tx, tz) => {
+        player.rotation.y = Math.atan2(tx - player.position.x, tz - player.position.z) + Math.PI;
+      };
+
+      if (p.discState === 'held') {
+        // Disc sits at the holder's hand; pause then toss
+        const handX = p.discHolder.position.x + Math.sin(p.discHolder.rotation.y) * 0.3;
+        const handZ = p.discHolder.position.z - Math.cos(p.discHolder.rotation.y) * 0.3;
+        p.disc.position.set(handX, 1.45, handZ);
+        p.disc.rotation.y += dt * 4;
+
+        // Players look at each other while waiting
+        lookAt(p.playerA, p.playerB.position.x, p.playerB.position.z);
+        lookAt(p.playerB, p.playerA.position.x, p.playerA.position.z);
+
+        p.pauseTimer -= dt;
+        if (p.pauseTimer <= 0) this._toss(p);
+      } else if (p.discState === 'flying') {
+        // Integrate disc with simple ballistic motion. Floor at y=0.
+        p.disc.position.x += p.vel.x * dt;
+        p.disc.position.y += p.vel.y * dt;
+        p.disc.position.z += p.vel.z * dt;
+        p.vel.y -= FRISBEE_TOSS_GRAVITY * dt * 0.6;     // softer gravity so the arc reads slow + floaty
+        p.disc.rotation.y += dt * 14;                    // spin
+
+        // Update catcher's predicted landing spot. We solve for time-to-hit-y≈0.4
+        // (catch height ≈ 0.4m above ground) using current vel.y and y.
+        //   y(t) = y + vy*t − 0.5*g*t²   →  solve for catch height
+        const g = FRISBEE_TOSS_GRAVITY * 0.6;
+        const catchY = 0.4;
+        const vy = p.vel.y;
+        const y0 = p.disc.position.y;
+        // Quadratic: −0.5*g*t² + vy*t + (y0 − catchY) = 0
+        const A = -0.5 * g;
+        const B = vy;
+        const C = y0 - catchY;
+        const disc = B * B - 4 * A * C;
+        let tHit = 0;
+        if (disc >= 0) {
+          const r1 = (-B - Math.sqrt(disc)) / (2 * A);
+          const r2 = (-B + Math.sqrt(disc)) / (2 * A);
+          // Pick the smallest positive root. If both roots are non-positive
+          // (the disc has already passed the catch height going down), leave
+          // tHit at 0 so catcherTarget falls back to disc.position rather
+          // than computing position + vel * Infinity, which propagates NaN.
+          const candidates = [];
+          if (r1 > 0 && isFinite(r1)) candidates.push(r1);
+          if (r2 > 0 && isFinite(r2)) candidates.push(r2);
+          if (candidates.length) tHit = Math.min(...candidates);
+        }
+        p.catcherTarget.set(
+          p.disc.position.x + p.vel.x * tHit,
+          0,
+          p.disc.position.z + p.vel.z * tHit,
+        );
+
+        // Catcher walks toward the predicted landing spot
+        const dx = p.catcherTarget.x - p.discCatcher.position.x;
+        const dz = p.catcherTarget.z - p.discCatcher.position.z;
+        const dPlanar = Math.hypot(dx, dz);
+        if (dPlanar > 0.05) {
+          const inv = 1 / dPlanar;
+          const step = Math.min(dPlanar, FRISBEE_PLAYER_SPEED * dt);
+          p.discCatcher.position.x += dx * inv * step;
+          p.discCatcher.position.z += dz * inv * step;
+        }
+        // Catcher faces the disc; holder stays still but turns to track
+        lookAt(p.discCatcher, p.disc.position.x, p.disc.position.z);
+        lookAt(p.discHolder, p.disc.position.x, p.disc.position.z);
+
+        // Check catch: disc within radius of catcher's hand area
+        const dxD = p.disc.position.x - p.discCatcher.position.x;
+        const dzD = p.disc.position.z - p.discCatcher.position.z;
+        const planarHand = Math.hypot(dxD, dzD);
+        if (
+          p.disc.position.y < 1.7 &&
+          p.disc.position.y > 0.6 &&
+          planarHand < FRISBEE_CATCH_RADIUS
+        ) {
+          // Caught! Swap roles, brief pause, then toss back.
+          this._catch(p);
+        } else if (p.disc.position.y <= 0.05) {
+          // Hit the ground — disc lies there, catcher walks over to pick it up
+          p.disc.position.y = 0.05;
+          p.discState = 'landed';
+          p.target.set(p.disc.position.x, 0, p.disc.position.z);
+        }
+      } else if (p.discState === 'landed') {
+        // Catcher walks to the disc, picks it up, then becomes the holder.
+        const dx = p.disc.position.x - p.discCatcher.position.x;
+        const dz = p.disc.position.z - p.discCatcher.position.z;
+        const d = Math.hypot(dx, dz);
+        if (d < 0.7) {
+          // Pick up — disc becomes "held", swap roles.
+          const oldHolder = p.discHolder;
+          p.discHolder = p.discCatcher;
+          p.discCatcher = oldHolder;
+          p.discState = 'held';
+          p.pauseTimer = 0.8 + Math.random() * 1.2;
+        } else {
+          const inv = 1 / d;
+          const step = Math.min(d, FRISBEE_PLAYER_SPEED * dt);
+          p.discCatcher.position.x += dx * inv * step;
+          p.discCatcher.position.z += dz * inv * step;
+        }
+        lookAt(p.discCatcher, p.disc.position.x, p.disc.position.z);
+        lookAt(p.discHolder, p.discCatcher.position.x, p.discCatcher.position.z);
+      }
+
+      // Update collider positions
+      if (p.playerA.userData.collider) {
+        p.playerA.userData.collider.position.copy(p.playerA.position);
+        p.playerA.userData.collider.position.y = 0.9;
+      }
+      if (p.playerB.userData.collider) {
+        p.playerB.userData.collider.position.copy(p.playerB.position);
+        p.playerB.userData.collider.position.y = 0.9;
+      }
+    }
+  }
+
+  _toss(p) {
+    // Aim at catcher with a small angular jitter so the toss doesn't always
+    // land in their lap. Disc starts ≈1.45m up at the holder's hand.
+    const fromX = p.disc.position.x;
+    const fromZ = p.disc.position.z;
+    const toX = p.discCatcher.position.x;
+    const toZ = p.discCatcher.position.z;
+    const dx = toX - fromX;
+    const dz = toZ - fromZ;
+    const baseAng = Math.atan2(dx, dz);
+    const jitter = (Math.random() - 0.5) * 2 * FRISBEE_AIM_JITTER;
+    const ang = baseAng + jitter;
+    const dist = Math.hypot(dx, dz);
+    // Add a small undershoot/overshoot to the planar speed as well, so the
+    // disc can land short or long, not just left/right.
+    const speedFactor = 0.85 + Math.random() * 0.35;     // 0.85..1.20
+    const planarSpeed = FRISBEE_TOSS_SPEED * speedFactor;
+    p.vel.set(
+      Math.sin(ang) * planarSpeed,
+      4.5 + Math.random() * 1.6,    // lob upward
+      Math.cos(ang) * planarSpeed,
+    );
+    p.disc.position.y = 1.45;
+    p.discState = 'flying';
+  }
+
+  _catch(p) {
+    // Disc goes back in the catcher's hand; roles swap; pause then toss back.
+    const oldHolder = p.discHolder;
+    p.discHolder = p.discCatcher;
+    p.discCatcher = oldHolder;
+    p.discState = 'held';
+    p.pauseTimer = 0.7 + Math.random() * 1.0;
+  }
+
+  _recycle(p, zerblePos) {
+    // Place the pair at a random nearby spot, oriented at a random angle,
+    // with each player FRISBEE_PLAYER_SEPARATION_MIN..MAX apart.
+    const ang = Math.random() * TAU;
+    const dist = FRISBEE_RECYCLE_MIN + Math.random() * (FRISBEE_RECYCLE_MAX - FRISBEE_RECYCLE_MIN);
+    const cx = zerblePos.x + Math.cos(ang) * dist;
+    const cz = zerblePos.z + Math.sin(ang) * dist;
+    p.anchor.set(cx, 0, cz);
+    const sep = FRISBEE_PLAYER_SEPARATION_MIN +
+      Math.random() * (FRISBEE_PLAYER_SEPARATION_MAX - FRISBEE_PLAYER_SEPARATION_MIN);
+    const pairAng = Math.random() * TAU;
+    p.playerA.position.set(cx + Math.cos(pairAng) * sep * 0.5, 0, cz + Math.sin(pairAng) * sep * 0.5);
+    p.playerB.position.set(cx - Math.cos(pairAng) * sep * 0.5, 0, cz - Math.sin(pairAng) * sep * 0.5);
+    p.discHolder = p.playerA;
+    p.discCatcher = p.playerB;
+    p.discState = 'held';
+    p.pauseTimer = 0.6 + Math.random() * 1.4;
+    p.disc.position.set(p.playerA.position.x, 1.45, p.playerA.position.z);
+  }
+}
+

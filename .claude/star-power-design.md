@@ -147,25 +147,30 @@ Cheap layer-on effects during `active`:
 - Cross-fade in over 0.2s, cross-fade out over 0.4s. Stage music
   un-ducks on the way out.
 
-### Mechanics — invincibility + love magnet
+### Mechanics — ghost mode + love magnet
 
-**Invincibility:**
-- `Zerble.takeDamage(dmg, kind)` early-returns if
-  `StarPower.isActive()`. Existing collision system still detects
-  contacts so impact sounds + scatter still trigger — the cart just
-  doesn't lose health.
-- Cart still PHYSICALLY collides (or doesn't — see below). Options:
-  - **A.** Cart passes through hard colliders entirely. More fun but
-    can clip into stage geometry weirdly.
-  - **B.** Cart still bounces off colliders but takes no damage. Safer.
-  - **C.** Cart obliterates collidable NPC obstacles (puppet parade,
-    brass band, kid gaggles, wooks) but bounces off architecture
-    (stages, food trucks, lake edges).
-  Lean toward **C** — feels powerful but doesn't let players phase
-  through scenery and get stuck.
-- "Obliterated" NPCs do a brief comic recovery: scatter outward, spawn
-  big smile pickup, get re-anchored fresh after 2s. No actual harm —
-  they bounce back like cartoon characters.
+**Ghost mode:**
+- The whole collision system is **bypassed entirely** while
+  `StarPower.isActive()`. Not "bounces without damage", not
+  "obliterates NPCs" — Zerble simply phases through everything like a
+  rainbow phantom. Food trucks, brass bands, stages, puppets, kids,
+  wooks, lake edges, tent poles — all of it. Drive unencumbered.
+- Implementation: the main collision resolver in `main.js` (the
+  function that walks `registry.colliders()` + the world-roaming
+  obstacle lists and applies bounce + damage) short-circuits when
+  `StarPower.isActive()`. One early-return at the top.
+- Soft NPCs (the `person` and `kid` and `hula_hoop` kinds that
+  currently do gentle scatter) also skip — Zerble just glides through.
+- No impact sound, no scatter, no damage. Subtle "whoosh" SFX when
+  the cart passes within ~2m of a collidable thing is a nice touch,
+  but optional — the music + rainbow already sell the moment.
+- **Lake escape on buff end:** when the buff fades, if Zerble's
+  position is inside a lake outline, call the existing
+  `projectOutOfLake(zerble.x, zerble.z, 4)` and teleport the cart to
+  the shore + face it outward. Avoids "buff ended, now I'm trapped in
+  the lake and the collider ring is shoving me around" jankiness.
+- NPC scatter that the cart caused mid-buff (none, since collision is
+  off) — there's nothing to restore on end.
 
 **Love magnet:**
 - Per-frame during `active`, find every NPC within `LOVE_RADIUS =
@@ -222,9 +227,10 @@ Pillar of light:
   attach the `onBeforeCompile` patch + the shared `customProgramCacheKey`.
 - `crowd.js`: in `_updateNpc`, check `StarPower.isActive()`; if true
   and the NPC is within LOVE_RADIUS, fire the smile pickup.
-- `obstacles.js`: in collision response paths for puppet/brass/kid/wook,
-  early-return with the scatter+smile-burst response when
-  `StarPower.isActive()`.
+- `main.js`: the main collision resolver (the function that walks
+  `registry.colliders()` + global obstacle lists each frame) early-
+  returns when `StarPower.isActive()`. One line. This is the entire
+  "ghost mode" implementation.
 - `sound.js`: add a `'starpower'` style to the music engine vocabulary
   (~30 lines reusing existing synthesis primitives).
 - `chunks.js`: per-chunk roll for whether a star spawns in that
@@ -239,16 +245,16 @@ the shader patch + audio loop. The state machine itself is ~100 lines.
    ground. Players can find it before any buff behavior exists.
 2. **Pickup detection + buff state machine** — the 15s timer, the
    `_envelope` ramp, the trigger.
-3. **Invincibility** — `Zerble.takeDamage` gate. Now you can pick up
-   stars and survive collisions, but visually nothing's different.
+3. **Ghost mode** — collision resolver early-return when
+   `StarPower.isActive()`. Drive through everything. One-line gate.
 4. **Rainbow shader patch** — the visual signature. After this lands
    the buff actually FEELS like Mario.
 5. **Love magnet smile burst** — the gameplay payoff (big score
    jumps).
 6. **Music swap + bubble emit boost + HUD vignette** — the audio
    layer + finishing polish.
-7. **Hard-collider obliteration mode** (option C) — the final
-   power-fantasy layer.
+7. **Lake-escape on buff end** — `projectOutOfLake` safety pop if
+   Zerble's still in the water when the rainbow fades.
 
 Steps 1-4 make the feature shippable. 5-7 are layer-2 polish that
 makes it sing.

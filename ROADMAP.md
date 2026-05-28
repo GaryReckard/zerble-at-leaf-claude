@@ -69,6 +69,19 @@ The MIDI player (M key) ships with a single shared PolySynth(FMSynth) for all tr
 
 ## Gameplay verbs
 
+- **Bubble varieties — earnable and mix-and-match.** Bubbles are Zerble's signature; unlocking new TYPES is the most direct way to amplify the core verb. Each new type is gated on a different in-game achievement, persists in `localStorage`, and shows up in a small **multi-select** UI strip (tap/click an icon to toggle it on or off). The bubble spawner picks randomly from whatever set is currently enabled — so a player who's unlocked everything can run a chaotic mix of hearts + stars + rainbows + glow + the occasional mega. Default starting set: standard only. Six variants to ship:
+  - **Standard** — the base bubble. Always on, always unlocked.
+  - **Heart bubbles** — unlock by catching up to Lurleen at least once. NPCs in a "love" state (currently nascent — would need a small new affect type) give double smiles; everyone else reacts normally.
+  - **Star bubbles** — unlock by surviving a full wook trip (sustaining → fade-out completes). Float higher, last ~50% longer.
+  - **Smile-faced bubbles** — unlock at 100 lifetime smiles. NPCs smile back automatically when hit, regardless of bubble proximity.
+  - **Rainbow bubbles** — unlock with a smile combo of 30 (or whatever combo-threshold ships per the "smile combos + multiplier" idea). Pop spawns a small confetti burst + bonus smile.
+  - **Glow bubbles** — unlock at full nightness during a session (or via festival pin set later). Visible from far away at night, emissive material that ramps with `nightness`.
+  - **Mega-bubble** — unlock via a hidden world pickup. Rare emit (one per ~10s when enabled), 3-4× the size, pops with crowd-wide reaction (everyone within ~15m smiles + claps).
+  
+  Implementation sketch: extend `Bubbles` (`bubbles.js`) with a per-instance `bubbleType` attribute on the existing `InstancedMesh`. The `onBeforeCompile` shader patch reads the type to pick color/emissive/opacity. Pop behavior diverges in `_popBubble` via a small switch on type. The selector UI is a DOM strip (~6 icons) anchored to the HUD; clicking toggles a bit in a `bubbleTypesEnabled` set. `Bubbles._pickType()` does a uniform random draw from the enabled set at emit time. `localStorage` keeps `{ unlocked: ['standard', 'heart', ...], enabled: ['standard', 'rainbow'] }`.
+  
+  Cost: ~zero perf impact (same instance count, same draw call, one more per-instance attribute). Mostly feature work in `bubbles.js`, a new tiny DOM panel, and the per-unlock trigger plumbing across `Lurleen`, `Trip`, `Analytics.smileScore`, etc.
+
 - **Tricks via boost + hop key.** Tap Space+Shift (or a dedicated key) mid-drive for a small 0.3s hop. Air time + bubbles in-air = bonus smiles when you land near NPCs (NPC reaction: "oooh!"). Reuses Zerble's existing arcade physics — just adds a vertical impulse and a "in-air" flag. New verb, no geometry.
 - **Passenger requests.** Sometimes a boarding rider has a small icon over their head (a tent? a stage? a food truck?). Drop them within X meters of that POI = big smile bonus + maybe a token currency. Uses the existing boarding flow + the registry's POI kinds (`stage_front`, `food_truck`, `tent`, etc.).
 - **Vendor stand power-ups.** Extend `vendor_row` chunk themes with rare lemonade / pretzel / glow-stick stands. Drive by, get a 10s buff: faster bubble output, brighter eye glow, louder honk. Tiny new builders that reuse `foodTruck.js` patterns; existing food-truck attractor logic carries the trigger.

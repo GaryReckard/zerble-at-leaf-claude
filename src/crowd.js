@@ -33,11 +33,24 @@ const MAX_NPCS = PERF.crowdMax;
 // Riding/boarding NPCs are exempt — they're physically tied to the cart.
 const DESPAWN_RADIUS = (PERF.chunkUnloadRadius + 0.5) * CHUNK_SIZE;
 const DESPAWN_R2 = DESPAWN_RADIUS * DESPAWN_RADIUS;
+// Base shirt palette — wider than before, with bolder tie-dye-flavored hues
+// mixed in (magentas, lime greens, electric blues, sunset oranges). Plain
+// shirts pick from here; tie-dyed shirts pick two distinct entries (base +
+// accent) and the fragment shader blends them in a swirl pattern.
 const NPC_ROW_SHIRT = [
+  // Originals (the older festival pastels)
   0xff6f9c, 0xffd28a, 0x6fcf6a, 0x66d9ff, 0xb285ff,
   0xff8a5b, 0xf2e8cf, 0x8ecae6, 0xffb703, 0xc77dff,
   0x7bd389, 0xe07a5f, 0x81b29a, 0xf4a261,
+  // Vivid tie-dye flavors
+  0xff3d7f, 0xff5e3a, 0xffe14d, 0x4dffa5, 0x3acfd5,
+  0x6c5bff, 0xff44dd, 0xb7ff5b, 0xff7b3c, 0x39d6c4,
+  0x9b6bff, 0xff5577, 0xffd23f, 0x59ffa0,
 ];
+
+// Fraction of NPCs that get a tie-dye swirl (vs. plain shirt). Around
+// half feels festival-coded without overdoing it.
+const TIE_DYE_FRACTION = 0.55;
 
 // Awareness / charm
 const NOTICE_RANGE = 22;             // NPC starts paying attention to Zerble
@@ -132,6 +145,55 @@ export class Crowd {
     const headMat  = new THREE.MeshStandardMaterial({ color: 0xe6c098, roughness: 0.9,  flatShading: true });
     const featureMat = new THREE.MeshStandardMaterial({ color: 0x111111, roughness: 0.8 });
 
+    // Tie-dye injection — adds two per-instance attributes:
+    //   shirtAccent (vec3)  — the secondary color woven through the shirt
+    //   shirtTieDye (float) — 0 means plain (no swirl); >0 picks pattern
+    //                          frequency + amplitude
+    // The fragment shader builds a swirl from the geometry's local position
+    // (capsule UVs are degenerate around the poles, position is more reliable)
+    // and blends instanceColor with shirtAccent based on a sin/cos noise.
+    // Applied to both body and arm materials so sleeves match.
+    const tieDyeBeforeCompile = (shader) => {
+      // Inject attribute + varying declarations at the very top of each stage.
+      shader.vertexShader = `
+        attribute vec3 shirtAccent;
+        attribute float shirtTieDye;
+        varying vec3 vShirtAccent;
+        varying float vShirtTieDye;
+        varying vec3 vLocalPos;
+      ` + shader.vertexShader.replace(
+        '#include <begin_vertex>',
+        `#include <begin_vertex>
+         vShirtAccent = shirtAccent;
+         vShirtTieDye = shirtTieDye;
+         vLocalPos = position;`
+      );
+      shader.fragmentShader = `
+        varying vec3 vShirtAccent;
+        varying float vShirtTieDye;
+        varying vec3 vLocalPos;
+      ` + shader.fragmentShader.replace(
+        '#include <color_fragment>',
+        `#include <color_fragment>
+         if (vShirtTieDye > 0.01) {
+           float freq = 8.0 + vShirtTieDye * 14.0;
+           float phase = vShirtTieDye * 9.42;
+           float swirl =
+             sin(vLocalPos.y * freq + phase) +
+             sin((vLocalPos.x + vLocalPos.z) * freq * 0.85 - phase * 1.3) * 0.85 +
+             sin((vLocalPos.x - vLocalPos.y) * freq * 0.6 + phase * 2.1) * 0.6;
+           float blend = smoothstep(-0.3, 0.5, swirl) * (0.45 + vShirtTieDye * 0.35);
+           diffuseColor.rgb = mix(diffuseColor.rgb, vShirtAccent, blend);
+         }`
+      );
+    };
+    bodyMat.onBeforeCompile = tieDyeBeforeCompile;
+    armsMat.onBeforeCompile = tieDyeBeforeCompile;
+    // onBeforeCompile-modified materials need a unique customProgramCacheKey
+    // so three.js doesn't reuse a vanilla MeshStandardMaterial program.
+    bodyMat.customProgramCacheKey = () => 'crowd-tiedye-v1';
+    armsMat.customProgramCacheKey = () => 'crowd-tiedye-v1';
+
     // ---- InstancedMeshes ----
     this.legsMesh  = new THREE.InstancedMesh(legsGeo,  legsMat,  MAX_NPCS);
     this.shoesMesh = new THREE.InstancedMesh(shoesGeo, shoesMat, MAX_NPCS);
@@ -144,6 +206,24 @@ export class Crowd {
     // Per-NPC shirt color shared between body and arms (sleeves).
     this.bodyMesh.instanceColor = new THREE.InstancedBufferAttribute(new Float32Array(MAX_NPCS * 3), 3);
     this.armsMesh.instanceColor = new THREE.InstancedBufferAttribute(new Float32Array(MAX_NPCS * 3), 3);
+
+    // Tie-dye per-instance attributes. shirtAccent is the secondary color;
+    // shirtTieDye is 0 for plain shirts and ~0.4-1.0 for tie-dyed ones. Both
+    // bodyMesh + armsMesh share the same data references so sleeves match.
+    const accentData = new Float32Array(MAX_NPCS * 3);
+    const tieDyeData = new Float32Array(MAX_NPCS);
+    const shirtAccentAttr_body = new THREE.InstancedBufferAttribute(accentData, 3);
+    const shirtTieDyeAttr_body = new THREE.InstancedBufferAttribute(tieDyeData, 1);
+    const shirtAccentAttr_arms = new THREE.InstancedBufferAttribute(accentData, 3);
+    const shirtTieDyeAttr_arms = new THREE.InstancedBufferAttribute(tieDyeData, 1);
+    bodyGeo.setAttribute('shirtAccent', shirtAccentAttr_body);
+    bodyGeo.setAttribute('shirtTieDye', shirtTieDyeAttr_body);
+    armsGeo.setAttribute('shirtAccent', shirtAccentAttr_arms);
+    armsGeo.setAttribute('shirtTieDye', shirtTieDyeAttr_arms);
+    this._shirtAccentData = accentData;
+    this._shirtTieDyeData = tieDyeData;
+    this._shirtAccentAttrs = [shirtAccentAttr_body, shirtAccentAttr_arms];
+    this._shirtTieDyeAttrs = [shirtTieDyeAttr_body, shirtTieDyeAttr_arms];
 
     // InstancedMesh frustum culling uses a bounding sphere that's computed once
     // and cached — it does NOT auto-expand when instance matrices move. As
@@ -224,6 +304,19 @@ export class Crowd {
     }
 
     const shirt = NPC_ROW_SHIRT[Math.floor(rng() * NPC_ROW_SHIRT.length)];
+    // Pick a tie-dye accent if this NPC will be tie-dyed. Accent must differ
+    // from the base color so the swirl is actually visible.
+    let tieDye = 0;
+    let accentHex = shirt;
+    if (rng() < TIE_DYE_FRACTION) {
+      tieDye = 0.4 + rng() * 0.6;       // 0.4..1.0 — varies pattern frequency
+      // Pick a distinct second color (loop a few times to avoid a self-match
+      // which would be invisible).
+      for (let tries = 0; tries < 4; tries++) {
+        const pick = NPC_ROW_SHIRT[Math.floor(rng() * NPC_ROW_SHIRT.length)];
+        if (pick !== shirt) { accentHex = pick; break; }
+      }
+    }
 
     const npc = {
       idx,
@@ -268,6 +361,16 @@ export class Crowd {
     this.bodyMesh.instanceColor.needsUpdate = true;
     this.armsMesh.instanceColor.setXYZ(idx, c.r, c.g, c.b);
     this.armsMesh.instanceColor.needsUpdate = true;
+    // Tie-dye accent + amount. Both bodyMesh + armsMesh share the underlying
+    // Float32Array but have separate InstancedBufferAttribute wrappers, so we
+    // must flag needsUpdate on both attribute objects each time.
+    const ac = new THREE.Color(accentHex);
+    this._shirtAccentData[idx * 3 + 0] = ac.r;
+    this._shirtAccentData[idx * 3 + 1] = ac.g;
+    this._shirtAccentData[idx * 3 + 2] = ac.b;
+    this._shirtTieDyeData[idx] = tieDye;
+    for (const a of this._shirtAccentAttrs) a.needsUpdate = true;
+    for (const a of this._shirtTieDyeAttrs) a.needsUpdate = true;
 
     // Initial transform
     this._writeMatrices(npc);
@@ -431,36 +534,45 @@ export class Crowd {
     }
 
     // --- state transitions driven by Zerble proximity ---
-    if (dToZerble < NOTICE_RANGE) {
-      if (npc.skittish > 0.55 && dToZerble < SMILE_RANGE * 0.6) {
-        npc.state = 'fleeing';
-      } else if (npc.curiosity > 0.65 && dToZerble < NOTICE_RANGE && dToZerble > 4) {
-        npc.state = 'approaching';
-      } else {
-        npc.state = 'watching';
-      }
-
-      // Boarding trigger: idle Zerble + curious NPC + open seat + under passenger cap
-      if (
-        ctx.zerbleIdle &&
-        npc.curiosity > 0.45 &&
-        ctx.activePassengersRef.count < MAX_PASSENGERS &&
-        dToZerble < 12 &&
-        Math.random() < PASSENGER_BOARD_CHANCE_PER_SEC * dt
-      ) {
-        const slot = this._claimFreeSeat(zerble);
-        if (slot) {
-          npc.state = 'boarding';
-          npc.seatSlot = slot;
-          npc.stateTimer = 20; // give up trying after 20s if we can't reach
-          ctx.activePassengersRef.add();
-          return;
+    // Honk-scatter and panic-cascade put the NPC into 'fleeing' with a
+    // stateTimer ticking down. While that timer is positive we LOCK the
+    // fleeing state — without this, the proximity reassignment below
+    // would stomp the NPC back to 'watching' / 'approaching' on the very
+    // next frame (since they're still within NOTICE_RANGE of Zerble),
+    // and the honk would have no visible effect.
+    const fleeingLocked = npc.state === 'fleeing' && npc.stateTimer > 0;
+    if (!fleeingLocked) {
+      if (dToZerble < NOTICE_RANGE) {
+        if (npc.skittish > 0.55 && dToZerble < SMILE_RANGE * 0.6) {
+          npc.state = 'fleeing';
+        } else if (npc.curiosity > 0.65 && dToZerble < NOTICE_RANGE && dToZerble > 4) {
+          npc.state = 'approaching';
+        } else {
+          npc.state = 'watching';
         }
+
+        // Boarding trigger: idle Zerble + curious NPC + open seat + under passenger cap
+        if (
+          ctx.zerbleIdle &&
+          npc.curiosity > 0.45 &&
+          ctx.activePassengersRef.count < MAX_PASSENGERS &&
+          dToZerble < 12 &&
+          Math.random() < PASSENGER_BOARD_CHANCE_PER_SEC * dt
+        ) {
+          const slot = this._claimFreeSeat(zerble);
+          if (slot) {
+            npc.state = 'boarding';
+            npc.seatSlot = slot;
+            npc.stateTimer = 20; // give up trying after 20s if we can't reach
+            ctx.activePassengersRef.add();
+            return;
+          }
+        }
+      } else if (npc.state !== 'idle' && npc.state !== 'walking' && npc.state !== 'disembarking') {
+        // Lost interest — go back to ambient behavior
+        npc.state = 'idle';
+        npc.stateTimer = 1 + Math.random() * 3;
       }
-    } else if (npc.state !== 'idle' && npc.state !== 'walking' && npc.state !== 'disembarking') {
-      // Lost interest — go back to ambient behavior
-      npc.state = 'idle';
-      npc.stateTimer = 1 + Math.random() * 3;
     }
 
     // --- choose movement target based on state ---
@@ -1062,14 +1174,21 @@ export class Crowd {
   }
 
   applyHonk(zerble) {
-    // If Zerble is parked, any NPC standing in front of him (forward-side
-    // of the cart) within SCATTER_RANGE flips to 'fleeing' so they hustle
-    // out of his way. The happiness/smile loop still runs for everyone
-    // else (and for the scatter victims it just skips since 'fleeing'
-    // disqualifies them in the check below — they get a chance to smile
-    // again later when they calm down). We treat "parked" as |speed| < 0.5.
-    const SCATTER_RANGE = 9;
-    const SCATTER_RANGE_SQ = SCATTER_RANGE * SCATTER_RANGE;
+    // If Zerble is parked, any NPC near him scatters. We do TWO scatter
+    // passes:
+    //   1. Front cone — anyone in the forward ~270° (dot > -0.3) within
+    //      SCATTER_RANGE flees at full strength (1.5s timer)
+    //   2. Behind — anyone behind Zerble within a SHORTER range still
+    //      hops out of the way briefly (0.8s timer), because a honk is
+    //      LOUD and you'd at least flinch
+    // We treat "parked" as |speed| < 0.5. The stateTimer-based fleeing
+    // lock above keeps the proximity machine from immediately stomping
+    // these states back to 'watching' on the next frame.
+    const SCATTER_RANGE_FRONT = 11;
+    const SCATTER_RANGE_FRONT_SQ = SCATTER_RANGE_FRONT * SCATTER_RANGE_FRONT;
+    const SCATTER_RANGE_BEHIND = 6;
+    const SCATTER_RANGE_BEHIND_SQ = SCATTER_RANGE_BEHIND * SCATTER_RANGE_BEHIND;
+    const FRONT_CONE_DOT = -0.3;   // anyone in front of ~108° forward arc
     const isParked = Math.abs(zerble.speed || 0) < 0.5;
     const fwd = zerble.forwardWorld;
 
@@ -1077,12 +1196,18 @@ export class Crowd {
       const dx = npc.pos.x - zerble.position.x;
       const dz = npc.pos.z - zerble.position.z;
 
-      // Scatter pass — only when parked, only NPCs in front of the cart.
+      // Scatter pass — only when parked.
       if (isParked && fwd && npc.state !== 'riding' && npc.state !== 'boarding') {
         const d2 = dx * dx + dz * dz;
-        if (d2 < SCATTER_RANGE_SQ && (dx * fwd.x + dz * fwd.z) > 0) {
+        const dot = (dx * fwd.x + dz * fwd.z);
+        if (d2 < SCATTER_RANGE_FRONT_SQ && dot > FRONT_CONE_DOT) {
+          // Front-and-sides: full scatter.
           npc.state = 'fleeing';
           npc.stateTimer = 1.5;
+        } else if (d2 < SCATTER_RANGE_BEHIND_SQ) {
+          // Behind: short flinch.
+          npc.state = 'fleeing';
+          npc.stateTimer = 0.8;
         }
       }
 

@@ -48,6 +48,35 @@ import { Trip } from './trip.js';
 import { Analytics } from './analytics.js';
 import * as ContextLights from './contextLights.js';
 import * as AdaptiveQuality from './adaptiveQuality.js';
+import { setSessionSeed, getSessionSeed } from './rng.js';
+
+// ---------- Session seed ----------
+// `?seed=<thing>` pins the world to a specific layout — pass a string
+// ("bananas") and it's FNV-hashed to a 32-bit int; pass a number and it's
+// used as-is. No param → fresh random seed per load. The (0,0) chunk's
+// main stage + entrance arch stay identical across seeds (see chunks.js
+// pickTheme + ChunkManager._generate) so spawn always feels the same;
+// everything else (lake placements, forest contents, neighbouring chunk
+// themes, music + drum seeds, Lurleen's starting position) re-rolls.
+(function initSessionSeed() {
+  const params = new URLSearchParams(window.location.search);
+  const raw = params.get('seed');
+  let resolved;
+  if (raw !== null && raw !== '') {
+    // Try as integer first ("?seed=12345"); fall back to string hash.
+    const asNum = Number(raw);
+    if (Number.isFinite(asNum) && /^-?\d+$/.test(raw)) {
+      resolved = setSessionSeed(asNum);
+    } else {
+      resolved = setSessionSeed(raw);
+    }
+    window.__seedInput = raw;
+  } else {
+    resolved = setSessionSeed((Math.random() * 0xFFFFFFFF) >>> 0);
+    window.__seedInput = null;
+  }
+  window.__seed = resolved;
+})();
 
 const canvas = document.getElementById('game');
 
@@ -415,7 +444,7 @@ function tickBody(dt) {
     // Collect wook world positions for proximity detection
     const _wookPositions = wooks.wooks.map(w => w.position);
     Trip.update(dt, zerble.position, Math.abs(zerble.speed), _wookPositions);
-    lurleen.update(dt, zerble.position);
+    lurleen.update(dt, zerble.position, zerble.heading);
     if (!lurleenMet && lurleen.state === 'aware') {
       lurleenMet = true;
       HUD.toast('You found Lurleen! 💗', 3500);

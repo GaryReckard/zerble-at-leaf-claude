@@ -18,7 +18,7 @@
 
 import * as THREE from 'three';
 import { registry } from './registry.js';
-import { hash2, mulberry32 } from './rng.js';
+import { hash2, worldHash, mulberry32 } from './rng.js';
 import { CHUNK_SIZE, buildCurvedPath } from './chunks.js';
 import { buildForestTree } from './models/tree.js';
 import { buildCampsite } from './models/campsite.js';
@@ -90,8 +90,11 @@ export function getForestAt(cx, cz) {
   // Stay away from the main stage (0,0) and a small buffer around it.
   if (Math.abs(bx) <= ORIGIN_SAFE_BLOCKS && Math.abs(bz) <= ORIGIN_SAFE_BLOCKS) return null;
 
-  // Deterministic seed for this forest's properties
-  const seed = hash2(centerCx * 73 + 13, centerCz * 91 + 37);
+  // Deterministic seed for this forest's properties. worldHash mixes in the
+  // session seed so each play-through has a different forest layout (which
+  // chunks become forests, what's in them). Interior per-site seeds below
+  // chain off `forest.seed`, so this single call propagates the variation.
+  const seed = worldHash(centerCx * 73 + 13, centerCz * 91 + 37);
   const rng = mulberry32(seed);
   if (rng() >= FOREST_PROBABILITY) return null;
 

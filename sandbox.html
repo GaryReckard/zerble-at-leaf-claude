@@ -585,7 +585,10 @@ import { buildSugarShack } from './src/models/sugarShack.js';
         case 'lurleen': {
           const l = new Lurleen(scene);
           // CRITICAL: setSpawnAt updates her wander home too, otherwise she'd
-          // immediately drive toward her hard-coded (240, 260) spawn point.
+          // immediately drive toward her seeded ring spawn. autoRehome=false
+          // keeps the off-camera relocation from teleporting her toward the
+          // fake-far Zerble below (which is past the 300m gate).
+          l.autoRehome = false;
           l.setSpawnAt(0, 0);
           entityRoot = l.root;
           currentEntity = l;
@@ -611,6 +614,7 @@ import { buildSugarShack } from './src/models/sugarShack.js';
           z.root.position.set(-3, 0, 0);
           scene.add(z.root);     // Zerble's constructor doesn't add to scene; do it here.
           const l = new Lurleen(scene);   // Lurleen.constructor adds her root + heart group already.
+          l.autoRehome = false;
           l.setSpawnAt(3, 0);
           entityRoot = z.root;
           currentEntity = { z, l };

@@ -16,7 +16,7 @@
 
 import * as THREE from 'three';
 import { registry } from './registry.js';
-import { hash2, mulberry32 } from './rng.js';
+import { hash2, worldHash, mulberry32 } from './rng.js';
 import { Sound } from './sound.js';
 import { PERF } from './perf.js';
 import { register as registerContextLight } from './contextLights.js';
@@ -316,12 +316,17 @@ export class ChunkManager {
     const group = new THREE.Group();
     group.name = `chunk(${cx},${cz},${theme})`;
 
+    // Origin chunk (the main stage + entrance arch) is intentionally pinned
+    // across sessions — its rng uses pure hash2, ignoring the session seed.
+    // Every other chunk's props re-roll with the seed via worldHash.
+    const isOriginChunk = (cx === 0 && cz === 0);
+    const chunkSeed = isOriginChunk ? hash2(cx, cz) : worldHash(cx, cz);
     const ctx = {
       cx, cz, key,
       theme,
       cxWorld: cx * CHUNK_SIZE,
       czWorld: cz * CHUNK_SIZE,
-      rng: mulberry32(hash2(cx, cz)),
+      rng: mulberry32(chunkSeed),
       group,
       crowd: this.crowd,
     };
@@ -371,7 +376,9 @@ function pickTheme(cx, cz) {
 
   const dist = Math.hypot(cx, cz);
   // Closer to origin: denser/more interesting; far: more groves and lawns.
-  const rng = mulberry32(hash2(cx, cz, 1));
+  // salt=1 keeps the "what theme?" RNG decoupled from the chunk's prop rng
+  // (which is salt=0 via worldHash / mulberry32(worldHash(cx,cz))).
+  const rng = mulberry32(worldHash(cx, cz, 1));
   const r = rng();
 
   // INNER ring (chunks immediately around the main stage): keep this band
@@ -808,7 +815,7 @@ function buildTentStageTheme(ctx) {
   }
 
   // Spatial music — same brass style the tent vibes with.
-  const musicSeed = hash2(ctx.cx * 13 + 23, ctx.cz * 19 + 17);
+  const musicSeed = worldHash(ctx.cx * 13 + 23, ctx.cz * 19 + 17);
   const m3 = worldXZ(0, tent.stagePos.z);
   const handle = Sound.attachStageMusic(m3.x, 4, m3.z, musicSeed, 'jam');
   if (handle) stageMusic.push({ handle, chunkKey: ctx.key });
@@ -973,7 +980,7 @@ function buildDrumCircle(ctx) {
 
   // Polyrhythmic drum music, anchored at the fire pit. Lower pan height than
   // stages so it feels grounded.
-  const drumSeed = hash2(ctx.cx * 13 + 7, ctx.cz * 17 + 11);
+  const drumSeed = worldHash(ctx.cx * 13 + 7, ctx.cz * 17 + 11);
   const handle = Sound.attachStageMusic(x, 1, z, drumSeed, 'drum');
   if (handle) stageMusic.push({ handle, chunkKey: ctx.key });
 }
@@ -1267,7 +1274,11 @@ function buildStage(ctx, x, z, isMain) {
 
   // ----- Spatial music for this stage -----
   // Seed mixes chunk coords + stage flag so main vs side stages get distinct music.
-  const musicSeed = hash2(ctx.cx * 7 + (isMain ? 1 : 2), ctx.cz * 11 + (isMain ? 3 : 5));
+  // Origin main stage stays on pure hash2 so its music + band layout don't
+  // shift with the session seed — matches the chunk's pinned visual layout.
+  const pinOrigin = isMain && ctx.cx === 0 && ctx.cz === 0;
+  const stageHash = pinOrigin ? hash2 : worldHash;
+  const musicSeed = stageHash(ctx.cx * 7 + (isMain ? 1 : 2), ctx.cz * 11 + (isMain ? 3 : 5));
   const handle = Sound.attachStageMusic(x, 4, z, musicSeed, isMain ? 'jam' : 'brass');
   if (handle) stageMusic.push({ handle, chunkKey: ctx.key });
 

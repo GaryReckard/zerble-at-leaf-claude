@@ -14,6 +14,7 @@ import { Sound } from './sound.js';
 import { Analytics } from './analytics.js';
 import { getForestAt } from './forests.js';
 import { PERF } from './perf.js';
+import { getSessionSeed } from './rng.js';
 
 // Per-tier perf budgets. Numbers come from the r/threejs perf thread
 // guidance — these are "stay under or you're hurting low-end devices"
@@ -563,6 +564,15 @@ function updatePanel(dt) {
   const drawsStr = budget ? fmtWithBudget(drawCalls, budget.draws) : String(drawCalls);
   const trisStr  = budget ? fmtWithBudget(triangles, budget.tris)  : (typeof triangles === 'number' ? triangles.toLocaleString() : String(triangles));
 
+  // Session seed — echo the resolved 32-bit int and (if any) the raw URL
+  // string the player passed in. So "?seed=bananas" reads "seed bananas
+  // (0xdeadbeef)" and a fresh load reads just "seed 0x12345678".
+  const seedInt = getSessionSeed();
+  const seedHex = '0x' + seedInt.toString(16).padStart(8, '0');
+  const seedStr = typeof window !== 'undefined' && window.__seedInput
+    ? `${window.__seedInput} (${seedHex})`
+    : seedHex;
+
   state.textEl.textContent =
     `~ debug (P pause · . step · C colliders · G god · F freeze)\n` +
     `fps          ${fps}    ${state.paused ? '[PAUSED]' : ''}\n` +
@@ -570,6 +580,7 @@ function updatePanel(dt) {
     `tris         ${trisStr}\n` +
     `gpu mem      geo ${geoCount}  tex ${texCount}${heap}\n` +
     `running      ${running}\n` +
+    `seed         ${seedStr}\n` +
     `pos          ${z.position.x.toFixed(1)}, ${z.position.z.toFixed(1)}\n` +
     `heading      ${(z.heading * 180 / Math.PI).toFixed(0)}°  speed ${z.speed.toFixed(2)}\n` +
     `chunk        (${cx}, ${cz})\n` +

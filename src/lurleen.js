@@ -12,11 +12,11 @@
 import * as THREE from 'three';
 import { registry } from './registry.js';
 import { createHeartGeometry, sharedHeartGeometry as _heartGeo } from './models/heart.js';
+import { worldHash, mulberry32 } from './rng.js';
 
 // Re-export so older imports (e.g. from sandbox.html or main) keep working.
 export { createHeartGeometry };
 
-const SPAWN_POS = new THREE.Vector3(240, 0, 260);   // ~360m from origin, 3 chunks NE
 const HOME_RADIUS = 55;
 const AWARE_RANGE = 28;
 const FORGET_RANGE = AWARE_RANGE * 3;
@@ -27,6 +27,35 @@ const TURN_RATE = 3.0;
 const HEART_LIFETIME = 2.4;
 const HEART_INTERVAL_AWARE = 0.18;
 const HEART_INTERVAL_FOLLOW = 0.55;
+
+// Seeded initial spawn — 2.5–3.5 chunks (200–280m) from origin on a session-
+// seeded ring. Used by the constructor so each play-through starts her in a
+// fresh direction without changing the (0,0) main-stage layout.
+const SPAWN_RING_MIN = 200;
+const SPAWN_RING_MAX = 280;
+
+function pickInitialSpawn() {
+  const rng = mulberry32(worldHash(0xC4F18EE7, 0x5A7B19D3));
+  const angle = rng() * Math.PI * 2;
+  const radius = SPAWN_RING_MIN + rng() * (SPAWN_RING_MAX - SPAWN_RING_MIN);
+  return new THREE.Vector3(
+    Math.cos(angle) * radius,
+    0,
+    Math.sin(angle) * radius,
+  );
+}
+
+// Opportunistic re-home — if the player drives far without ever entering
+// AWARE_RANGE, Lurleen quietly relocates near them so she stays findable.
+// Triggered off-camera only (player must be >REHOME_DISTANCE_MIN away, well
+// past render distance) so she never appears to "pop in."
+const REHOME_INTERVAL = 25;        // seconds between rolls
+const REHOME_DISTANCE_MIN = 300;   // gate — only relocate when she's offscreen-far
+const REHOME_CHANCE = 0.5;         // 50% per roll, so avg ~50s to relocate
+const REHOME_DROP_MIN = 150;       // place her at least this far from player
+const REHOME_DROP_MAX = 220;       // …and at most this far
+const FORWARD_CONE_CHANCE = 0.7;   // 70% of relocations bias toward player heading
+const FORWARD_CONE_HALF_ANGLE = Math.PI / 4;  // ±45° = 90° forward cone
 
 // Lay out N evenly-spaced positions along a [0..1] parameter, mapping each
 // through `fn` to a value. Helper used to plot a flower crown on the roof.
@@ -42,19 +71,29 @@ export class Lurleen {
     this.root = new THREE.Group();
     this.root.name = 'Lurleen';
 
-    this.position = SPAWN_POS.clone();
+    const spawn = pickInitialSpawn();
+    this.position = spawn.clone();
     this.heading = Math.PI;          // facing -z initially
     this.speed = 0;
     this.steerAngle = 0;
     this.radius = 1.9;
 
     this.state = 'wandering';
-    this.wanderTarget = SPAWN_POS.clone();
+    this.wanderTarget = spawn.clone();
     this.wanderTimer = 0;
     this.heartTimer = 0;
     this.awareTimer = 0;
-    this.homePos = SPAWN_POS.clone();
+    this.homePos = spawn.clone();
     this.eyes = [];
+
+    // Re-home tracking — latches true the first time the player enters
+    // AWARE_RANGE. Until that happens, the off-camera relocation rolls every
+    // REHOME_INTERVAL seconds so a player who drove past Lurleen's initial
+    // ring can still discover her. Sandbox sets autoRehome=false so she
+    // doesn't teleport away from her pinned inspection spot.
+    this._everMet = false;
+    this._rehomeTimer = REHOME_INTERVAL;
+    this.autoRehome = true;
 
     this._buildBody();
     this._buildWindshield();
@@ -85,8 +124,8 @@ export class Lurleen {
   }
 
   // Move Lurleen + her wander home to a new origin. Used by sandbox.html so
-  // she doesn't immediately race off toward her hard-coded SPAWN_POS once
-  // moved to (0,0,0) for inspection.
+  // she doesn't immediately race off toward her seeded spawn, and by the
+  // off-camera re-home logic in update().
   setSpawnAt(x, z) {
     this.position.set(x, 0, z);
     this.homePos.set(x, 0, z);
@@ -94,6 +133,29 @@ export class Lurleen {
     this.wanderTimer = 9 + Math.random() * 8;   // pause before picking next target
     this.speed = 0;
     this.root.position.copy(this.position);
+  }
+
+  // Pick a fresh spot 150–220m from the player (mostly in their forward
+  // cone, sometimes anywhere) and teleport there. Called only when the
+  // player is far enough away to never see the move happen.
+  _relocateNearPlayer(zerblePos, zerbleHeading) {
+    const dist = REHOME_DROP_MIN + Math.random() * (REHOME_DROP_MAX - REHOME_DROP_MIN);
+    // Zerble's "forward" world-vector is (x=-sin h, z=-cos h). Convert to a
+    // standard atan2 world angle (measured from +x toward +z) so we can add
+    // an offset within ±cone and recover xz with cos/sin below.
+    const forwardWorldAngle = Math.atan2(-Math.cos(zerbleHeading), -Math.sin(zerbleHeading));
+    let angle;
+    if (Math.random() < FORWARD_CONE_CHANCE) {
+      angle = forwardWorldAngle + (Math.random() * 2 - 1) * FORWARD_CONE_HALF_ANGLE;
+    } else {
+      angle = Math.random() * Math.PI * 2;
+    }
+    const nx = zerblePos.x + Math.cos(angle) * dist;
+    const nz = zerblePos.z + Math.sin(angle) * dist;
+    this.setSpawnAt(nx, nz);
+    // Face roughly back toward the player so she's not arbitrarily oriented.
+    this.heading = Math.atan2(zerblePos.x - nx, zerblePos.z - nz) + Math.PI;
+    this.root.rotation.y = this.heading;
   }
 
   // ---------- Body ----------
@@ -611,10 +673,24 @@ export class Lurleen {
 
   // ---------- Update ----------
 
-  update(dt, zerblePos) {
+  update(dt, zerblePos, zerbleHeading = 0) {
     const dx = zerblePos.x - this.position.x;
     const dz = zerblePos.z - this.position.z;
     const dToZerble = Math.hypot(dx, dz);
+
+    // Off-camera re-home: only roll while the player has never met her AND
+    // she's well past render distance. The 300m gate means she's deep in fog
+    // / occluded by chunk fall-off, so a `setSpawnAt` here is invisible.
+    if (this.autoRehome && !this._everMet) {
+      this._rehomeTimer -= dt;
+      if (this._rehomeTimer <= 0) {
+        this._rehomeTimer = REHOME_INTERVAL;
+        if (dToZerble > REHOME_DISTANCE_MIN && Math.random() < REHOME_CHANCE) {
+          this._relocateNearPlayer(zerblePos, zerbleHeading);
+          return;       // skip this frame's state machine — she just teleported
+        }
+      }
+    }
 
     // State machine
     if (this.state === 'wandering') {
@@ -622,6 +698,7 @@ export class Lurleen {
         this.state = 'aware';
         this.awareTimer = 1.4;
         this.heartTimer = 0;
+        this._everMet = true;
         // Burst of hearts immediately when first spotted
         this._burstHearts(7);
       }

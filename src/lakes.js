@@ -19,7 +19,7 @@
 import * as THREE from 'three';
 import { Vector3 } from 'three';
 import { registry } from './registry.js';
-import { hash2, mulberry32 } from './rng.js';
+import { hash2, worldHash, mulberry32 } from './rng.js';
 import { buildCanoe } from './models/canoe.js';
 import { buildCampsite } from './models/campsite.js';
 import { buildForestTree } from './models/tree.js';
@@ -98,7 +98,7 @@ export class LakeManager {
           this.lakes.set(key, null);
           continue;
         }
-        const seed = hash2(mcx * 17 + 91, mcz * 13 + 31);
+        const seed = worldHash(mcx * 17 + 91, mcz * 13 + 31);
         const rng = mulberry32(seed);
         if (rng() > LAKE_DENSITY) {
           this.lakes.set(key, null);
@@ -453,7 +453,7 @@ export function buildLake(scene, mcx, mcz, rng, opts = {}) {
       if (theta == null) continue;
       usedAngles.push(theta);
 
-      const campSeed = hash2(mcx * 211 + 17 + i, mcz * 313 + i * 59);
+      const campSeed = worldHash(mcx * 211 + 17 + i, mcz * 313 + i * 59);
       const size = rng() < 0.4 ? 'small' : 'medium';
       const camp = buildCampsite(mulberry32(campSeed), size);
 

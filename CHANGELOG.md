@@ -4,6 +4,9 @@ All notable changes to Zerble at the Festival. Newest at top. Following [Keep a 
 
 ## 2026-05-28
 
+### Added
+- **Tent stage gets the same audience treatment as open stages.** `buildTentStageTheme` was registering stage colliders, tent poles, and an in-tent crowd via `tent.crowdSpots`, but the area OUTSIDE the canvas was empty — no outdoor audience, no chair clumps. Tent stages felt abandoned. Now mirrors `buildStage`: 14 outdoor-audience NPCs fanning out from the tent's front edge in three rows, plus 3-4 chair clumps of 3-6 chairs each in the audience band beyond the dancefloor (`dancefloorDepth = 7` past the tent's front edge). All positions computed in tent-local coords and pushed through the existing `worldXZ` helper so they honor the tent's random `yaw`. Chairs face `yaw + π` (toward the stage) with the standard small jitter. Hula-hoopers attach automatically because the `stage_front` attractor was already registered; the new audience NPCs near it will trigger the dancefloor-dance code in `crowd.js`.
+
 ### Changed
 - **GA tag gated to non-local hosts.** Both `index.html` and `sandbox.html` previously fired `gtag.js` + `gtag('config')` on every page load — including localhost dev. Wrapped the gtag bootstrap in the same `isLocal` check used by the importmap cache-buster (localhost / 127.0.0.1 / 0.0.0.0 / `*.local` / RFC1918 LAN / `claude-preview` / `happycog`). On those hosts the script tag isn't injected, `window.gtag` is never defined, and `Analytics.send()` already no-ops when gtag is missing. Production is unaffected.
 

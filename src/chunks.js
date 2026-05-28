@@ -727,6 +727,69 @@ function buildTentStageTheme(ctx) {
     });
   }
 
+  // ----- Outdoor audience in front of the tent (mirrors buildStage) -----
+  // The tent already populates `crowdSpots` inside, but the area outside the
+  // canvas was empty — no audience, no chair clumps. That left tent stages
+  // feeling abandoned compared to open stages. Match the open-stage logic:
+  // a guaranteed outdoor audience fanning out in front, and a chair-band
+  // beyond the dancefloor.
+  //
+  // All positions are in tent-local (+Z = forward) and rotated through
+  // `worldXZ` so the layout follows the tent's random yaw.
+  const tentHalfD = tent.depth / 2;
+  // Spawn outdoor audience just past the tent's front canvas edge.
+  if (ctx.crowd) {
+    const audienceCount = 14;
+    const arcWidth = tent.width * 1.1;
+    for (let i = 0; i < audienceCount; i++) {
+      // Three rows fanning out from the tent's front.
+      const row = i < audienceCount * 0.4 ? 0 : (i < audienceCount * 0.75 ? 1 : 2);
+      const rowDist = 2 + row * 3.0;
+      const u = (Math.random() - 0.5) * arcWidth;
+      const v = Math.random() * 2.5;
+      const w3 = worldXZ(u, tentHalfD + rowDist + v);
+      ctx.crowd.spawn({
+        pos: new THREE.Vector3(w3.x, 0, w3.z),
+        chunkKey: ctx.key,
+        rng: ctx.rng,
+      });
+    }
+  }
+
+  // Chair clumps in the audience zone — same band/spacing scheme as
+  // buildStage but in tent-local coords. Dancefloor stays chair-free
+  // (band starts `dancefloorDepth` past the tent's front edge).
+  const dancefloorDepth = 7;
+  const chairBandStart = tentHalfD + dancefloorDepth;
+  const chairBandEnd = tentHalfD + dancefloorDepth + 13;
+  const lateralSpread = tent.width * 1.2;
+  const clumpCount = 3 + Math.floor(ctx.rng() * 2);
+  for (let ci = 0; ci < clumpCount; ci++) {
+    const clumpLocalX = (ctx.rng() - 0.5) * lateralSpread;
+    const clumpLocalZ = chairBandStart + ctx.rng() * (chairBandEnd - chairBandStart);
+    const chairsInClump = 3 + Math.floor(ctx.rng() * 4);
+    for (let chi = 0; chi < chairsInClump; chi++) {
+      const offX = (ctx.rng() - 0.5) * 2.8;
+      const offZ = (ctx.rng() - 0.5) * 2.0;
+      const chair = buildCampChair(ctx.rng);
+      const lx = clumpLocalX + offX;
+      const lz = clumpLocalZ + offZ;
+      const w3 = worldXZ(lx, lz);
+      chair.group.position.set(w3.x, 0, w3.z);
+      // Face the tent: chair default faces +Z in chair-local; we want it
+      // facing -Z in tent-local (toward the stage). After yaw rotation
+      // that's `yaw + π` plus a small jitter.
+      chair.group.rotation.y = yaw + Math.PI + (ctx.rng() - 0.5) * 0.7;
+      ctx.group.add(chair.group);
+      registry.add({
+        kind: 'chair',
+        position: new THREE.Vector3(w3.x, 0, w3.z),
+        footprint: 0.5,
+        chunkKey: ctx.key,
+      });
+    }
+  }
+
   // Spatial music — same brass style the tent vibes with.
   const musicSeed = hash2(ctx.cx * 13 + 23, ctx.cz * 19 + 17);
   const m3 = worldXZ(0, tent.stagePos.z);

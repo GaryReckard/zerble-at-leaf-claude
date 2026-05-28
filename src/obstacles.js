@@ -875,14 +875,17 @@ export class HulaHoopers {
       if (!h.visible) continue;
       const u = h.userData;
       // Hip gyration — figure-8-ish lean of the body at the hooper's
-      // personal pace. gyrSpeed is now ~3× the original (1.35-2.55 vs
-      // 0.45-0.75) so the dance reads as active, not meditative.
+      // personal pace. gyrSpeed is in rad/s (phase rate); a real hula
+      // hooper's hip revolution is ~1 Hz, so we target the 5-9 rad/s
+      // band (0.8-1.4 full body sways per second). Amplitudes widened
+      // too (0.22 / 0.14 rad, 5cm bob) so the motion reads at a glance
+      // even from far away.
       u.phase += dt * u.gyrSpeed;
-      const swayX = Math.sin(u.phase) * 0.16;
-      const swayZ = Math.cos(u.phase * 0.7) * 0.10;
+      const swayX = Math.sin(u.phase) * 0.22;
+      const swayZ = Math.cos(u.phase * 0.7) * 0.14;
       u.bodyGroup.rotation.z = swayX;
       u.bodyGroup.rotation.x = swayZ;
-      u.bodyGroup.position.y = Math.sin(u.phase * 2) * 0.03;
+      u.bodyGroup.position.y = Math.sin(u.phase * 2) * 0.05;
       // Hoop spin — uses a per-hooper hoopSpinMult so the hoop rotates
       // somewhat independently of the hip speed (some folks whip the
       // hoop faster than their hips, some slower).
@@ -990,13 +993,13 @@ export class HulaHoopers {
         h.visible = true;
         h.userData.attractorId = e.id;
         h.userData.phase = Math.random() * TAU;
-        // Hip gyration speed — ~3× the previous range (1.35-2.55 vs
-        // 0.45-0.75). Reads as an active hoop dance with clear per-hooper
-        // tempo variation (some folks are gentle, some are GOING).
-        h.userData.gyrSpeed = 1.35 + Math.random() * 1.20;
-        // Hoop spin multiplier — applied on top of phase. Range 1.2-2.3
-        // means the hoop turns at 1.2× to 2.3× the hip phase rate.
-        // Independent random pick so hoop and hips don't perfectly correlate.
+        // Hip gyration speed in rad/s. 5-9 maps to 0.8-1.4 Hz full
+        // body sways — a real hula hooper's tempo. Wide range so the
+        // gaggle reads as individuals (some chill, some going hard).
+        h.userData.gyrSpeed = 5 + Math.random() * 4;
+        // Hoop spin multiplier — applied on top of phase. Independent
+        // random pick (1.2-2.3) so the hoop and hips aren't perfectly
+        // correlated — some hoopers whip the hoop fast over slow hips.
         h.userData.hoopSpinMult = 1.2 + Math.random() * 1.1;
         // Drift state: anchor + an offset target inside a ~1m bubble around it
         h.userData.anchorX = x;

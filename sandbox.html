@@ -109,6 +109,10 @@
         <option value="brass_band">Brass band formation</option>
         <option value="kid">Kid</option>
         <option value="wook">Wook</option>
+        <option value="hula_hooper">Hula-hooper</option>
+        <option value="hula_hooper_night">Hula-hooper (night — hoop glows)</option>
+        <option value="frisbee_player">Frisbee player</option>
+        <option value="frisbee_pair">Frisbee pair (tossing disc)</option>
         <option value="performer_lead_vocal">Performer — lead vocal</option>
         <option value="performer_guitar">Performer — guitar</option>
         <option value="performer_bass">Performer — bass</option>
@@ -222,6 +226,8 @@ import { buildSugarShack } from './src/models/sugarShack.js';
     import { buildParasolMarshal } from './src/models/parasolMarshal.js';
     import { buildKid } from './src/models/kid.js';
     import { buildWook } from './src/models/wook.js';
+    import { buildHulaHooper } from './src/models/hulaHooper.js';
+    import { buildFrisbeePlayer, buildFrisbeeDisc } from './src/models/frisbeePlayer.js';
     import { buildPerformer } from './src/models/performer.js';
     import {
       buildCampTent, buildCampChair, buildChiminea, buildTikiTorch,
@@ -845,6 +851,170 @@ import { buildSugarShack } from './src/models/sugarShack.js';
           };
           cam.target.set(0, 1.5, 0);
           cam.dist = 5;
+          applyCam();
+          break;
+        }
+        case 'hula_hooper':
+        case 'hula_hooper_night': {
+          const g = buildHulaHooper(Math.random);
+          scene.add(g);
+          entityRoot = g;
+          // Pin night for the glow demo so the emissive hoop reads dark even
+          // if the sandbox time-of-day is mid-day.
+          const isNight = name === 'hula_hooper_night';
+          if (isNight) {
+            tod._nightness = 1;
+            tod.t = 0.5;
+          }
+          // Mirror the gyration math from obstacles.js — see comments
+          // there for amplitude / rate reasoning. Picks a single rate
+          // around the middle of the in-game band (5-9 rad/s) so the
+          // sandbox demo reads as a representative hooper, neither
+          // sluggish nor frantic.
+          const startMs = performance.now();
+          const gyrSpeed = 7;
+          const hoopSpinMult = 1.7;
+          updateFn = (dt) => {
+            const phase = ((performance.now() - startMs) * 0.001) * gyrSpeed;
+            g.userData.bodyGroup.rotation.z = Math.sin(phase) * 0.22;
+            g.userData.bodyGroup.rotation.x = Math.cos(phase * 0.7) * 0.14;
+            g.userData.bodyGroup.position.y = Math.sin(phase * 2) * 0.05;
+            g.userData.hoopPivot.rotation.y = phase * hoopSpinMult;
+            g.userData.hoopPivot.rotation.x = Math.sin(phase) * 0.10;
+            g.userData.hoopPivot.rotation.z = Math.cos(phase * 1.1) * 0.08;
+            const n = isNight ? 1 : tod.nightness;
+            g.userData.hoopMat.emissiveIntensity = 0.05 + n * 3.0;
+          };
+          cam.target.set(0, 1.2, 0);
+          cam.dist = 5.5;
+          applyCam();
+          break;
+        }
+        case 'frisbee_player': {
+          const g = buildFrisbeePlayer(Math.random);
+          scene.add(g);
+          entityRoot = g;
+          // Idle bob
+          const startMs = performance.now();
+          updateFn = () => {
+            const t = (performance.now() - startMs) * 0.004;
+            g.userData.bodyGroup.position.y = Math.abs(Math.sin(t)) * 0.04;
+          };
+          cam.target.set(0, 1.0, 0);
+          cam.dist = 4.5;
+          applyCam();
+          break;
+        }
+        case 'frisbee_pair': {
+          // Two players ~12m apart playing catch; disc lobs back and forth
+          // with a small random aim jitter so the catcher has to chase.
+          const playerA = buildFrisbeePlayer(Math.random);
+          const playerB = buildFrisbeePlayer(Math.random);
+          const disc = buildFrisbeeDisc(Math.random);
+          playerA.position.set(-6, 0, 0);
+          playerB.position.set(6, 0, 0);
+          disc.position.set(-6, 1.45, 0);
+          scene.add(playerA); scene.add(playerB); scene.add(disc);
+          entityRoot = playerA;
+
+          const state = {
+            holder: playerA,
+            catcher: playerB,
+            phase: 'held',       // 'held' | 'flying' | 'landed'
+            pauseTimer: 1.2,
+            vel: new THREE.Vector3(),
+          };
+          const GRAVITY = 9.8 * 0.6;
+          const TOSS_SPEED = 9.5;
+          const AIM_JITTER = 0.20;
+          const PLAYER_SPEED = 2.6;
+          const CATCH_RADIUS = 0.7;
+
+          const lookAt = (player, tx, tz) => {
+            player.rotation.y = Math.atan2(tx - player.position.x, tz - player.position.z) + Math.PI;
+          };
+          const toss = () => {
+            const dx = state.catcher.position.x - state.holder.position.x;
+            const dz = state.catcher.position.z - state.holder.position.z;
+            const baseAng = Math.atan2(dx, dz);
+            const ang = baseAng + (Math.random() - 0.5) * 2 * AIM_JITTER;
+            const planar = TOSS_SPEED * (0.85 + Math.random() * 0.35);
+            state.vel.set(Math.sin(ang) * planar, 4.5 + Math.random() * 1.6, Math.cos(ang) * planar);
+            disc.position.set(state.holder.position.x, 1.45, state.holder.position.z);
+            state.phase = 'flying';
+          };
+
+          updateFn = (dt) => {
+            if (state.phase === 'held') {
+              disc.position.set(state.holder.position.x, 1.45, state.holder.position.z);
+              disc.rotation.y += dt * 4;
+              lookAt(state.holder, state.catcher.position.x, state.catcher.position.z);
+              lookAt(state.catcher, state.holder.position.x, state.holder.position.z);
+              state.pauseTimer -= dt;
+              if (state.pauseTimer <= 0) toss();
+            } else if (state.phase === 'flying') {
+              disc.position.x += state.vel.x * dt;
+              disc.position.y += state.vel.y * dt;
+              disc.position.z += state.vel.z * dt;
+              state.vel.y -= GRAVITY * dt;
+              disc.rotation.y += dt * 14;
+              // Predict landing point + chase
+              const g_ = GRAVITY, catchY = 0.4, vy = state.vel.y, y0 = disc.position.y;
+              const A = -0.5 * g_, B = vy, C = y0 - catchY;
+              const D = B * B - 4 * A * C;
+              let tHit = 0;
+              if (D >= 0) {
+                const r1 = (-B - Math.sqrt(D)) / (2 * A);
+                const r2 = (-B + Math.sqrt(D)) / (2 * A);
+                const cands = [];
+                if (r1 > 0 && isFinite(r1)) cands.push(r1);
+                if (r2 > 0 && isFinite(r2)) cands.push(r2);
+                if (cands.length) tHit = Math.min(...cands);
+              }
+              const tx = disc.position.x + state.vel.x * tHit;
+              const tz = disc.position.z + state.vel.z * tHit;
+              const dx = tx - state.catcher.position.x;
+              const dz = tz - state.catcher.position.z;
+              const d = Math.hypot(dx, dz);
+              if (d > 0.05) {
+                const inv = 1 / d;
+                const step = Math.min(d, PLAYER_SPEED * dt);
+                state.catcher.position.x += dx * inv * step;
+                state.catcher.position.z += dz * inv * step;
+              }
+              lookAt(state.catcher, disc.position.x, disc.position.z);
+              lookAt(state.holder, disc.position.x, disc.position.z);
+              const dxD = disc.position.x - state.catcher.position.x;
+              const dzD = disc.position.z - state.catcher.position.z;
+              if (disc.position.y < 1.7 && disc.position.y > 0.6 && Math.hypot(dxD, dzD) < CATCH_RADIUS) {
+                // Caught — swap and pause
+                [state.holder, state.catcher] = [state.catcher, state.holder];
+                state.phase = 'held';
+                state.pauseTimer = 0.7 + Math.random() * 1.0;
+              } else if (disc.position.y <= 0.05) {
+                disc.position.y = 0.05;
+                state.phase = 'landed';
+              }
+            } else if (state.phase === 'landed') {
+              const dx = disc.position.x - state.catcher.position.x;
+              const dz = disc.position.z - state.catcher.position.z;
+              const d = Math.hypot(dx, dz);
+              if (d < 0.7) {
+                [state.holder, state.catcher] = [state.catcher, state.holder];
+                state.phase = 'held';
+                state.pauseTimer = 0.8 + Math.random() * 1.2;
+              } else {
+                const inv = 1 / d;
+                const step = Math.min(d, PLAYER_SPEED * dt);
+                state.catcher.position.x += dx * inv * step;
+                state.catcher.position.z += dz * inv * step;
+              }
+              lookAt(state.catcher, disc.position.x, disc.position.z);
+              lookAt(state.holder, state.catcher.position.x, state.catcher.position.z);
+            }
+          };
+          cam.target.set(0, 1.0, 0);
+          cam.dist = 18;
           applyCam();
           break;
         }

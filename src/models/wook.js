@@ -10,45 +10,85 @@ export function buildWook(rng = Math.random) {
   const wookGroup = new THREE.Group();
 
   const colors = [0xff6f9c, 0xffd28a, 0x6fcf6a, 0x66d9ff, 0xb285ff];
+  // Pick a base body color + three accent colors from the palette for the
+  // tie-dye splotches. Accents are guaranteed different from base.
+  const baseIdx = Math.floor(rng() * colors.length);
+  const baseColor = colors[baseIdx];
+  const accents = [
+    colors[(baseIdx + 1) % colors.length],
+    colors[(baseIdx + 2) % colors.length],
+    colors[(baseIdx + 3) % colors.length],
+  ];
+  const tieDyePhase = rng() * Math.PI * 2;
+
+  // Splotches used to be 7 thin CircleGeometry discs floating just outside
+  // the body surface — looked OK only when viewed straight on at a disc
+  // center, but from any other angle the disc plane intersected the body's
+  // curved surface and the disc edges visibly jutted at the silhouette.
+  // Same root cause as the earlier BoxGeometry version, just rounded.
+  //
+  // Real fix: paint splotches DIRECTLY ONTO the body material via an
+  // `onBeforeCompile` shader patch — no extra geometry, no protruding
+  // edges, the pattern is part of the surface and conforms to its
+  // curvature perfectly. Same trick the crowd's tie-dye shirts use.
+  const bodyMat = new THREE.MeshStandardMaterial({
+    color: baseColor,
+    roughness: 0.95,
+    flatShading: true,
+  });
+  bodyMat.onBeforeCompile = (shader) => {
+    shader.uniforms.uAccent1 = { value: new THREE.Color(accents[0]) };
+    shader.uniforms.uAccent2 = { value: new THREE.Color(accents[1]) };
+    shader.uniforms.uAccent3 = { value: new THREE.Color(accents[2]) };
+    shader.uniforms.uPhase   = { value: tieDyePhase };
+    shader.vertexShader = `
+      varying vec3 vWookLocalPos;
+    ` + shader.vertexShader.replace(
+      '#include <begin_vertex>',
+      `#include <begin_vertex>
+       vWookLocalPos = position;`,
+    );
+    shader.fragmentShader = `
+      varying vec3 vWookLocalPos;
+      uniform vec3 uAccent1;
+      uniform vec3 uAccent2;
+      uniform vec3 uAccent3;
+      uniform float uPhase;
+    ` + shader.fragmentShader.replace(
+      '#include <color_fragment>',
+      `#include <color_fragment>
+       // Three sum-of-sin noise fields at slightly different frequencies
+       // and phases. Thresholded with smoothstep to make distinct color
+       // splotches instead of a smooth swirl.
+       float fq = 5.5;
+       float n1 = sin(vWookLocalPos.y * fq + uPhase)
+               + sin((vWookLocalPos.x + vWookLocalPos.z) * fq * 0.85 - uPhase * 1.4);
+       float n2 = sin(vWookLocalPos.y * fq * 0.7 - uPhase * 0.8)
+               + sin((vWookLocalPos.x - vWookLocalPos.z) * fq * 1.2 + uPhase * 1.7);
+       float n3 = sin(vWookLocalPos.x * fq * 1.1 + uPhase * 0.5)
+               + sin(vWookLocalPos.z * fq * 0.95 - uPhase * 1.3);
+       float b1 = smoothstep(0.35, 1.15, n1);
+       float b2 = smoothstep(0.35, 1.15, n2);
+       float b3 = smoothstep(0.35, 1.15, n3);
+       vec3 col = diffuseColor.rgb;
+       col = mix(col, uAccent1, b1 * 0.65);
+       col = mix(col, uAccent2, b2 * 0.65);
+       col = mix(col, uAccent3, b3 * 0.65);
+       diffuseColor.rgb = col;`,
+    );
+  };
+  // Shared cache key so the shader compiles once across all wooks even
+  // though each wook has its own material instance (uniforms vary, program
+  // stays cached).
+  bodyMat.customProgramCacheKey = () => 'wook-tiedye-v1';
+
   const body = new THREE.Mesh(
     new THREE.CapsuleGeometry(0.45, 1.4, 4, 8),
-    new THREE.MeshStandardMaterial({
-      color: colors[Math.floor(rng() * colors.length)],
-      roughness: 0.95,
-      flatShading: true,
-    })
+    bodyMat,
   );
   body.position.y = 1.1;
   body.castShadow = true;
   wookGroup.add(body);
-
-  // Tie-dye splotches — thin elliptical discs hugging the body surface.
-  // Was BoxGeometry(0.4, 0.4, 0.02): the square silhouette + 2cm depth read
-  // as cube-faces jutting out of the torso, not as splotches on fabric.
-  // CircleGeometry has zero depth, and a non-uniform x-scale turns each disc
-  // into an ellipse so they don't read as perfect cookies stamped on the
-  // body. Position is just outside body radius (0.45) so the disc rests on
-  // the surface; `lookAt` points its +Z normal outward radially.
-  const SPLOTCH_COUNT = 7;
-  for (let i = 0; i < SPLOTCH_COUNT; i++) {
-    const r = 0.18 + rng() * 0.10;          // 0.18-0.28m disc radius
-    const splotch = new THREE.Mesh(
-      new THREE.CircleGeometry(r, 12),
-      new THREE.MeshStandardMaterial({
-        color: colors[Math.floor(rng() * colors.length)],
-        roughness: 0.95,
-        side: THREE.DoubleSide,             // visible from either side at glancing angles
-      })
-    );
-    const a = rng() * TAU;
-    // 0.451 = just barely outside body radius 0.45 so the disc sits flush.
-    splotch.position.set(Math.cos(a) * 0.451, 0.45 + rng() * 1.45, Math.sin(a) * 0.451);
-    splotch.lookAt(splotch.position.clone().multiplyScalar(2));
-    // Squash to an ellipse — more organic than a perfect circle.
-    splotch.scale.x = 0.7 + rng() * 0.6;
-    splotch.scale.y = 0.7 + rng() * 0.6;
-    wookGroup.add(splotch);
-  }
 
   // Arms — relaxed/swaying with palms turned slightly outward
   const skinMat = new THREE.MeshStandardMaterial({
@@ -58,11 +98,12 @@ export function buildWook(rng = Math.random) {
     const armGroup = new THREE.Group();
     armGroup.position.set(sx * 0.40, 1.55, 0);
     armGroup.rotation.z = sx * 0.10;
+    // Upper sleeve shares the patched body material so the tie-dye pattern
+    // flows continuously from torso onto sleeve (rather than the sleeve
+    // being a plain solid color while the torso has splotches).
     const upper = new THREE.Mesh(
       new THREE.CapsuleGeometry(0.10, 0.36, 4, 6),
-      new THREE.MeshStandardMaterial({
-        color: body.material.color, roughness: 0.95, flatShading: true,
-      }),
+      bodyMat,
     );
     upper.position.y = -0.22;
     armGroup.add(upper);

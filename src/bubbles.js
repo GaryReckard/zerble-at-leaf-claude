@@ -14,6 +14,9 @@ const BUOYANCY = 1.0;
 const LIFETIME = 22;     // ~2.75x the original 8s — bubbles linger long enough to feel like a trail
 const POP_SCALE_TIME = 0.25;
 
+// Reused across every _writeInstance call — avoids a Vector3 allocation per live bubble per frame.
+const _AXIS_Y = new THREE.Vector3(0, 1, 0);
+
 // Slowly varying global wind so all bubbles drift coherently most of the time.
 // Amplitudes are tuned so bubbles travel several meters from spawn before popping.
 let _windT = 0;
@@ -27,7 +30,10 @@ function sampleWind(t) {
 export class Bubbles {
   constructor() {
     const geo = new THREE.IcosahedronGeometry(0.11, 1); // about half the previous size
-    const mat = new THREE.MeshPhysicalMaterial({
+
+    // Fancy material — full physical (transmission, iridescence, sheen).
+    // Built once here so adaptive downgrades never trigger a shader compile.
+    this._fancyMat = new THREE.MeshPhysicalMaterial({
       color: 0xffffff,
       roughness: 0.05,
       metalness: 0,
@@ -47,9 +53,19 @@ export class Bubbles {
       emissive: 0x000000,
       emissiveIntensity: 0,
     });
-    this._material = mat;
 
-    this.mesh = new THREE.InstancedMesh(geo, mat, MAX_BUBBLES);
+    // Cheap material — plain Standard (no transmission/iridescence). Pre-built
+    // here so setCheapMaterial() just swaps a reference with zero allocation.
+    this._cheapMat = new THREE.MeshStandardMaterial({
+      color: 0xd0eeff,
+      roughness: 0.1,
+      metalness: 0.25,
+      transparent: true,
+      opacity: 0.55,
+      side: THREE.DoubleSide,
+    });
+
+    this.mesh = new THREE.InstancedMesh(geo, this._fancyMat, MAX_BUBBLES);
     this.mesh.castShadow = false;
     this.mesh.frustumCulled = false;
     this.mesh.count = MAX_BUBBLES;
@@ -103,16 +119,24 @@ export class Bubbles {
     this.blastMode = !!on;
   }
 
+  // Called by main.js via the AdaptiveQuality onLevelChange hook.
+  // Swaps between the pre-built fancy (MeshPhysical) and cheap (MeshStandard)
+  // materials with zero allocation — no shader compile mid-frame.
+  setCheapMaterial(on) {
+    this.mesh.material = on ? this._cheapMat : this._fancyMat;
+  }
+
   // dt: frame delta. zerble: cart for spawn pose. nightness: 0..1 from the
   // time-of-day system — bubbles emit more light at night so they pick up
   // the festival glow instead of going invisible.
   update(dt, zerble, nightness = 0) {
-    if (this._material) {
-      // At night ramp up iridescence/sheen for glint instead of white-emissive blobs.
-      this._material.iridescence = THREE.MathUtils.lerp(0.2, 0.85, nightness);
-      this._material.iridescenceIOR = THREE.MathUtils.lerp(1.3, 1.7, nightness);
-      this._material.sheen = THREE.MathUtils.lerp(0.0, 0.6, nightness);
-      this._material.sheenColor.setHex(0xffffff);
+    // Nightness ramp only applies to the fancy material — cheap Standard doesn't
+    // have iridescence/sheen properties and they'd be silently ignored anyway.
+    if (this.mesh.material === this._fancyMat) {
+      this._fancyMat.iridescence    = THREE.MathUtils.lerp(0.2, 0.85, nightness);
+      this._fancyMat.iridescenceIOR = THREE.MathUtils.lerp(1.3, 1.7, nightness);
+      this._fancyMat.sheen          = THREE.MathUtils.lerp(0.0, 0.6, nightness);
+      this._fancyMat.sheenColor.setHex(0xffffff);
     }
     _windT += dt;
     // Spawn rate scales with cart speed — at rest, slow ambient drip; moving, full stream.
@@ -270,7 +294,7 @@ export class Bubbles {
 
   _writeInstance(i, pos, scale, spin) {
     this._tmpPos.copy(pos);
-    this._tmpQuat.setFromAxisAngle(new THREE.Vector3(0, 1, 0), spin);
+    this._tmpQuat.setFromAxisAngle(_AXIS_Y, spin);
     this._tmpScale.setScalar(scale);
     this._tmpMat.compose(this._tmpPos, this._tmpQuat, this._tmpScale);
     this.mesh.setMatrixAt(i, this._tmpMat);

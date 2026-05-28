@@ -44,6 +44,16 @@ const state = {
   // List of meshes whose castShadow we turned off when we dropped to the
   // no-shadows level. Restored on raise. See `_setShadowsOn` below.
   _castersTurnedOff: null,
+  // Derived frame-time stats — updated once per second from the rolling
+  // frameTimes window. Exposed via getFrameStats() for the debug HUD.
+  // Phase 1 instrumentation (perf-pass-4).
+  _statsCache: { avg: 0, p95: 0, max: 0 },
+  _statsTick: 0,
+  // Raw wall-clock tracking — performance.now() at the previous tick call.
+  // We track this independently of dt because dt is capped at 50ms in
+  // main.js (Math.min(clock.getDelta(), 0.05)), so using dt would clamp
+  // every frame over 50fps, making avg/p95/max useless for diagnosing jitter.
+  _lastPerfTime: 0,
 };
 
 export function install(hooks) {
@@ -59,8 +69,19 @@ export function setEnabled(v) {
 
 export function tick(dt) {
   if (!state.enabled || !state.hooks) return;
+
+  // Use raw wall-clock delta for frame-time stats so we capture actual
+  // jitter instead of the dt-capped value (which is clamped at 50ms by
+  // main.js and would make p95/max meaningless for anything under 20fps).
+  const now = performance.now();
+  const wallMs = state._lastPerfTime > 0 ? now - state._lastPerfTime : dt * 1000;
+  state._lastPerfTime = now;
+
+  // Adaptive quality uses the original dt-based ms for its drop/raise
+  // thresholds (those are calibrated against the clamped game tick), but
+  // the stats window records wall-clock time so the HUD is truthful.
   const ms = dt * 1000;
-  state.frameTimes.push(ms);
+  state.frameTimes.push(wallMs);
   if (state.frameTimes.length > WINDOW) state.frameTimes.shift();
   // Need a real sample window before judging — don't whipsaw at boot when
   // the first few frames include shader compile spikes.
@@ -71,6 +92,21 @@ export function tick(dt) {
   let sum = 0;
   for (const x of state.frameTimes) sum += x;
   const avg = sum / state.frameTimes.length;
+
+  // Derived stats (p95 + max) — computed once per ~60 frames to avoid
+  // a sorted copy every tick. p95 catches sustained jitter; max catches
+  // single-frame hitches like chunk-load spikes.
+  state._statsTick++;
+  if (state._statsTick >= 60) {
+    state._statsTick = 0;
+    const sorted = state.frameTimes.slice().sort((a, b) => a - b);
+    const p95Idx = Math.floor(sorted.length * 0.95);
+    state._statsCache = {
+      avg,
+      p95: sorted[p95Idx] ?? 0,
+      max: sorted[sorted.length - 1] ?? 0,
+    };
+  }
 
   if (avg > DROP_FRAME_MS) {
     state.badRun++;
@@ -164,3 +200,8 @@ function _setShadowsOn(scene, renderer, on) {
 
 export function getLevel() { return state.level; }
 export function getLevelName() { return QUALITY_LEVELS[state.level].name; }
+
+// Phase 1 instrumentation — frame-time stats for the debug HUD.
+// Returns the most recently computed { avg, p95, max } (ms). Updated once
+// per ~60 frames, so it lags reality slightly — good enough for display.
+export function getFrameStats() { return state._statsCache; }

@@ -15,6 +15,8 @@ import { Analytics } from './analytics.js';
 import { getForestAt } from './forests.js';
 import { PERF } from './perf.js';
 import { getSessionSeed } from './rng.js';
+import { chunkGenStats } from './chunks.js';
+import { getFrameStats } from './adaptiveQuality.js';
 
 // Per-tier perf budgets. Numbers come from the r/threejs perf thread
 // guidance — these are "stay under or you're hurting low-end devices"
@@ -573,12 +575,26 @@ function updatePanel(dt) {
     ? `${window.__seedInput} (${seedHex})`
     : seedHex;
 
+  // Frame-time stats from adaptiveQuality rolling window (updated ~1/s).
+  const ft = getFrameStats();
+  const ftStr = ft.avg > 0
+    ? `avg=${ft.avg.toFixed(1)}  p95=${ft.p95.toFixed(1)}  max=${ft.max.toFixed(1)}ms`
+    : 'warming up…';
+
+  // Chunk generation stats.
+  const cg = chunkGenStats;
+  const cgStr = cg.count > 0
+    ? `${cg.count} gen  slow=${cg.slowCount}  worst=${cg.slowest.toFixed(1)}  last=${cg.lastMs.toFixed(1)}  avg=${cg.avgMs.toFixed(1)}ms`
+    : 'none yet';
+
   state.textEl.textContent =
     `~ debug (P pause · . step · C colliders · G god · F freeze)\n` +
     `fps          ${fps}    ${state.paused ? '[PAUSED]' : ''}\n` +
+    `frame        ${ftStr}\n` +
     `draws        ${drawsStr}\n` +
     `tris         ${trisStr}\n` +
     `gpu mem      geo ${geoCount}  tex ${texCount}${heap}\n` +
+    `chunks       ${cgStr}\n` +
     `running      ${running}\n` +
     `seed         ${seedStr}\n` +
     `pos          ${z.position.x.toFixed(1)}, ${z.position.z.toFixed(1)}\n` +

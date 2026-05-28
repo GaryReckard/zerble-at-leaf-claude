@@ -186,6 +186,26 @@ export function updateStageLightShow(t, nightness, zerblePos) {
   }
 }
 
+// ---------- Chunk generation timing stats ----------
+//
+// Phase 1 instrumentation (perf-pass-4). No behavior change — purely
+// observational. Sampled by debug.js for the backtick HUD panel so we can
+// see whether forest chunks (which contain ~400 meshes) are the spike source
+// before committing to the heavier fixes in phases 4A/4B.
+
+export const chunkGenStats = {
+  count:    0,      // total chunks generated this session
+  slowCount: 0,     // chunks that took > SLOW_THRESHOLD_MS
+  slowest:  0,      // worst single generation time (ms)
+  lastMs:   0,      // most recent chunk generation time (ms)
+  _totalMs: 0,      // running sum — used to compute avgMs
+  get avgMs() {
+    return this.count > 0 ? this._totalMs / this.count : 0;
+  },
+};
+
+const SLOW_THRESHOLD_MS = 8;
+
 // ---------- Public API ----------
 
 export class ChunkManager {
@@ -234,7 +254,17 @@ export class ChunkManager {
     candidates.sort((a, b) => a.d2 - b.d2);
     for (const c of candidates) {
       if (budget-- <= 0) break;
+      const t0 = performance.now();
       this._generate(c.cx, c.cz);
+      const ms = performance.now() - t0;
+      chunkGenStats.count++;
+      chunkGenStats._totalMs += ms;
+      chunkGenStats.lastMs = ms;
+      if (ms > chunkGenStats.slowest) chunkGenStats.slowest = ms;
+      if (ms > SLOW_THRESHOLD_MS) {
+        chunkGenStats.slowCount++;
+        console.warn(`[chunk slow] (${c.cx},${c.cz}) ${ms.toFixed(1)}ms`);
+      }
     }
 
     // Unload distant chunks (hysteresis: only beyond UNLOAD_RADIUS, so we don't

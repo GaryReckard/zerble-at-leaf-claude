@@ -321,6 +321,10 @@ export class KidGaggle {
         // Honk-scatter timer: while > 0, the kid runs away from Zerble at
         // FLEE_SPEED. Set by KidGaggle.scatter() from main.js on honk.
         k.userData.scatterTimer = 0;
+        // Smile cooldown: prevents the same kid from spawning a smile every
+        // frame they're touching a bubble. Counts down with dt; smile fires
+        // only when this hits 0 AND the kid catches a bubble.
+        k.userData.smileCooldown = 0;
         this.group.add(k);
         this.kids.push(k);
         this.colliders.push({
@@ -360,8 +364,12 @@ export class KidGaggle {
   // dt: frame delta. bubbles/zerble are optional — when present, kids go
   // gaga for bubbles (steer toward the nearest one) and the whole gaggle
   // slowly drifts toward wherever Zerble is so they don't get stuck at
-  // their birth anchor once he's wandered off.
-  update(dt, bubbles, zerble) {
+  // their birth anchor once he's wandered off. When `smiles` is also
+  // passed, a kid who catches a bubble (gets within BUBBLE_GRAB_RANGE)
+  // spawns a smile at their position — that's the joy moment that earns
+  // the player a point. Per-kid cooldown prevents one bubble-popping kid
+  // from spamming smiles every frame they're inside the grab radius.
+  update(dt, bubbles, zerble, smiles) {
     // Recycle kids whose position has fallen far behind Zerble. The anchor
     // lerp drags centers toward the player but individual wandering can
     // still leave a kid stranded after a fast drive. Mirrors the wook
@@ -415,6 +423,7 @@ export class KidGaggle {
     const BUBBLE_GRAB_RANGE = 0.7;         // close enough to "play with" it
     const BUBBLE_ATTRACT_SPEED = 4.2;      // sprint speed when chasing
     const FLEE_SPEED = 5.0;                // honk-scatter sprint speed
+    const KID_SMILE_COOLDOWN = 2.5;        // seconds between smiles from the same kid
 
     for (let i = 0; i < this.kids.length; i++) {
       const k = this.kids[i];
@@ -432,7 +441,22 @@ export class KidGaggle {
 
       // Tick scatter timer first so the test below sees a fresh value.
       if (k.userData.scatterTimer > 0) k.userData.scatterTimer -= dt;
+      if (k.userData.smileCooldown > 0) k.userData.smileCooldown -= dt;
       const fleeing = k.userData.scatterTimer > 0 && zerble;
+
+      // Smile spawn — when a kid catches a bubble. The bubble-chase branch
+      // below moves the kid toward chaseDx/chaseDz; we check here so we
+      // catch the moment they ENTER the grab radius (smile fires once per
+      // catch, then the cooldown blocks re-fires until they reset).
+      if (
+        smiles &&
+        !fleeing &&
+        chaseD <= BUBBLE_GRAB_RANGE &&
+        k.userData.smileCooldown <= 0
+      ) {
+        smiles.spawn(k.position);
+        k.userData.smileCooldown = KID_SMILE_COOLDOWN;
+      }
 
       if (fleeing) {
         // Run away from Zerble. Lock heading on entry (set by scatter())

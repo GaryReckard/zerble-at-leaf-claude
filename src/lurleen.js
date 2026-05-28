@@ -13,6 +13,17 @@ import * as THREE from 'three';
 import { registry } from './registry.js';
 import { createHeartGeometry, sharedHeartGeometry as _heartGeo } from './models/heart.js';
 import { worldHash, mulberry32 } from './rng.js';
+import { isPointInLake, projectOutOfLake } from './lakes.js';
+
+// Lakes load within 720m of the player; main.js boots `buildWorld()` (which
+// triggers a lakeManager.update at origin) BEFORE constructing Lurleen, so any
+// lake near her 200–280m spawn ring is already in the registry. Same for her
+// 150–220m rehome drop. If the picked spot lands in water, push it out to the
+// bounding circle + 50m so her wander radius (≈38m) never reaches the lake.
+function avoidLake(x, z) {
+  if (!isPointInLake(x, z)) return null;
+  return projectOutOfLake(x, z, 50);
+}
 
 // Re-export so older imports (e.g. from sandbox.html or main) keep working.
 export { createHeartGeometry };
@@ -72,6 +83,8 @@ export class Lurleen {
     this.root.name = 'Lurleen';
 
     const spawn = pickInitialSpawn();
+    const dry = avoidLake(spawn.x, spawn.z);
+    if (dry) spawn.set(dry.x, 0, dry.z);
     this.position = spawn.clone();
     this.heading = Math.PI;          // facing -z initially
     this.speed = 0;
@@ -150,8 +163,10 @@ export class Lurleen {
     } else {
       angle = Math.random() * Math.PI * 2;
     }
-    const nx = zerblePos.x + Math.cos(angle) * dist;
-    const nz = zerblePos.z + Math.sin(angle) * dist;
+    let nx = zerblePos.x + Math.cos(angle) * dist;
+    let nz = zerblePos.z + Math.sin(angle) * dist;
+    const dry = avoidLake(nx, nz);
+    if (dry) { nx = dry.x; nz = dry.z; }
     this.setSpawnAt(nx, nz);
     // Face roughly back toward the player so she's not arbitrarily oriented.
     this.heading = Math.atan2(zerblePos.x - nx, zerblePos.z - nz) + Math.PI;

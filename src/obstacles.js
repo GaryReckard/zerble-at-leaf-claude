@@ -1134,7 +1134,7 @@ function shuffleInPlace(arr) {
 // We maintain FEW pairs (rare) and recycle them to follow Zerble around
 // like the Wooks do, so you encounter the same low handful as you drive.
 
-const FRISBEE_PAIR_COUNT = 2;
+const FRISBEE_PAIR_COUNT = 5;
 const FRISBEE_PLAYER_SEPARATION_MIN = 10;
 const FRISBEE_PLAYER_SEPARATION_MAX = 18;
 const FRISBEE_RECYCLE_MIN = 35;

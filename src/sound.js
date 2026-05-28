@@ -106,8 +106,13 @@ export const Sound = {
     // AudioContext is constructed in 'suspended' state and resume() needs the
     // active user gesture. Doing it before the rest of the graph setup keeps
     // the gesture privilege as fresh as possible.
-    if (ctx.state === 'suspended') {
-      _diag.resumeCalled = true;
+    //
+    // Called unconditionally (not just when state === 'suspended') because
+    // some desktop-Chrome versions report the new context as 'running' even
+    // though the audio thread hasn't actually started processing samples.
+    // resume() on an already-running context is a no-op, so the belt is free.
+    _diag.resumeCalled = true;
+    try {
       const p = ctx.resume();
       if (p && typeof p.then === 'function') {
         p.then(() => { _diag.ctxStateAfterResume = ctx.state; })
@@ -115,8 +120,8 @@ export const Sound = {
       } else {
         _diag.ctxStateAfterResume = ctx.state;
       }
-    } else {
-      _diag.ctxStateAfterResume = ctx.state;
+    } catch (e) {
+      _diag.resumeError = String(e);
     }
 
     // iOS unlock B: play a 1-sample silent WebAudio buffer source. On some
@@ -254,13 +259,48 @@ export const Sound = {
     engineNodes = createEngine(ctx, sfxBus);
     initialized = true;
 
+    // Prime the music chain. The 1-sample buffer above (unlock B) wakes the
+    // ctx.destination path, but the music chain (musicBus → musicDuckGain →
+    // _tripDryGain → masterGain → destination) is multi-stage and on some
+    // desktop-Chrome builds it doesn't actually start emitting samples until
+    // a non-trivial signal flows through it. Symptom: brass-band music
+    // scheduled at currentTime+0.15s gets dropped on the floor; the first
+    // honk (sfxBus → masterGain, a simpler path) flushes the engine, and
+    // subsequent setInterval-scheduled music ticks then play correctly. Fix:
+    // route a 60ms near-silent noise pulse (peak amplitude 0.003 — well below
+    // perceptual threshold even on headphones) through musicBus so the
+    // entire music chain warms up before the queued stages start ticking.
+    try {
+      const primeLen = Math.max(1, Math.floor(ctx.sampleRate * 0.06));
+      const primeBuf = ctx.createBuffer(1, primeLen, ctx.sampleRate);
+      const primeData = primeBuf.getChannelData(0);
+      for (let i = 0; i < primeLen; i++) primeData[i] = (Math.random() * 2 - 1) * 0.003;
+      const primeSrc = ctx.createBufferSource();
+      primeSrc.buffer = primeBuf;
+      primeSrc.connect(musicBus);
+      primeSrc.start(ctx.currentTime);
+      _diag.musicChainPrimed = true;
+    } catch (e) { _diag.musicChainPrimed = String(e); }
+
     // Drain any stage music attachments that were queued during world boot.
+    // Schedule the createStageMusic calls a beat after now so the prime
+    // pulse above has time to actually start hitting the audio thread before
+    // the brass band's first notes (scheduled at currentTime+0.15s) need to
+    // fire. createStageMusic itself is synchronous — we just delay invoking
+    // it. The deferred-handle pattern means callers already cope with
+    // adoption arriving slightly late.
     const queued = _pendingStages.splice(0);
-    for (const q of queued) {
-      if (q.handle.cancelled) continue;
-      const real = createStageMusic(ctx, musicBus, q.x, q.y, q.z, q.seed, q.style);
-      q.handle._adopt(real);
-    }
+    const drainQueue = () => {
+      for (const q of queued) {
+        if (q.handle.cancelled) continue;
+        const real = createStageMusic(ctx, musicBus, q.x, q.y, q.z, q.seed, q.style);
+        q.handle._adopt(real);
+      }
+    };
+    // 80ms is enough for the priming pulse to start moving samples on every
+    // browser we've tested. Below ~50ms desktop Chrome still misses the
+    // first notes; above ~150ms the player perceives a gap. 80ms threads it.
+    setTimeout(drainQueue, 80);
   },
 
   // Returns a snapshot of the audio init state. Wired through

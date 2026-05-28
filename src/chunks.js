@@ -427,7 +427,9 @@ function pickTheme(cx, cz) {
   // INNER ring (chunks immediately around the main stage): keep this band
   // light on stages so spawn doesn't feel cluttered with concert decks. The
   // main stage already lives at (0,0) — neighbors should be food/vendors
-  // and ambient lawn, with at most an occasional smaller stage.
+  // and ambient lawn, with at most an occasional smaller stage. Camp
+  // villages don't appear in the inner ring — they read as "back of the
+  // festival," not front-and-center.
   if (dist <= 1.5) {
     if (r < 0.05) return 'tent_stage';     // rare
     if (r < 0.12) return 'side_stage';     // was 35% → 7%
@@ -437,22 +439,27 @@ function pickTheme(cx, cz) {
     if (r < 0.92) return 'grove';
     return 'open_lawn';
   }
+  // Middle ring picks up the camp_village theme at 7% — visible enough to
+  // be a regular sight while still feeling like a discovery.
   if (dist <= 3.5) {
-    if (r < 0.08) return 'tent_stage';
-    if (r < 0.18) return 'side_stage';     // was 25% → 10%
-    if (r < 0.36) return 'food_plaza';
-    if (r < 0.58) return 'vendor_row';
-    if (r < 0.72) return 'drum_circle';
+    if (r < 0.07) return 'camp_village';
+    if (r < 0.15) return 'tent_stage';
+    if (r < 0.25) return 'side_stage';
+    if (r < 0.42) return 'food_plaza';
+    if (r < 0.62) return 'vendor_row';
+    if (r < 0.74) return 'drum_circle';
     if (r < 0.90) return 'grove';
     return 'open_lawn';
   }
-  // Outer rings — keep stages discoverable far from spawn.
-  if (r < 0.05) return 'tent_stage';
-  if (r < 0.13) return 'side_stage';
-  if (r < 0.23) return 'food_plaza';
-  if (r < 0.33) return 'drum_circle';
-  if (r < 0.47) return 'vendor_row';
-  if (r < 0.75) return 'grove';
+  // Outer rings — keep stages discoverable far from spawn; camp villages
+  // bump to ~12% out here where the festival reads as more residential.
+  if (r < 0.12) return 'camp_village';
+  if (r < 0.17) return 'tent_stage';
+  if (r < 0.24) return 'side_stage';
+  if (r < 0.32) return 'food_plaza';
+  if (r < 0.40) return 'drum_circle';
+  if (r < 0.52) return 'vendor_row';
+  if (r < 0.77) return 'grove';
   return 'open_lawn';
 }
 
@@ -461,14 +468,18 @@ function pickTheme(cx, cz) {
 // most themes so the festival reads as a real festival, not an empty
 // fairgrounds.
 const THEME_PROPS = {
-  main_stage:  { treeDensity: 0.15, ambientCrowd: 42 },
-  side_stage:  { treeDensity: 0.25, ambientCrowd: 24 },
-  tent_stage:  { treeDensity: 0.10, ambientCrowd: 30 },   // dense crowd inside
-  food_plaza:  { treeDensity: 0.2,  ambientCrowd: 22 },
-  vendor_row:  { treeDensity: 0.3,  ambientCrowd: 20 },
-  drum_circle: { treeDensity: 0.4,  ambientCrowd: 18 },
-  grove:       { treeDensity: 1.0,  ambientCrowd: 11 },
-  open_lawn:   { treeDensity: 0.2,  ambientCrowd: 14 },
+  main_stage:   { treeDensity: 0.15, ambientCrowd: 42 },
+  side_stage:   { treeDensity: 0.25, ambientCrowd: 24 },
+  tent_stage:   { treeDensity: 0.10, ambientCrowd: 30 },   // dense crowd inside
+  food_plaza:   { treeDensity: 0.2,  ambientCrowd: 22 },
+  vendor_row:   { treeDensity: 0.3,  ambientCrowd: 20 },
+  drum_circle:  { treeDensity: 0.4,  ambientCrowd: 18 },
+  grove:        { treeDensity: 1.0,  ambientCrowd: 11 },
+  open_lawn:    { treeDensity: 0.2,  ambientCrowd: 14 },
+  // Camp village — sparse trees + a relaxed living-in-the-woods crowd. Most
+  // campers are at their own sites, not wandering, so the ambient crowd is
+  // intentionally lower than open_lawn even though the chunk is "populated."
+  camp_village: { treeDensity: 0.45, ambientCrowd: 8 },
 };
 
 const THEME_BUILDERS = {
@@ -480,6 +491,7 @@ const THEME_BUILDERS = {
   drum_circle: buildDrumCircle,
   grove: buildGrove,
   open_lawn: buildOpenLawn,
+  camp_village: buildCampVillage,
 };
 
 // ---------- Path placement ----------
@@ -1163,8 +1175,8 @@ function placeCampsiteClump(ctx) {
   }
 }
 
-function placeSingleCampsite(ctx, x, z) {
-  const camp = buildCampsite(ctx.rng, 'small');
+function placeSingleCampsite(ctx, x, z, size = 'small') {
+  const camp = buildCampsite(ctx.rng, size);
   camp.group.position.set(x, 0, z);
   camp.group.rotation.y = ctx.rng() * Math.PI * 2;
   ctx.group.add(camp.group);
@@ -1180,6 +1192,61 @@ function placeSingleCampsite(ctx, x, z) {
     attractor: { radius: 4, weight: 0.5 },
     chunkKey: ctx.key,
   });
+}
+
+// Camp village theme — packs 12–20 campsites of varying sizes into a green
+// "cell" of the road grid. Paths run through every chunk's center (cxWorld,
+// czWorld), so the cell bounded by 4 paths sits at a chunk CORNER, halfway
+// between 4 adjacent chunk centers. We pick one of THIS chunk's 4 corners
+// and pack campsites around it; the village ends up nestled in the grass
+// square with paths along all 4 of its sides (this chunk's own E–W and N–S
+// paths form 2 of the borders; the corresponding neighbor chunks' paths
+// form the other 2).
+//
+// Sizes mix small/medium/large so the village has visible hierarchy —
+// singletons among medium clusters with the occasional "big rig" large
+// anchor (3-tent setup + extra chairs/torches per buildCampsite). Although
+// the campsite groups visually extend into 3 neighbor chunks, they stay
+// parented to THIS chunk's group so they unload as a unit when the chunk
+// drops — no cross-chunk lifecycle to manage.
+function buildCampVillage(ctx) {
+  // Pick which of the 4 chunk corners hosts the village. ±1 maps the corner
+  // to (cxWorld ± 40, czWorld ± 40), which is the centre of the cell that
+  // sits between THIS chunk's path cross and the diagonally-adjacent
+  // neighbor chunk's path cross.
+  const cornerX = ctx.rng() < 0.5 ? -1 : 1;
+  const cornerZ = ctx.rng() < 0.5 ? -1 : 1;
+  const cellX = ctx.cxWorld + cornerX * (CHUNK_SIZE / 2);
+  const cellZ = ctx.czWorld + cornerZ * (CHUNK_SIZE / 2);
+
+  const target = 12 + Math.floor(ctx.rng() * 9);    // 12–20
+  const placed = [];
+  const MIN_SPACING = 5.5;
+  // The four bordering paths run along x = cellX ± CHUNK_SIZE/2 and
+  // z = cellZ ± CHUNK_SIZE/2 (i.e., the paths through the 4 surrounding
+  // chunk centers). Keep campsites within ±RADIUS of the cell centre so
+  // even with their footprint they stay off the paths. RADIUS = 30 leaves
+  // ~10m clear between the outermost campsite edge and the path centerline.
+  const RADIUS = 30;
+
+  let attempts = 0;
+  while (placed.length < target && attempts < target * 16) {
+    attempts++;
+    const x = cellX + (ctx.rng() - 0.5) * 2 * RADIUS;
+    const z = cellZ + (ctx.rng() - 0.5) * 2 * RADIUS;
+    if (registry.closestBuilding(new THREE.Vector3(x, 0, z), 4)) continue;
+    let tooClose = false;
+    for (const p of placed) {
+      const dx = p.x - x, dz = p.z - z;
+      if (dx * dx + dz * dz < MIN_SPACING * MIN_SPACING) { tooClose = true; break; }
+    }
+    if (tooClose) continue;
+    // Size mix: 50% small, 35% medium, 15% large.
+    const r = ctx.rng();
+    const size = r < 0.50 ? 'small' : (r < 0.85 ? 'medium' : 'large');
+    placeSingleCampsite(ctx, x, z, size);
+    placed.push({ x, z });
+  }
 }
 
 

@@ -101,6 +101,7 @@
         <option value="hammock">Hammock</option>
         <option value="hammock_with_npc">Hammock + person (lounging)</option>
         <option value="tent">Vendor tent</option>
+        <option value="tent_row">Vendor tent row (5 — shows layout variety)</option>
         <option value="food_truck">Food truck</option>
 <option value="sugar_shack">Sugar Shack</option>
         <option value="tree">Tree</option>
@@ -125,6 +126,7 @@
         <option value="band_member_trombone">Band member — trombone</option>
         <option value="parasol_marshal">Parasol grand marshal</option>
         <option value="brass_band">Brass band formation</option>
+        <option value="shopkeeper">Vendor shopkeeper (alone)</option>
         <option value="kid">Kid</option>
         <option value="wook">Wook</option>
         <option value="hula_hooper">Hula-hooper</option>
@@ -548,7 +550,7 @@ import { buildSugarShack } from './src/models/sugarShack.js';
     // means no button rendered.
     const ENTITY_HIT_KIND = {
       puppet: 'puppet', puppet_lineup: 'puppet',
-      tent: 'tent',
+      tent: 'tent', tent_row: 'tent',
       food_truck: 'truck',
       kid: 'kid',
       wook: 'wook',
@@ -756,6 +758,24 @@ import { buildSugarShack } from './src/models/sugarShack.js';
           applyCam();
           break;
         }
+        case 'tent_row': {
+          // 5 vendor tents spaced ~5m apart along X. Each picks its own
+          // booth layout + product spread + trim color + shopkeeper, so a
+          // single load shows the variety the layout grammar produces.
+          // Spacing matches buildVendorRow in chunks.js (5.0m).
+          const tents = new THREE.Group();
+          for (let i = 0; i < 5; i++) {
+            const t = buildTent(Math.random);
+            t.position.set((i - 2) * 5, 0, 0);
+            tents.add(t);
+          }
+          scene.add(tents);
+          entityRoot = tents;
+          cam.target.set(0, 1.8, 0);
+          cam.dist = 18;
+          applyCam();
+          break;
+        }
         case 'food_truck': {
           const g = buildFoodTruck(Math.random);
           scene.add(g);
@@ -894,6 +914,22 @@ import { buildSugarShack } from './src/models/sugarShack.js';
           });
           cam.target.set(0, 1.8, -1.0);
           cam.dist = 12;
+          applyCam();
+          break;
+        }
+        case 'shopkeeper': {
+          // Same palette buildTent uses for its NPC. Rolled per-load so the
+          // variation is visible across reloads. No update tick — they stand
+          // their booth in the game (no idle bob in v1).
+          const SHIRTS = [0xc63a2a, 0x3a72c2, 0xe09818, 0x6b513a, 0x5a7e3a, 0x2a4b6e, 0xa53a7a, 0x3a8b73];
+          const SKINS  = [0xe6c098, 0xc09478, 0x8b6f50, 0xf2d4b2];
+          const shirt = SHIRTS[Math.floor(Math.random() * SHIRTS.length)];
+          const skin  = SKINS[Math.floor(Math.random() * SKINS.length)];
+          const g = buildSimpleNPC(shirt, skin);
+          scene.add(g);
+          entityRoot = g;
+          cam.target.set(0, 1.2, 0);
+          cam.dist = 4;
           applyCam();
           break;
         }

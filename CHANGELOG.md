@@ -4,6 +4,10 @@ All notable changes to Zerble at the Festival. Newest at top. Following [Keep a 
 
 ## 2026-05-28
 
+### Fixed
+- **Kids no longer float above the ground.** `tickKid` was setting `body.y = 0.55 + bounce`, lifting the entire kid 55cm into the air at rest. The body group already bakes shoes-bottom at `y = 0`, so the resting body.y should be 0. Now `body.y = bounce` only (`Math.abs(sin)` keeps it non-negative so they hop *up*, never through the ground).
+- **Lake "reflection" shader removed — looked like fake sparkles, not reflection.** The procedural twinkly stars shader patch I added earlier read as "glitter sprinkled on the water" that faded in and out at a constant rate — exactly the wrong physics for reflected sky. Removed the `onBeforeCompile` patch, deleted the star-field GLSL + uniforms, kept `setLakeNightness` as a no-op for caller backward compat. Water is now honest plain water at every time of day. **Real lake reflections** (via `three/examples/jsm/objects/Reflector` — mirrors actual sky/stars/moon at the cost of a second scene render) added to ROADMAP under World; gated to high tier when it lands.
+
 ### Added — NPCs dance on the dancefloor
 - **Crowd NPCs within ~9m of a `stage_front` attractor go into dance mode.** While `onDancefloor`, the existing matrix-write path layers a much bigger animation set:
   - **Vertical bounce** at ~0.07m peak + a smaller off-beat ripple at 0.025m — clear hop without floating.

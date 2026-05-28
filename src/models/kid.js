@@ -235,7 +235,14 @@ export function tickKid(model, dt, opts = {}) {
 
   // Bounce — amplitude depends on excitement. Toned down from earlier
   // values (0.22 / 0.15) so kids look animated, not spasmodic.
+  //
+  // Resting position is body.y = 0 (the body group's children already bake
+  // the shoes' bottom at y=0, so feet are AT ground level when body.y is
+  // zero). Earlier this was `body.y = 0.55 + bounce`, which floated every
+  // kid 55cm above the ground at rest — visible in-game as the gaggle
+  // hovering. The `Math.abs(sin)` envelope keeps the value non-negative so
+  // they hop *up* from ground rather than oscillating through it.
   const bouncy = excited ? 0.13 : 0.08;
   const tMs = performance.now() * 0.008 + u.bouncePhase;
-  model.children[0].position.y = 0.55 + Math.abs(Math.sin(tMs * 2)) * bouncy;
+  model.children[0].position.y = Math.abs(Math.sin(tMs * 2)) * bouncy;
 }

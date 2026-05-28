@@ -41,22 +41,19 @@ const SPHERE_R = 2.2;
 
 const _key = (mcx, mcz) => `${mcx},${mcz}`;
 
-// ---- Shared water material with night-time star shimmer -----------------
+// ---- Shared water material ----------------------------------------------
 //
-// All lakes share one material so updating the nightness/time uniforms once
-// per frame drives every lake's water surface consistently. The shader patch
-// uses an `onBeforeCompile` injection to add a procedural twinkly star field
-// at world XZ — only visible at night (`uNightness²` gate), only as a small
-// additive contribution to the final color, so the day appearance is
-// unchanged. Skips heavy reflection rendering (Reflector etc) entirely;
-// approximates "stars reflected on water" via screen-space twinkle that
-// reads as glints on the surface rather than true geometric reflection.
-// Cost: a few sin/exp calls per water fragment, ~zero impact off-screen.
-const LAKE_STAR_UNIFORMS = {
-  uNightness: { value: 0 },
-  uTime: { value: 0 },
-};
-
+// All lakes share one material so chunk/lake unload doesn't free it out from
+// under other lakes (`userData.shared` flag — see ARCHITECTURE.md "Shared
+// resources" + the perf-pooling rule).
+//
+// An earlier version of this file ran an `onBeforeCompile` shader patch that
+// added procedural "twinkle stars" on the water surface at night, gated by
+// nightness². It looked like fake glints/sparkles rather than a real
+// reflection — the time-driven twinkle made every pseudo-star fade in and
+// out which is wrong physics for reflected sky. Removed: this file no
+// longer pretends. A real `Reflector`-based mirror is the right fix when
+// reflections matter, gated to high-tier; deferred to ROADMAP.
 const WATER_MAT = new THREE.MeshStandardMaterial({
   color: 0x4d96d6,
   emissive: 0x1a3550,
@@ -72,59 +69,12 @@ const WATER_MAT = new THREE.MeshStandardMaterial({
                             //   particular shape; DoubleSide sidesteps it.
 });
 WATER_MAT.userData.shared = true;
-WATER_MAT.customProgramCacheKey = () => 'lake-water-stars-v4';
-WATER_MAT.onBeforeCompile = (shader) => {
-  WATER_MAT.userData.shader = shader; // for introspection
-  shader.uniforms.uNightness = LAKE_STAR_UNIFORMS.uNightness;
-  shader.uniforms.uTime = LAKE_STAR_UNIFORMS.uTime;
-  // Standalone world-position computation — don't rely on the chunk system's
-  // conditional `worldPosition` declaration (it's only declared when
-  // shadow/env paths are enabled, which we don't reliably hit).
-  shader.vertexShader = shader.vertexShader
-    .replace('#include <common>', `#include <common>
-varying vec3 vWorldPosLake;`)
-    .replace('#include <project_vertex>', `vWorldPosLake = (modelMatrix * vec4(transformed, 1.0)).xyz;
-#include <project_vertex>`);
-  shader.fragmentShader = shader.fragmentShader
-    .replace('#include <common>', `#include <common>
-varying vec3 vWorldPosLake;
-uniform float uNightness;
-uniform float uTime;
-float lake_hash(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
-// Star field: world XZ space, sparse grid, brightest at cell centers, twinkles
-// at independent phase per cell so the field shimmers instead of pulsing.
-float lake_stars(vec2 p, float t) {
-  vec2 gridP = floor(p);
-  vec2 f = fract(p) - 0.5;
-  float n = lake_hash(gridP);
-  // Only the sparsest cells host a star (top ~1.5% of cells).
-  if (n < 0.985) return 0.0;
-  float dist2 = dot(f, f);
-  float glow = exp(-dist2 * 80.0);
-  float twinkle = 0.5 + 0.5 * sin(t * 2.5 + n * 100.0);
-  return glow * twinkle;
-}`)
-    // three.js 0.160 uses <opaque_fragment> as the chunk that writes
-    // gl_FragColor.rgb (former name was <output_fragment> in earlier versions).
-    // Injecting AFTER it lets us additively brighten gl_FragColor before
-    // tone mapping / colorspace conversion run.
-    .replace('#include <opaque_fragment>', `#include <opaque_fragment>
-// Night-time star shimmer. uNightness² gate keeps the effect invisible
-// through dawn/noon and ramps in over dusk → midnight. Procedural stars
-// pinned to world XZ so they read as glints on the water surface.
-float lakeNightFactor = uNightness * uNightness;
-if (lakeNightFactor > 0.01) {
-  float stars = lake_stars(vWorldPosLake.xz * 0.7, uTime);
-  gl_FragColor.rgb += vec3(stars * lakeNightFactor * 0.85);
-}`);
-};
 
-// main.js calls this each frame with nightness (0..1) and a monotonic time
-// (seconds). Drives the twinkle of every lake at once via the shared uniform.
-export function setLakeNightness(nightness, time) {
-  LAKE_STAR_UNIFORMS.uNightness.value = nightness;
-  LAKE_STAR_UNIFORMS.uTime.value = time;
-}
+// Kept as a no-op for caller backward compat — main.js + sandbox both still
+// call it each frame. Now that the star shader patch is gone there are no
+// uniforms to drive, but removing the export would require unwinding the
+// call sites too; cheaper to keep the empty body and let it inline away.
+export function setLakeNightness(/* nightness, time */) {}
 
 export class LakeManager {
   constructor() {

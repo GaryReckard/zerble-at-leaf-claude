@@ -16,6 +16,7 @@ let ctx = null;
 let masterGain = null;
 let musicBus = null;     // shared bus for stage music sources (so we can balance vs. SFX)
 let musicDuckGain = null; // downstream attenuator — ducks when an external player (MIDI) is active
+let midiGain = null;     // MIDI player output node — connects into masterGain so Master + MIDI sliders both work
 // Trip effect chain — sits between musicDuckGain and masterGain. Always
 // wired in; only audibly active when `setMusicTrip(env, p)` ramps the
 // wet gain above zero. Drives a lowpass sweep + a feedback delay in
@@ -222,6 +223,13 @@ export const Sound = {
     sfxBus.gain.value = 1.0;
     sfxBus.connect(masterGain);
 
+    // MIDI output node — midiPlayer.js routes Tone.js's output here so Master
+    // and the dedicated MIDI fader both affect playback. Kept separate from
+    // musicBus so MIDI and stage music have independent volume controls.
+    midiGain = ctx.createGain();
+    midiGain.gain.value = 1.0;
+    midiGain.connect(masterGain);
+
     // Restore persisted volume levels (zerble.vol.*). Clamp anything < 0.05
     // up to 0.05 — a stuck-at-zero slider from a previous session is the
     // sneakiest "no sound" footgun, and 0.05 is still close enough to silent
@@ -240,6 +248,7 @@ export const Sound = {
       _diag.restoredFromLocalStorage.master = restore('zerble.vol.master', masterGain);
       _diag.restoredFromLocalStorage.music  = restore('zerble.vol.music',  musicBus);
       _diag.restoredFromLocalStorage.sfx    = restore('zerble.vol.sfx',    sfxBus);
+      _diag.restoredFromLocalStorage.midi   = restore('zerble.vol.midi',   midiGain);
     } catch (e) { /* localStorage unavailable */ }
 
     engineNodes = createEngine(ctx, sfxBus);
@@ -454,10 +463,20 @@ export const Sound = {
     thump(ctx, sfxBus, 110, 0.12, 0.18);
   },
 
+  // Returns the raw AudioContext so midiPlayer can share it with Tone.js via
+  // Tone.setContext(). Sharing the context lets Tone route into masterGain/midiGain
+  // instead of creating its own parallel audio graph that no slider can touch.
+  getContext() { return ctx; },
+
+  // Returns the raw Web Audio GainNode for midiPlayer to connect its Tone.js
+  // output chain to. Tone.js ToneAudioNode.connect() accepts native AudioNodes.
+  getMidiInputNode() { return midiGain; },
+
   // ---- Volume controls ----
   setMasterVolume(v) { if (masterGain) masterGain.gain.value = v; this._saveVolumes(); },
   setMusicVolume(v)  { if (musicBus)   musicBus.gain.value   = v; this._saveVolumes(); },
   setSfxVolume(v)    { if (sfxBus)     sfxBus.gain.value     = v; this._saveVolumes(); },
+  setMidiVolume(v)   { if (midiGain)   midiGain.gain.value   = v; this._saveVolumes(); },
 
   // Runtime music attenuator — independent of the user's saved volume.
   // The MIDI player calls this with ~0.18 on start and 1.0 on stop so the
@@ -473,12 +492,14 @@ export const Sound = {
   getMasterVolume()  { return masterGain ? masterGain.gain.value : 0.55; },
   getMusicVolume()   { return musicBus   ? musicBus.gain.value   : 1.6; },
   getSfxVolume()     { return sfxBus     ? sfxBus.gain.value     : 1.0; },
+  getMidiVolume()    { return midiGain   ? midiGain.gain.value   : 1.0; },
 
   _saveVolumes() {
     try {
       localStorage.setItem('zerble.vol.master', String(masterGain ? masterGain.gain.value : 0.55));
       localStorage.setItem('zerble.vol.music',  String(musicBus   ? musicBus.gain.value   : 1.6));
       localStorage.setItem('zerble.vol.sfx',    String(sfxBus     ? sfxBus.gain.value     : 1.0));
+      localStorage.setItem('zerble.vol.midi',   String(midiGain   ? midiGain.gain.value   : 1.0));
     } catch (e) { /* localStorage unavailable */ }
   },
 };

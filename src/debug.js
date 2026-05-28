@@ -398,6 +398,7 @@ function buildPanel() {
   const masterVol = Sound.isReady() ? Sound.getMasterVolume() : 0.55;
   const musicVol  = Sound.isReady() ? Sound.getMusicVolume()  : 1.6;
   const sfxVol    = Sound.isReady() ? Sound.getSfxVolume()    : 1.0;
+  const midiVol   = Sound.isReady() ? Sound.getMidiVolume()   : 1.0;
 
   audioBlock.innerHTML = `
     <div style="margin-bottom:4px;opacity:0.7">Audio</div>
@@ -412,6 +413,12 @@ function buildPanel() {
       <input id="dbg-vol-music" type="range" min="0" max="2" step="0.01" value="${musicVol.toFixed(2)}"
         style="flex:1;accent-color:#ffe066;cursor:pointer" />
       <span id="dbg-vol-music-readout" style="width:32px;text-align:right">${musicVol.toFixed(2)}</span>
+    </div>
+    <div style="display:flex;align-items:center;gap:6px;margin-bottom:4px">
+      <span style="width:48px;opacity:0.8">MIDI</span>
+      <input id="dbg-vol-midi" type="range" min="0" max="2" step="0.01" value="${midiVol.toFixed(2)}"
+        style="flex:1;accent-color:#ffe066;cursor:pointer" />
+      <span id="dbg-vol-midi-readout" style="width:32px;text-align:right">${midiVol.toFixed(2)}</span>
     </div>
     <div style="display:flex;align-items:center;gap:6px">
       <span style="width:48px;opacity:0.8">SFX</span>
@@ -432,6 +439,11 @@ function buildPanel() {
     const v = parseFloat(e.target.value);
     Sound.setMusicVolume(v);
     audioBlock.querySelector('#dbg-vol-music-readout').textContent = v.toFixed(2);
+  });
+  audioBlock.querySelector('#dbg-vol-midi').addEventListener('input', (e) => {
+    const v = parseFloat(e.target.value);
+    Sound.setMidiVolume(v);
+    audioBlock.querySelector('#dbg-vol-midi-readout').textContent = v.toFixed(2);
   });
   audioBlock.querySelector('#dbg-vol-sfx').addEventListener('input', (e) => {
     const v = parseFloat(e.target.value);

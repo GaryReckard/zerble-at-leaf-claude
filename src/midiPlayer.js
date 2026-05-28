@@ -52,6 +52,14 @@ export class MidiPlayer {
         ]);
         this.Tone = tone;
         this.Midi = midiMod.Midi;
+        // Share Sound.js's AudioContext so Tone.js output can route into
+        // masterGain / midiGain. Without this, Tone creates its own context
+        // and no slider in the debug HUD (or future player-facing UI) can
+        // touch MIDI volume. Must be called BEFORE Tone.start().
+        const rawCtx = Sound.getContext();
+        if (rawCtx) {
+          this.Tone.setContext(new this.Tone.Context({ context: rawCtx }));
+        }
         // Tone.start() is REQUIRED on a user gesture (first M press) —
         // browsers suspend the AudioContext until user interaction.
         await this.Tone.start();
@@ -102,7 +110,12 @@ export class MidiPlayer {
     // at construction, so we lean on the wet ramp to convey "more reverb".
     const reverb = new T.Reverb({ decay: 4.5, wet: 0.18 });
 
-    vibrato.chain(filter, delay, reverb, T.Destination);
+    // Route the output into Sound.js's midiGain node (→ masterGain) so Master
+    // and the MIDI fader both affect playback. Falls back to T.Destination if
+    // Sound hasn't initialized yet (shouldn't happen in normal flow).
+    const midiOut = Sound.getMidiInputNode();
+    vibrato.chain(filter, delay, reverb);
+    reverb.connect(midiOut ?? T.Destination);
 
     this.effects = { vibrato, filter, delay, reverb };
     this._inputNode = vibrato;       // synth.connect(this._inputNode)

@@ -4,6 +4,12 @@ All notable changes to Zerble at the Festival. Newest at top. Following [Keep a 
 
 ## 2026-05-28
 
+### Fixed — MIDI music now responds to Master and MIDI volume sliders
+- **Root cause: Tone.js was creating its own AudioContext.** The MIDI player lazy-loads Tone.js on the first M press. By default Tone.js creates a fresh `AudioContext`, which is a completely separate audio graph from Sound.js's `ctx`. Cross-context node connections are illegal in Web Audio, so none of the three debug HUD sliders (Master, Music, SFX) could touch MIDI volume.
+- **Fix: share Sound.js's AudioContext with Tone.js.** Before `Tone.start()`, `midiPlayer` now calls `Tone.setContext(new Tone.Context({ context: Sound.getContext() }))`. Tone.js v14 supports wrapping an existing AudioContext. With a shared context, all nodes live in the same graph and cross-module connections are legal.
+- **New `midiGain` node in Sound.js.** Sits between the MIDI effect chain and `masterGain` (`midiGain → masterGain → ctx.destination`). The effect chain in `midiPlayer` now routes `reverb → midiGain` instead of `reverb → T.Destination`, bypassing Tone's own destination wrapper.
+- **4th audio slider added to the debug HUD.** Master / Music / MIDI / SFX — MIDI and stage music are independently controllable. Volume preference persisted to `localStorage` under `zerble.vol.midi`.
+
 ### Performance — Phase 3 bubble material pre-build (perf-pass-4)
 - **Both bubble materials built at startup, never during a quality drop.** `MeshPhysicalMaterial` (fancy: transmission, iridescence, sheen) and `MeshStandardMaterial` (cheap: plain translucent standard) are now constructed in the `Bubbles` constructor. `setCheapMaterial(on)` just swaps `this.mesh.material` between the two pre-built references — zero allocation, no shader compile mid-crisis. Wired via the `onLevelChange` hook added in Phase 2: levels with `bubbles: 'cheap'` call `bubbles.setCheapMaterial(true)`, the rest call `false`. Nightness iridescence/sheen ramp now correctly skips when the cheap material is active (Standard doesn't have those properties).
 - **`_AXIS_Y` hoisted to module scope in `bubbles.js`.** `_writeInstance` was calling `new THREE.Vector3(0, 1, 0)` for every `setFromAxisAngle` — one allocation per live bubble per frame. Replaced with a module-level constant.

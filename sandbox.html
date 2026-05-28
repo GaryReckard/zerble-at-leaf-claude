@@ -226,7 +226,7 @@ import { buildSugarShack } from './src/models/sugarShack.js';
     import { buildParasolMarshal } from './src/models/parasolMarshal.js';
     import { buildKid } from './src/models/kid.js';
     import { buildWook } from './src/models/wook.js';
-    import { buildHulaHooper } from './src/models/hulaHooper.js';
+    import { buildHulaHooper, tickHulaHooper } from './src/models/hulaHooper.js';
     import { buildFrisbeePlayer, buildFrisbeeDisc } from './src/models/frisbeePlayer.js';
     import { buildPerformer } from './src/models/performer.js';
     import {
@@ -866,24 +866,14 @@ import { buildSugarShack } from './src/models/sugarShack.js';
             tod._nightness = 1;
             tod.t = 0.5;
           }
-          // Mirror the gyration math from obstacles.js — see comments
-          // there for amplitude / rate reasoning. Picks a single rate
-          // around the middle of the in-game band (5-9 rad/s) so the
-          // sandbox demo reads as a representative hooper, neither
-          // sluggish nor frantic.
-          const startMs = performance.now();
-          const gyrSpeed = 7;
-          const hoopSpinMult = 1.7;
+          // Sandbox and game share the same tick function (see
+          // models/hulaHooper.js). Animation parameters (gyrSpeed,
+          // hoopSpinMult, phase) are picked at build time, so this
+          // hooper has its own personal tempo. No more inline copy of
+          // the math — if hooping changes, both places update together.
           updateFn = (dt) => {
-            const phase = ((performance.now() - startMs) * 0.001) * gyrSpeed;
-            g.userData.bodyGroup.rotation.z = Math.sin(phase) * 0.22;
-            g.userData.bodyGroup.rotation.x = Math.cos(phase * 0.7) * 0.14;
-            g.userData.bodyGroup.position.y = Math.sin(phase * 2) * 0.05;
-            g.userData.hoopPivot.rotation.y = phase * hoopSpinMult;
-            g.userData.hoopPivot.rotation.x = Math.sin(phase) * 0.10;
-            g.userData.hoopPivot.rotation.z = Math.cos(phase * 1.1) * 0.08;
             const n = isNight ? 1 : tod.nightness;
-            g.userData.hoopMat.emissiveIntensity = 0.05 + n * 3.0;
+            tickHulaHooper(g, dt, n);
           };
           cam.target.set(0, 1.2, 0);
           cam.dist = 5.5;

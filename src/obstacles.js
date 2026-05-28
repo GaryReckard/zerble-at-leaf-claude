@@ -11,7 +11,7 @@ import { buildBandMember } from './models/bandMember.js';
 import { buildParasolMarshal } from './models/parasolMarshal.js';
 import { buildKid } from './models/kid.js';
 import { buildWook } from './models/wook.js';
-import { buildHulaHooper } from './models/hulaHooper.js';
+import { buildHulaHooper, tickHulaHooper } from './models/hulaHooper.js';
 import { buildFrisbeePlayer, buildFrisbeeDisc } from './models/frisbeePlayer.js';
 import { Sound } from './sound.js';
 import { projectOutOfLake } from './lakes.js';
@@ -868,32 +868,13 @@ export class HulaHoopers {
       this._rescan(zerblePos);
     }
 
-    const glow = 0.05 + nightness * 3.0;   // dim by day, bright at night
-
     for (let i = 0; i < this.hoopers.length; i++) {
       const h = this.hoopers[i];
       if (!h.visible) continue;
       const u = h.userData;
-      // Hip gyration — figure-8-ish lean of the body at the hooper's
-      // personal pace. gyrSpeed is in rad/s (phase rate); a real hula
-      // hooper's hip revolution is ~1 Hz, so we target the 5-9 rad/s
-      // band (0.8-1.4 full body sways per second). Amplitudes widened
-      // too (0.22 / 0.14 rad, 5cm bob) so the motion reads at a glance
-      // even from far away.
-      u.phase += dt * u.gyrSpeed;
-      const swayX = Math.sin(u.phase) * 0.22;
-      const swayZ = Math.cos(u.phase * 0.7) * 0.14;
-      u.bodyGroup.rotation.z = swayX;
-      u.bodyGroup.rotation.x = swayZ;
-      u.bodyGroup.position.y = Math.sin(u.phase * 2) * 0.05;
-      // Hoop spin — uses a per-hooper hoopSpinMult so the hoop rotates
-      // somewhat independently of the hip speed (some folks whip the
-      // hoop faster than their hips, some slower).
-      u.hoopPivot.rotation.y = u.phase * u.hoopSpinMult;
-      u.hoopPivot.rotation.x = Math.sin(u.phase) * 0.10;
-      u.hoopPivot.rotation.z = Math.cos(u.phase * 1.1) * 0.08;
-      // Bump emissive intensity from day→night
-      u.hoopMat.emissiveIntensity = glow;
+      // Body sway + hoop spin + glow all live in tickHulaHooper so the
+      // sandbox and the game can't drift out of sync. See models/hulaHooper.js.
+      tickHulaHooper(h, dt, nightness);
 
       // Slight random drift: every few seconds pick a new tiny offset target
       // near the anchor, then ease toward it at a snail's pace. Keeps the
@@ -992,15 +973,11 @@ export class HulaHoopers {
         h.rotation.y = Math.atan2(e.position.x - x, e.position.z - z);
         h.visible = true;
         h.userData.attractorId = e.id;
+        // Re-roll phase so newly placed hoopers don't all sync up. Their
+        // gyrSpeed + hoopSpinMult were picked at buildHulaHooper time and
+        // stay stable across re-placements — feels like the same person
+        // relocating, not a different one each time.
         h.userData.phase = Math.random() * TAU;
-        // Hip gyration speed in rad/s. 5-9 maps to 0.8-1.4 Hz full
-        // body sways — a real hula hooper's tempo. Wide range so the
-        // gaggle reads as individuals (some chill, some going hard).
-        h.userData.gyrSpeed = 5 + Math.random() * 4;
-        // Hoop spin multiplier — applied on top of phase. Independent
-        // random pick (1.2-2.3) so the hoop and hips aren't perfectly
-        // correlated — some hoopers whip the hoop fast over slow hips.
-        h.userData.hoopSpinMult = 1.2 + Math.random() * 1.1;
         // Drift state: anchor + an offset target inside a ~1m bubble around it
         h.userData.anchorX = x;
         h.userData.anchorZ = z;

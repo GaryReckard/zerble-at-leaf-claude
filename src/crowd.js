@@ -1293,17 +1293,27 @@ export class Crowd {
       const dz = npc.pos.z - zerble.position.z;
 
       // Scatter pass — only when parked.
-      if (isParked && fwd && npc.state !== 'riding' && npc.state !== 'boarding') {
+      // Boarding NPCs (would-be passengers approaching a seat slot) ALSO
+      // scatter now: a honk should "make them think better of it" rather
+      // than them serenely walking to their seat through the racket. We
+      // release their reserved seat slot first; the per-frame
+      // activePassengers recount on line 477 sees them leave 'boarding'
+      // state on the next frame, so the cap auto-decrements.
+      // 'riding' stays exempt — they're physically tied to the cart;
+      // teleporting them off would look jarring.
+      if (isParked && fwd && npc.state !== 'riding') {
         const d2 = dx * dx + dz * dz;
         const dot = (dx * fwd.x + dz * fwd.z);
-        if (d2 < SCATTER_RANGE_FRONT_SQ && dot > FRONT_CONE_DOT) {
-          // Front-and-sides: full scatter.
+        const inRange =
+          (d2 < SCATTER_RANGE_FRONT_SQ && dot > FRONT_CONE_DOT) ||
+          (d2 < SCATTER_RANGE_BEHIND_SQ);
+        if (inRange) {
+          if (npc.state === 'boarding' && npc.seatSlot) {
+            this._releaseSeat(npc.seatSlot);
+            npc.seatSlot = null;
+          }
           npc.state = 'fleeing';
-          npc.stateTimer = 1.5;
-        } else if (d2 < SCATTER_RANGE_BEHIND_SQ) {
-          // Behind: short flinch.
-          npc.state = 'fleeing';
-          npc.stateTimer = 0.8;
+          npc.stateTimer = d2 < SCATTER_RANGE_FRONT_SQ && dot > FRONT_CONE_DOT ? 1.5 : 0.8;
         }
       }
 

@@ -245,6 +245,7 @@ Touch.install();
 // per-frame `tick(dt)` lives at the bottom of tickBody().
 AdaptiveQuality.install({
   renderer,
+  scene,
   composer,
   bloomPass,
   hud: HUD,

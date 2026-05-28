@@ -41,10 +41,13 @@ const state = {
   goodRun: 0,
   frameTimes: [],
   hooks: null,
+  // List of meshes whose castShadow we turned off when we dropped to the
+  // no-shadows level. Restored on raise. See `_setShadowsOn` below.
+  _castersTurnedOff: null,
 };
 
 export function install(hooks) {
-  // hooks: { renderer, composer, bloomPass, hud, onLevelChange }
+  // hooks: { renderer, scene, composer, bloomPass, hud, onLevelChange }
   state.hooks = hooks;
   // Cache the baseline pixel ratio so we can scale it instead of clobbering.
   state.basePixelRatio = hooks.renderer.getPixelRatio();
@@ -93,15 +96,14 @@ export function tick(dt) {
 function _apply(newLevel, avgMs) {
   const lvl = QUALITY_LEVELS[newLevel];
   state.level = newLevel;
-  const { renderer, composer, bloomPass, hud } = state.hooks;
+  const { renderer, scene, composer, bloomPass, hud } = state.hooks;
 
   // Bloom
   if (bloomPass) {
     bloomPass.enabled = lvl.bloom !== false ? PERF.bloom : false;
   }
   // Shadows
-  renderer.shadowMap.enabled = lvl.shadows !== false ? PERF.shadows : false;
-  renderer.shadowMap.needsUpdate = true;
+  _setShadowsOn(scene, renderer, lvl.shadows !== false && PERF.shadows);
   // Pixel ratio
   const pixMul = lvl.pixelRatioMul ?? 1;
   renderer.setPixelRatio(state.basePixelRatio * pixMul);
@@ -115,6 +117,49 @@ function _apply(newLevel, avgMs) {
     : `perf: full quality (~${fps}fps)`;
   hud?.toast?.(msg, 1800);
   state.hooks.onLevelChange?.(newLevel, lvl);
+}
+
+// Toggle shadows in a way that doesn't leave stale ghost shadows on the
+// ground.
+//
+// The naive approach — `renderer.shadowMap.enabled = false` — stops the
+// shadow map from being re-rendered, but materials compiled with shadow
+// support still SAMPLE the depth texture, which keeps its stale contents.
+// Result: frozen shadows frozen exactly where they last drew, looking
+// like a bug.
+//
+// Instead: leave `shadowMap.enabled` alone and walk every casting mesh,
+// turning off `castShadow` (saving the list for restore). The next
+// shadow-map render is then EMPTY, so every receive-shadow mesh samples
+// a clear depth texture and reads "fully lit" — no stale shadows. Cost
+// is one shadow render with no occluders (cheap) instead of skipping
+// the render entirely; net perf is still much better than full shadows
+// because the per-caster fill cost is gone.
+function _setShadowsOn(scene, renderer, on) {
+  if (on) {
+    // Restore the casters we'd previously turned off. Skip any that were
+    // already nulled out by other systems (defensive).
+    if (state._castersTurnedOff) {
+      for (const m of state._castersTurnedOff) {
+        if (m && !m.castShadow) m.castShadow = true;
+      }
+      state._castersTurnedOff = null;
+    }
+    renderer.shadowMap.enabled = true;
+  } else {
+    // Collect every casting mesh + flip its flag off. Save the list so we
+    // can flip them back on a future raise. Set `shadowMap.needsUpdate`
+    // so the next render writes a clean empty depth texture.
+    const turned = [];
+    scene.traverse((o) => {
+      if (o.isMesh && o.castShadow) {
+        o.castShadow = false;
+        turned.push(o);
+      }
+    });
+    state._castersTurnedOff = turned;
+    renderer.shadowMap.needsUpdate = true;
+  }
 }
 
 export function getLevel() { return state.level; }

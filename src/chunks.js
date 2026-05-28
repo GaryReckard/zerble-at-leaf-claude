@@ -727,66 +727,83 @@ function buildTentStageTheme(ctx) {
     });
   }
 
-  // ----- Outdoor audience in front of the tent (mirrors buildStage) -----
-  // The tent already populates `crowdSpots` inside, but the area outside the
-  // canvas was empty — no audience, no chair clumps. That left tent stages
-  // feeling abandoned compared to open stages. Match the open-stage logic:
-  // a guaranteed outdoor audience fanning out in front, and a chair-band
-  // beyond the dancefloor.
+  // ----- Chair clumps INSIDE the tent -----
   //
-  // All positions are in tent-local (+Z = forward) and rotated through
-  // `worldXZ` so the layout follows the tent's random yaw.
-  const tentHalfD = tent.depth / 2;
-  // Spawn outdoor audience just past the tent's front canvas edge.
-  if (ctx.crowd) {
-    const audienceCount = 14;
-    const arcWidth = tent.width * 1.1;
-    for (let i = 0; i < audienceCount; i++) {
-      // Three rows fanning out from the tent's front.
-      const row = i < audienceCount * 0.4 ? 0 : (i < audienceCount * 0.75 ? 1 : 2);
-      const rowDist = 2 + row * 3.0;
-      const u = (Math.random() - 0.5) * arcWidth;
-      const v = Math.random() * 2.5;
-      const w3 = worldXZ(u, tentHalfD + rowDist + v);
-      ctx.crowd.spawn({
-        pos: new THREE.Vector3(w3.x, 0, w3.z),
-        chunkKey: ctx.key,
-        rng: ctx.rng,
-      });
+  // Layout (tent-local +Z = away from stage = toward sound booth / opening):
+  //   stage deck:    z ≈ tent.stagePos.z ± stageDepth/2
+  //   stage front:   z ≈ stagePos.z + stageDepth/2
+  //   dance area:    front 1/3 of the audience floor (closest to stage,
+  //                  no chairs — people dance here)
+  //   chair band:    back 2/3 of the audience floor, INSIDE the tent
+  //   sound booth:   tent.mixerPos.z (near the tent's front opening)
+  //   tent opening:  z = tent.depth/2
+  //
+  // Chairs face the stage (toward -Z in tent-local), so after the tent's
+  // random `yaw` they face `yaw + π` plus a small per-chair jitter.
+  // Lateral spread stays inside the tent's width.
+  //
+  // Original "outdoor audience" pass that I had here is gone — the tent
+  // already populates `crowdSpots` (18 NPCs inside) + a sound engineer,
+  // so the tent has its own indoor crowd and doesn't need an outdoor
+  // audience fan like open stages do.
+  {
+    const stageFrontZ = tent.stagePos.z + tent.stageDepth / 2;
+    const audBackZ = tent.mixerPos.z - 1.5;       // just in front of the booth
+    const audDepth = audBackZ - stageFrontZ;
+    const danceDepth = audDepth / 3;              // front third = dance
+    const chairBandStart = stageFrontZ + danceDepth;
+    const chairBandEnd = audBackZ;
+    const lateralSpread = tent.width - 5;         // inside tent walls
+    const clumpCount = 4 + Math.floor(ctx.rng() * 2);
+    for (let ci = 0; ci < clumpCount; ci++) {
+      const clumpLocalX = (ctx.rng() - 0.5) * lateralSpread;
+      const clumpLocalZ = chairBandStart + ctx.rng() * (chairBandEnd - chairBandStart);
+      const chairsInClump = 3 + Math.floor(ctx.rng() * 4);
+      for (let chi = 0; chi < chairsInClump; chi++) {
+        const offX = (ctx.rng() - 0.5) * 2.8;
+        const offZ = (ctx.rng() - 0.5) * 2.0;
+        const lx = clumpLocalX + offX;
+        const lz = clumpLocalZ + offZ;
+        const w3 = worldXZ(lx, lz);
+        const chair = buildCampChair(ctx.rng);
+        chair.group.position.set(w3.x, 0, w3.z);
+        // Face the stage: chair-local +Z is "forward"; the stage is at
+        // tent-local -Z, so the chair needs to face tent-local -Z =
+        // world (yaw + π) plus a small jitter.
+        chair.group.rotation.y = yaw + Math.PI + (ctx.rng() - 0.5) * 0.7;
+        ctx.group.add(chair.group);
+        registry.add({
+          kind: 'chair',
+          position: new THREE.Vector3(w3.x, 0, w3.z),
+          footprint: 0.5,
+          chunkKey: ctx.key,
+        });
+      }
     }
-  }
-
-  // Chair clumps in the audience zone — same band/spacing scheme as
-  // buildStage but in tent-local coords. Dancefloor stays chair-free
-  // (band starts `dancefloorDepth` past the tent's front edge).
-  const dancefloorDepth = 7;
-  const chairBandStart = tentHalfD + dancefloorDepth;
-  const chairBandEnd = tentHalfD + dancefloorDepth + 13;
-  const lateralSpread = tent.width * 1.2;
-  const clumpCount = 3 + Math.floor(ctx.rng() * 2);
-  for (let ci = 0; ci < clumpCount; ci++) {
-    const clumpLocalX = (ctx.rng() - 0.5) * lateralSpread;
-    const clumpLocalZ = chairBandStart + ctx.rng() * (chairBandEnd - chairBandStart);
-    const chairsInClump = 3 + Math.floor(ctx.rng() * 4);
-    for (let chi = 0; chi < chairsInClump; chi++) {
-      const offX = (ctx.rng() - 0.5) * 2.8;
-      const offZ = (ctx.rng() - 0.5) * 2.0;
-      const chair = buildCampChair(ctx.rng);
-      const lx = clumpLocalX + offX;
-      const lz = clumpLocalZ + offZ;
-      const w3 = worldXZ(lx, lz);
-      chair.group.position.set(w3.x, 0, w3.z);
-      // Face the tent: chair default faces +Z in chair-local; we want it
-      // facing -Z in tent-local (toward the stage). After yaw rotation
-      // that's `yaw + π` plus a small jitter.
-      chair.group.rotation.y = yaw + Math.PI + (ctx.rng() - 0.5) * 0.7;
-      ctx.group.add(chair.group);
-      registry.add({
-        kind: 'chair',
-        position: new THREE.Vector3(w3.x, 0, w3.z),
-        footprint: 0.5,
-        chunkKey: ctx.key,
-      });
+    // One extra clump BEHIND the sound booth (still under tent canvas) for
+    // variety — captures the "some can be behind the booth, that's fine"
+    // part of the design.
+    if (ctx.rng() < 0.7) {
+      const behindLocalX = (ctx.rng() - 0.5) * (lateralSpread - 4);
+      const behindLocalZ = tent.mixerPos.z + 1.5 + ctx.rng() * 2.0;
+      const chairsInClump = 2 + Math.floor(ctx.rng() * 3);
+      for (let chi = 0; chi < chairsInClump; chi++) {
+        const offX = (ctx.rng() - 0.5) * 2.5;
+        const offZ = (ctx.rng() - 0.5) * 1.5;
+        const lx = behindLocalX + offX;
+        const lz = behindLocalZ + offZ;
+        const w3 = worldXZ(lx, lz);
+        const chair = buildCampChair(ctx.rng);
+        chair.group.position.set(w3.x, 0, w3.z);
+        chair.group.rotation.y = yaw + Math.PI + (ctx.rng() - 0.5) * 0.7;
+        ctx.group.add(chair.group);
+        registry.add({
+          kind: 'chair',
+          position: new THREE.Vector3(w3.x, 0, w3.z),
+          footprint: 0.5,
+          chunkKey: ctx.key,
+        });
+      }
     }
   }
 

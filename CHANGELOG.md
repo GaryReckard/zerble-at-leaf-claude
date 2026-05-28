@@ -4,6 +4,9 @@ All notable changes to Zerble at the Festival. Newest at top. Following [Keep a 
 
 ## 2026-05-28
 
+### Added — Camp-chair clumps in the stage audience
+- **Loose chair clumps in the audience zone, dancefloor stays chair-free.** Every stage (main + side) now spawns 2-5 clumps of 3-6 camp chairs in a band behind the immediate front zone, all loosely facing the stage with per-chair yaw jitter (no soldier-straight rows). Zones in stage-local +Z: dancefloor (no chairs) extends `9 * scale` past the deck edge; chair band from there to `(9 + 14) * scale`; lateral spread `±11 * scale`. Each chair registers a small `chair` footprint so NPCs steer around them. Reuses `buildCampChair` from `campsite.js`.
+
 ### Changed — Honk scatter applies to boarding NPCs
 - **Would-be passengers scatter on honk.** `applyHonk` used to exempt both `riding` and `boarding` from the scatter range — boarding NPCs serenely continued walking to their seat regardless of the racket. Now boarding NPCs scatter too: their reserved seat slot is released, state flips to `fleeing`. The per-frame `activePassengers` recount on the next tick picks up the state change and the cap auto-decrements. `riding` stays exempt (already on the cart; teleporting them off would look jarring).
 

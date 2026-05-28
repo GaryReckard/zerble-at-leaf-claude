@@ -22,7 +22,7 @@ import { PERF } from './perf.js';
 import { register as registerContextLight } from './contextLights.js';
 import { chunkOverlapsLake, chunkInLake, isPointInLake } from './lakes.js';
 import { getForestAt, buildForestChunk, chunkInForest, forestAnimatables, forestDrumCircles, forestDrumMusic } from './forests.js';
-import { buildCampsite } from './models/campsite.js';
+import { buildCampsite, buildCampChair } from './models/campsite.js';
 import { buildTent } from './models/tent.js';
 import { buildFoodTruck, FOOD_TRUCK_SCALE } from './models/foodTruck.js';
 import { buildSugarShack, SUGAR_SHACK_WIDTH, SUGAR_SHACK_DEPTH, sugarShackCooks } from './models/sugarShack.js';
@@ -1136,6 +1136,48 @@ function buildStage(ctx, x, z, isMain) {
         pos: new THREE.Vector3(x + u, 0, frontZ + rowDist + v),
         chunkKey: ctx.key,
         rng: ctx.rng,
+      });
+    }
+  }
+
+  // ----- Camp-chair clumps in the audience zone -----
+  // Festival-goers sit in loose clumps behind the dancefloor — not lined up,
+  // not at the front rail. The front "dancefloor" stays chair-free so people
+  // can dance there. Layout: 3-5 clumps in a band beyond the dancefloor, each
+  // clump 3-6 chairs facing the stage with a bit of rotation jitter so they
+  // don't look soldier-straight.
+  //
+  // Zones (in stage-local +Z = "in front of stage"):
+  //   Dancefloor (no chairs):  z + d/2  to  z + d/2 + dancefloorDepth
+  //   Chair band:              z + d/2 + dancefloorDepth  to  z + d/2 + chairBandEnd
+  //   Lateral spread: ±lateral from stage X axis
+  const dancefloorDepth = 9 * scale;
+  const chairBandStart = d / 2 + dancefloorDepth;
+  const chairBandEnd = d / 2 + dancefloorDepth + 14 * scale;
+  const lateralSpread = 11 * scale;
+  const clumpCount = isMain ? 4 + Math.floor(ctx.rng() * 2) : 2 + Math.floor(ctx.rng() * 2);
+  for (let ci = 0; ci < clumpCount; ci++) {
+    // Clump center — random offset within the audience band.
+    const clumpX = (ctx.rng() - 0.5) * lateralSpread * 2;
+    const clumpZ = chairBandStart + ctx.rng() * (chairBandEnd - chairBandStart);
+    const chairsInClump = 3 + Math.floor(ctx.rng() * 4);
+    for (let chi = 0; chi < chairsInClump; chi++) {
+      // Each chair sits within ~1.4m of the clump center.
+      const chairOffX = (ctx.rng() - 0.5) * 2.8;
+      const chairOffZ = (ctx.rng() - 0.5) * 2.0;
+      const chair = buildCampChair(ctx.rng);
+      chair.position.set(x + clumpX + chairOffX, 0, z + clumpZ + chairOffZ);
+      // Face the stage: stage is at -Z direction in this local frame, but
+      // chair default faces +Z (per buildCampChair), so we rotate π. Then
+      // add a small per-chair yaw jitter so they're not all parallel.
+      chair.rotation.y = Math.PI + (ctx.rng() - 0.5) * 0.7;
+      // Soft footprint so NPCs steer around the chair without big penalties.
+      ctx.group.add(chair);
+      registry.add({
+        kind: 'chair',
+        position: new THREE.Vector3(chair.position.x, 0, chair.position.z),
+        footprint: 0.5,
+        chunkKey: ctx.key,
       });
     }
   }

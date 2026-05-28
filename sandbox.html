@@ -307,9 +307,16 @@ import { buildSugarShack } from './src/models/sugarShack.js';
 
     const scene = new THREE.Scene();
     scene.background = new THREE.Color(0x232040);
-    scene.fog = new THREE.Fog(0x232040, 30, 100);
+    // No fog in the sandbox. Fog made entity inspection harder than it helped
+    // (lakes can span ~200m + the forest ring 35m beyond shore, easily
+    // beyond any sensible near/far pair). TimeOfDay tolerates `scene.fog`
+    // being null — see its `if (this.fog)` guard.
+    scene.fog = null;
 
-    const camera = new THREE.PerspectiveCamera(50, window.innerWidth / window.innerHeight, 0.1, 200);
+    // far=500 (was 200) so the lake entity at cam.dist=220 and player-overview
+    // angles don't clip; a few hundred meters is plenty for everything in the
+    // sandbox without measurably hurting depth precision.
+    const camera = new THREE.PerspectiveCamera(50, window.innerWidth / window.innerHeight, 0.1, 500);
 
     // Lights tuned for clear entity inspection (warm key + cool fill)
     const hemi = new THREE.HemisphereLight(0xb0d8ff, 0xb09060, 0.6);
@@ -684,10 +691,14 @@ import { buildSugarShack } from './src/models/sugarShack.js';
           break;
         }
         case 'big_lake': {
-          // Full lake build (big + small + causeway + island + tree). Uses a
-          // deterministic seed so reload gives the same shape.
+          // Full lake build — irregular elongated outline, sealed collider
+          // ring, optional island, beach, campsite ring on the path side,
+          // forest ring (sparse near, denser far), and 0/1/2 canoes drifting.
+          // Seed picked so this view rolls the FULL treatment (camps + forest);
+          // dial in another via `?entity=big_lake` and edit if you want a
+          // bare-water variant for comparison.
           const lakeGroup = new THREE.Group();
-          buildLake(lakeGroup, 1, 1, mulberry32(0xC0FFEE));
+          buildLake(lakeGroup, 1, 1, mulberry32(0x7));
           // The lake builds with absolute coordinates within a macrocell —
           // recenter the lake group on the sandbox origin so it's visible.
           const box = new THREE.Box3().setFromObject(lakeGroup);

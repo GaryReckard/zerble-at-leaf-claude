@@ -1,19 +1,28 @@
-// Lakes are first-class world features, not chunk content. A lake spans
-// multiple chunks (big body radius 70-100m, small body 25-40m), placed at a
-// deterministic position within a 320m "lake macrocell". They load when the
-// player gets within LOAD_RADIUS and persist until LOAD_RADIUS_UNLOAD — so
-// the player can see them well before they reach them, and they don't pop
-// in/out at chunk boundaries.
+// Lakes are first-class world features, not chunk content. One lake per
+// macrocell — irregular elongated/lobed shape (a small fraction stay circular
+// for variety) — sealed at the perimeter so the cart and NPCs cannot enter
+// the water. The only entities inside a lake are 0/1/2 canoes that drift
+// around its interior.
 //
-// Lakes register their footprints + colliders in the shared registry without
-// a chunkKey (so chunk unload doesn't tear them down), and chunks consult
-// the registry to avoid placing paths/decorations on top of water.
+// On a "treatment" lake (~60%), the lake is wrapped by:
+//   shore (water edge)
+//     ↓ ~6m clear band (the path Zerble drives)
+//   ring of campsites facing the lake
+//     ↓
+//   forest ring (sparse close, denser farther out)
+//
+// Lakes register their bounding-circle footprint + outline-sealed collider
+// ring in the shared registry without a chunkKey (so chunk unload doesn't
+// tear them down). Chunks consult `chunkInLake` / `chunkOverlapsLake` to
+// avoid placing themes/paths on or across water.
 
 import * as THREE from 'three';
+import { Vector3 } from 'three';
 import { registry } from './registry.js';
 import { hash2, mulberry32 } from './rng.js';
 import { buildCanoe } from './models/canoe.js';
 import { buildCampsite } from './models/campsite.js';
+import { buildForestTree } from './models/tree.js';
 
 // Per-frame animatables from lakeside campsites. Each entry:
 //   { lakeKey: string, animatables: [...] }
@@ -25,11 +34,16 @@ const LAKE_DENSITY = 0.45;       // ~45% of macrocells get a lake
 const LOAD_RADIUS = 720;          // build lakes within this distance of the player
 const UNLOAD_RADIUS = 1500;       // tear them down beyond this (rebuilt deterministically on return)
 
+// Edge-collider sphere radius. Matched against cart outer radius (~1.9m) so
+// `cart_edge meets visible water = cart_center at (shoreR - sphereR)`. Pushed
+// INWARD by SPHERE_R along the radial direction when placing.
+const SPHERE_R = 2.2;
+
 const _key = (mcx, mcz) => `${mcx},${mcz}`;
 
 export class LakeManager {
   constructor() {
-    // key -> { center, bigR, smallR, group, registryIds } | null (null = no lake here)
+    // key -> { center, radius, group, registryIds, canoes, lakeKey } | null
     this.lakes = new Map();
   }
 
@@ -44,7 +58,7 @@ export class LakeManager {
       for (let mcz = mczMin; mcz <= mczMax; mcz++) {
         const key = _key(mcx, mcz);
         if (this.lakes.has(key)) continue;
-        // Don't drop a lake on the main stage / LEAF arch.
+        // Don't drop a lake on the main stage at the origin.
         if (mcx === 0 && mcz === 0) {
           this.lakes.set(key, null);
           continue;
@@ -70,58 +84,164 @@ export class LakeManager {
       }
     }
 
-    // Drift canoes on every loaded lake.
+    // Drift canoes on every loaded lake. Each lake has 0/1/2 canoes.
     for (const [, lake] of this.lakes) {
-      if (lake && lake.canoe) updateCanoe(lake.canoe, dt);
+      if (lake && lake.canoes) {
+        for (const c of lake.canoes) updateCanoe(c, dt);
+      }
     }
   }
 }
+
+// ---- Outline generation ----------------------------------------------------
+
+// Build a closed polygon outline for the lake. Returns array of {x, z} points
+// relative to lake center. Most lakes are elongated and irregular; ~15% stay
+// clean circles for variety.
+//
+// Elongation = ellipse (random major axis + rotation).
+// Irregularity = two layered sin perturbations (broad lobes + finer wobble)
+// plus per-vertex micro-jitter.
+function buildLakeOutline(rng, baseR) {
+  const N = 64;
+  const points = [];
+
+  if (rng() < 0.15) {
+    for (let i = 0; i < N; i++) {
+      const a = (i / N) * Math.PI * 2;
+      points.push({ x: Math.cos(a) * baseR, z: Math.sin(a) * baseR });
+    }
+    return points;
+  }
+
+  const a = 1 + rng() * 0.7;          // 1.0-1.7 major axis multiplier
+  const b = 0.55 + rng() * 0.35;      // 0.55-0.90 minor axis multiplier
+  const phi = rng() * Math.PI * 2;    // ellipse rotation
+
+  const lobeFreqA = 2 + Math.floor(rng() * 2);  // 2 or 3 broad lobes
+  const lobeAmpA = 0.06 + rng() * 0.12;
+  const lobePhaseA = rng() * Math.PI * 2;
+  const lobeFreqB = 4 + Math.floor(rng() * 3);  // 4-6 secondary lobes
+  const lobeAmpB = 0.03 + rng() * 0.06;
+  const lobePhaseB = rng() * Math.PI * 2;
+
+  // Per-vertex micro-jitter (±8%) so the outline isn't perfectly smooth.
+  const wobble = [];
+  for (let i = 0; i < N; i++) wobble.push(0.92 + rng() * 0.16);
+
+  for (let i = 0; i < N; i++) {
+    const ang = (i / N) * Math.PI * 2;
+    // Ellipse radius at angle `ang`, axes rotated by `phi`.
+    const ar = ang - phi;
+    const ellR = (a * b) / Math.sqrt(
+      Math.pow(b * Math.cos(ar), 2) + Math.pow(a * Math.sin(ar), 2)
+    );
+    const lobeMul = 1
+      + lobeAmpA * Math.sin(ang * lobeFreqA + lobePhaseA)
+      + lobeAmpB * Math.sin(ang * lobeFreqB + lobePhaseB);
+    const r = baseR * ellR * lobeMul * wobble[i];
+    points.push({ x: Math.cos(ang) * r, z: Math.sin(ang) * r });
+  }
+  return points;
+}
+
+// Compute the outline radius (distance from lake center) at an arbitrary
+// angle by linear-interpolating between the two nearest sample points.
+// Used by shore-attractor placement, beach placement, campsite placement,
+// forest-tree placement, and canoe drift clamping.
+function outlineRAt(outline, angle) {
+  let a = angle;
+  while (a < 0) a += Math.PI * 2;
+  while (a >= Math.PI * 2) a -= Math.PI * 2;
+  const N = outline.length;
+  const idx = (a / (Math.PI * 2)) * N;
+  const i0 = Math.floor(idx) % N;
+  const i1 = (i0 + 1) % N;
+  const t = idx - Math.floor(idx);
+  const p0 = outline[i0];
+  const p1 = outline[i1];
+  const r0 = Math.hypot(p0.x, p0.z);
+  const r1 = Math.hypot(p1.x, p1.z);
+  return r0 + (r1 - r0) * t;
+}
+
+// ---- Sealed perimeter colliders -------------------------------------------
+
+// Walk the closed outline and place overlapping sphere colliders along it
+// at SPHERE_R arc-length intervals — fully sealed, no gaps. Each collider's
+// position is pushed inward by SPHERE_R along the radial direction so the
+// cart's outer edge (≈1.9m) meets the visible water exactly when the cart
+// hits the collider, rather than spheres protruding onto the grass.
+function placeSealedColliders(registryIds, cx, cz, outline) {
+  const N = outline.length;
+  const closed = outline.concat([outline[0]]);
+  const segLen = [];
+  let total = 0;
+  for (let i = 0; i < N; i++) {
+    const dx = closed[i + 1].x - closed[i].x;
+    const dz = closed[i + 1].z - closed[i].z;
+    const L = Math.hypot(dx, dz);
+    segLen.push(L);
+    total += L;
+  }
+  const step = SPHERE_R;
+  const n = Math.max(20, Math.ceil(total / step));
+  for (let i = 0; i < n; i++) {
+    const target = (i / n) * total;
+    let acc = 0;
+    let seg = 0;
+    while (seg < N && acc + segLen[seg] < target) {
+      acc += segLen[seg];
+      seg++;
+    }
+    if (seg >= N) seg = N - 1;
+    const tInSeg = (target - acc) / Math.max(0.001, segLen[seg]);
+    const ax = closed[seg].x + (closed[seg + 1].x - closed[seg].x) * tInSeg;
+    const az = closed[seg].z + (closed[seg + 1].z - closed[seg].z) * tInSeg;
+    // Inward shift along radial direction by SPHERE_R.
+    const r = Math.hypot(ax, az);
+    const inv = Math.max(0.1, (r - SPHERE_R)) / Math.max(0.001, r);
+    const px = cx + ax * inv;
+    const pz = cz + az * inv;
+    registryIds.push(registry.add({
+      kind: 'lake_edge',
+      position: new THREE.Vector3(px, 0.5, pz),
+      footprint: 0,
+      collider: { radius: SPHERE_R, damage: 1 },
+    }));
+  }
+}
+
+// ---- buildLake ------------------------------------------------------------
 
 export function buildLake(scene, mcx, mcz, rng, opts = {}) {
   const cellOriginX = mcx * LAKE_CELL;
   const cellOriginZ = mcz * LAKE_CELL;
 
-  // Lake bodies sized for world-scale impact — the user explicitly asked for
-  // "5 to 10x as big as what you have" (was 22m big / 9m small).
-  const bigR = 70 + rng() * 30;     // 70-100 m
-  const smallR = 25 + rng() * 15;   // 25-40 m
-  const causewayHalfW = 4;          // 8m wide grass road
-  const peninsulaLen = smallR * 0.55;
+  // Lake size: 55-100m base radius. The outline can stretch up to ~1.7× this
+  // along the major axis (ellipse), so total span is up to ~340m on a long lake.
+  const baseR = 55 + rng() * 45;
 
-  // Position the big lake comfortably within the macrocell. Keep some margin
-  // from the macrocell edge so neighbour macrocells' content has room.
-  const margin = bigR + 30;
-  const bigCx = cellOriginX + margin + rng() * (LAKE_CELL - 2 * margin);
-  const bigCz = cellOriginZ + margin + rng() * (LAKE_CELL - 2 * margin);
+  // Build the outline (irregular polygon).
+  const outline = buildLakeOutline(rng, baseR);
 
-  // Small lake to the north-east of big lake, distance ~bigR + smallR + 30m.
-  const sepAngle = (rng() * 0.6 - 0.3) + Math.PI / 4;  // roughly NE, slight jitter
-  const sep = bigR + smallR + 25 + rng() * 15;
-  const smallCx = bigCx + Math.cos(sepAngle) * sep;
-  const smallCz = bigCz + Math.sin(sepAngle) * sep;
+  // Bounding circle for external chunk-overlap tests, and inscribed circle
+  // (used to size islands so they stay clear of every shore).
+  let maxR = 0;
+  let minR = Infinity;
+  for (const p of outline) {
+    const r = Math.hypot(p.x, p.z);
+    if (r > maxR) maxR = r;
+    if (r < minR) minR = r;
+  }
 
-  // Causeway runs along the line between the two lake centers, perpendicular
-  // to the sep axis is the strip width direction.
-  const dirX = (smallCx - bigCx) / sep;
-  const dirZ = (smallCz - bigCz) / sep;
-  // Causeway midpoint
-  const causewayMidX = (bigCx + smallCx) / 2;
-  const causewayMidZ = (bigCz + smallCz) / 2;
-  // Causeway spans ONLY the gap between the two lakes' edges, with a small
-  // overlap on each side so the cart transitions cleanly between grass and
-  // shore. Previously this was `sep + bigR + smallR + 40` which extended the
-  // road all the way through both lakes — a long grass road cutting across
-  // open water. Gary asked to remove that.
-  const gapLen = sep - bigR - smallR;
-  const causewayLen = Math.max(2, gapLen) + 12;
-  const causewayAngle = Math.atan2(dirZ, dirX);
+  // Position the lake inside the macrocell with `margin` clearance. The
+  // bounding radius drives this so neighbour macrocells have room.
+  const margin = maxR + 30;
+  const cx = cellOriginX + margin + rng() * (LAKE_CELL - 2 * margin);
+  const cz = cellOriginZ + margin + rng() * (LAKE_CELL - 2 * margin);
 
   // ---- Materials ----
-  // Water no longer uses polygonOffset — that was a leftover from the bumpy-
-  // ground era and was pushing water fragments toward the camera, causing the
-  // causeway/peninsula to z-fight on top of it. With a flat ground and the
-  // causeway lifted above water (y=0.18 vs water y=0.08), the water just
-  // needs depthWrite=false so transparent blending behaves.
   const waterMat = new THREE.MeshStandardMaterial({
     color: 0x4d96d6,
     emissive: 0x1a3550,
@@ -142,276 +262,253 @@ export function buildLake(scene, mcx, mcz, rng, opts = {}) {
   const group = new THREE.Group();
   group.name = `lake(${mcx},${mcz})`;
 
-  // ---- Big lake water ----
-  const bigWater = new THREE.Mesh(new THREE.CircleGeometry(bigR, 64), waterMat);
-  bigWater.rotation.x = -Math.PI / 2;
-  bigWater.position.set(bigCx, 0.08, bigCz);
-  bigWater.receiveShadow = true;
-  bigWater.renderOrder = 0;
-  group.add(bigWater);
+  // ---- Water surface — ShapeGeometry from outline ----
+  // ShapeGeometry's triangulated polygon naturally handles concave/lobed
+  // outlines (unlike CircleGeometry which only does round discs).
+  const shape = new THREE.Shape();
+  shape.moveTo(outline[0].x, outline[0].z);
+  for (let i = 1; i < outline.length; i++) shape.lineTo(outline[i].x, outline[i].z);
+  shape.lineTo(outline[0].x, outline[0].z);
+  const waterGeo = new THREE.ShapeGeometry(shape);
+  const water = new THREE.Mesh(waterGeo, waterMat);
+  water.rotation.x = -Math.PI / 2;
+  water.position.set(cx, 0.08, cz);
+  water.receiveShadow = true;
+  water.renderOrder = 0;
+  group.add(water);
 
-  // ---- Small lake water ----
-  const smallWater = new THREE.Mesh(new THREE.CircleGeometry(smallR, 40), waterMat);
-  smallWater.rotation.x = -Math.PI / 2;
-  smallWater.position.set(smallCx, 0.08, smallCz);
-  smallWater.receiveShadow = true;
-  smallWater.renderOrder = 0;
-  group.add(smallWater);
+  // ---- Island (35% chance, max one per lake) ----
+  let islandSpec = null;
+  if (rng() < 0.35) {
+    const islR = 4 + rng() * 4;
+    // Anchor inside the inscribed radius so the island doesn't punch out of
+    // the irregular outline on any side.
+    const ang = rng() * Math.PI * 2;
+    const dist = Math.max(0, (minR - islR - 4)) * rng() * 0.7;
+    const ix = cx + Math.cos(ang) * dist;
+    const iz = cz + Math.sin(ang) * dist;
 
-  // ---- Island in big lake ----
-  const islandR = 5 + rng() * 3;       // 5-8 m
-  const islandOff = bigR * 0.25 * (rng() - 0.5);
-  // Slightly offset from center, perpendicular to sep axis
-  const islandX = bigCx - dirZ * islandOff;
-  const islandZ = bigCz + dirX * islandOff;
-  const island = new THREE.Mesh(new THREE.CircleGeometry(islandR, 24), grassMat);
-  island.rotation.x = -Math.PI / 2;
-  island.position.set(islandX, 0.16, islandZ);
-  island.receiveShadow = true;
-  island.renderOrder = 1;
-  group.add(island);
+    const island = new THREE.Mesh(new THREE.CircleGeometry(islR, 24), grassMat);
+    island.rotation.x = -Math.PI / 2;
+    island.position.set(ix, 0.16, iz);
+    island.receiveShadow = true;
+    island.renderOrder = 1;
+    group.add(island);
+    islandSpec = { x: ix, z: iz, r: islR };
 
-  // Tree on the island, scaled to lake scale
-  const trunkMat = new THREE.MeshStandardMaterial({ color: 0x6a4a2a, roughness: 0.95, flatShading: true });
-  const leafMat = new THREE.MeshStandardMaterial({ color: 0x5fa55d, roughness: 0.95, flatShading: true });
-  const trunkH = 4 + rng() * 1.5;
-  const trunk = new THREE.Mesh(new THREE.CylinderGeometry(0.4, 0.55, trunkH, 8), trunkMat);
-  trunk.position.set(islandX, trunkH / 2, islandZ);
-  trunk.castShadow = true;
-  group.add(trunk);
-  const leafR = 2.2 + rng() * 0.6;
-  const leaf = new THREE.Mesh(new THREE.IcosahedronGeometry(leafR, 1), leafMat);
-  leaf.position.set(islandX, trunkH + leafR * 0.5, islandZ);
-  leaf.castShadow = true;
-  group.add(leaf);
+    // 0/1/2 trees on the island. Most have 1-2 — empty islands are rare but fine.
+    const treeRoll = rng();
+    const treeCount = treeRoll < 0.18 ? 0 : (treeRoll < 0.62 ? 1 : 2);
+    for (let t = 0; t < treeCount; t++) {
+      const tAng = rng() * Math.PI * 2;
+      const tDist = rng() * (islR - 1.2);
+      const tx = ix + Math.cos(tAng) * tDist;
+      const tz = iz + Math.sin(tAng) * tDist;
+      const tree = buildForestTree(rng);
+      tree.position.set(tx, 0, tz);
+      const s = 0.85 + rng() * 0.30;
+      tree.scale.set(s, s, s);
+      group.add(tree);
+      // No collider needed — island is unreachable; only the canoe could come
+      // near, and canoes stay 4m off shore via the outline-based clamp.
+    }
+  }
 
-  // ---- Causeway: grass strip running along the sep axis through both lakes ----
-  const causeway = new THREE.Mesh(
-    new THREE.PlaneGeometry(causewayLen, causewayHalfW * 2),
-    grassMat,
-  );
-  causeway.rotation.x = -Math.PI / 2;
-  causeway.rotation.z = -causewayAngle;
-  // y=0.18 puts the causeway comfortably above the water (y=0.08) so there's
-  // no z-fight where the strip crosses the lake.
-  causeway.position.set(causewayMidX, 0.18, causewayMidZ);
-  causeway.receiveShadow = true;
-  causeway.renderOrder = 1;
-  group.add(causeway);
-
-  // Every large lake gets a small sand beach on its shore. Beach radius is
-  // sized to cover roughly 5% of the lake's shoreline arc — for a typical
-  // 70-100m lake that's a ~10-15m wide beach. Center sits slightly OUTSIDE
-  // the lake circle (1.05× lake radius) so 2/3 of the sand lays on dry grass
-  // and 1/3 peeks into the shallow water. Doubles as a people attractor —
-  // NPCs hang out at the beach. y=0.15 puts the sand above water (y=0.08) so
-  // the wet end shows through clearly.
+  // ---- Beach (60% chance, or forced via opts.forceBeach) ----
   let beachSpec = null;
-  {
+  if (opts.forceBeach || rng() < 0.6) {
     const sandMat = new THREE.MeshStandardMaterial({
       color: 0xd9b878,
       roughness: 1.0,
       flatShading: true,
     });
-    // For 5% of shore arc ≈ 0.314·R chord, a circular beach centered on the
-    // shore needs radius ~0.16·R (chord across a small tangent disc ≈ 2r).
-    const sandRadius = bigR * 0.16;
-    const sandAngle = rng() * Math.PI * 2;
-    const sandX = bigCx + Math.cos(sandAngle) * (bigR * 1.05);
-    const sandZ = bigCz + Math.sin(sandAngle) * (bigR * 1.05);
-    const sandMesh = new THREE.Mesh(new THREE.CircleGeometry(sandRadius, 14), sandMat);
+    const beachAng = rng() * Math.PI * 2;
+    const shoreR = outlineRAt(outline, beachAng);
+    const sandR = baseR * 0.16;
+    // Center sand straddling the shore (60% on grass, 40% peeking into water).
+    const bX = cx + Math.cos(beachAng) * (shoreR + sandR * 0.2);
+    const bZ = cz + Math.sin(beachAng) * (shoreR + sandR * 0.2);
+    const sandMesh = new THREE.Mesh(new THREE.CircleGeometry(sandR, 16), sandMat);
     sandMesh.rotation.x = -Math.PI / 2;
-    sandMesh.position.set(sandX, 0.15, sandZ);
-    sandMesh.castShadow = false;
+    sandMesh.position.set(bX, 0.15, bZ);
     sandMesh.receiveShadow = true;
-    sandMesh.renderOrder = 2;        // above water (0) and grass island (1)
+    sandMesh.renderOrder = 2;
     group.add(sandMesh);
-    beachSpec = { x: sandX, z: sandZ, radius: sandRadius };
+    beachSpec = { x: bX, z: bZ, r: sandR };
   }
-
-  // ---- Peninsula in small lake: a finger jutting into the small lake from
-  // the OPPOSITE side of where the causeway enters. ----
-  const peninsulaAngle = causewayAngle + Math.PI;  // 180° from causeway entry
-  const pCx = smallCx + Math.cos(peninsulaAngle) * peninsulaLen * 0.5;
-  const pCz = smallCz + Math.sin(peninsulaAngle) * peninsulaLen * 0.5;
-  const peninsula = new THREE.Mesh(
-    new THREE.PlaneGeometry(peninsulaLen, 4),
-    grassMat,
-  );
-  peninsula.rotation.x = -Math.PI / 2;
-  peninsula.rotation.z = -peninsulaAngle;
-  peninsula.position.set(pCx, 0.20, pCz);
-  peninsula.receiveShadow = true;
-  peninsula.renderOrder = 1;
-  group.add(peninsula);
 
   scene.add(group);
 
-  // ---- Registry: footprints (NPC + tree avoidance) ----
+  // ---- Registry ----
+  // Single bounding-circle `lake` footprint for chunk/lake checks.
   const registryIds = [];
   registryIds.push(registry.add({
     kind: 'lake',
-    position: new THREE.Vector3(bigCx, 0, bigCz),
-    footprint: bigR,
-  }));
-  registryIds.push(registry.add({
-    kind: 'lake',
-    position: new THREE.Vector3(smallCx, 0, smallCz),
-    footprint: smallR,
+    position: new THREE.Vector3(cx, 0, cz),
+    footprint: maxR,
   }));
 
-  // ---- Edge colliders: ring around each lake's perimeter ----
-  addLakeRingColliders(registryIds, bigCx, bigCz, bigR, causewayAngle, causewayHalfW, null);
-  addLakeRingColliders(registryIds, smallCx, smallCz, smallR, causewayAngle + Math.PI, causewayHalfW, peninsulaAngle);
+  // Sealed collider ring — no gaps for causeways or paths. The cart cannot
+  // drive into a lake; only canoes (already inside) live on water.
+  placeSealedColliders(registryIds, cx, cz, outline);
 
-  // Island: footprint for NPC avoidance but NO collider — Zerble can drive across.
-  registryIds.push(registry.add({
-    kind: 'island',
-    position: new THREE.Vector3(islandX, 0.5, islandZ),
-    footprint: islandR,
-  }));
-  // The tree on the island KEEPS its collider — driving into it still hurts.
-  registryIds.push(registry.add({
-    kind: 'lake_tree',
-    position: new THREE.Vector3(islandX, 0, islandZ),
-    footprint: 0.8,
-    collider: { radius: 0.9, damage: 2 },
-  }));
-
-  // Beach attractor: NPCs hang out on the sandy beach when one exists.
+  // Beach attractor — NPCs hang out on the sand.
   if (beachSpec) {
     registryIds.push(registry.add({
       kind: 'beach',
       position: new THREE.Vector3(beachSpec.x, 0, beachSpec.z),
       footprint: 0,
-      attractor: { radius: beachSpec.radius * 0.9, weight: 2.4 },
+      attractor: { radius: beachSpec.r * 0.9, weight: 2.4 },
     }));
   }
 
-  // Shore attractors: NPCs like hanging out at the shoreline. Sample 3-4 points
-  // around the big lake's perimeter and one on the peninsula tip.
+  // Shore attractors — NPCs gravitate to the shoreline.
   const shoreSamples = 4;
   for (let i = 0; i < shoreSamples; i++) {
-    const a = (i / shoreSamples) * Math.PI * 2 + rng() * 0.3;
-    const r = bigR + 5;
+    const ang = (i / shoreSamples) * Math.PI * 2 + rng() * 0.3;
+    const sR = outlineRAt(outline, ang);
     registryIds.push(registry.add({
       kind: 'shore',
-      position: new THREE.Vector3(bigCx + Math.cos(a) * r, 0, bigCz + Math.sin(a) * r),
+      position: new THREE.Vector3(cx + Math.cos(ang) * (sR + 5), 0, cz + Math.sin(ang) * (sR + 5)),
       footprint: 0,
       attractor: { radius: 8, weight: 1.8 },
     }));
   }
-  registryIds.push(registry.add({
-    kind: 'shore',
-    position: new THREE.Vector3(pCx + Math.cos(peninsulaAngle) * peninsulaLen * 0.3, 0, pCz + Math.sin(peninsulaAngle) * peninsulaLen * 0.3),
-    footprint: 0,
-    attractor: { radius: 6, weight: 1.6 },
-  }));
 
-  // ---- Lakeside campsites ----
-  // Roughly half of lakes get 1-2 campsites pitched on the grass just outside
-  // the big lake's shoreline. Sites are placed deterministically — same seed
-  // means same camps. We avoid the causeway angle so tents don't clip the
-  // grass road, and pick distinct angles so two camps don't pile up.
+  // ---- Campsites + forest ring (60% of lakes get the full treatment) ----
   const lakeKey = _key(mcx, mcz);
-  const lakeAnimatableEntries = [];
-  if (rng() < 0.55) {
-    const campCount = 1 + Math.floor(rng() * 2);  // 1 or 2
+  const lakeAnimEntries = [];
+  if (rng() < 0.60) {
+    // 4-9 campsites, deterministic angles via attempt-with-rejection so
+    // no two camps pile up.
+    const campCount = 4 + Math.floor(rng() * 6);
     const usedAngles = [];
-    // Causeway runs along ±causewayAngle; reserve a wedge around both ends.
-    const causewayBlockHalfArc = Math.PI / 5;  // ±36° each end
+    const camps = [];
     for (let i = 0; i < campCount; i++) {
-      // Try up to 6 angles to find one clear of the causeway and prior camps
       let theta = null;
-      for (let attempt = 0; attempt < 6; attempt++) {
+      for (let attempt = 0; attempt < 10; attempt++) {
         const t = rng() * Math.PI * 2;
-        // Reject if within causeway wedge (either end)
-        const dA = Math.min(angDiff(t, causewayAngle), angDiff(t, causewayAngle + Math.PI));
-        if (dA < causewayBlockHalfArc) continue;
-        // Reject if too close to a previously placed camp
-        const tooClose = usedAngles.some((u) => angDiff(t, u) < 0.6);
-        if (tooClose) continue;
-        theta = t;
-        break;
+        if (usedAngles.every((u) => angDiff(t, u) >= 0.45)) { theta = t; break; }
       }
       if (theta == null) continue;
       usedAngles.push(theta);
 
-      // Position: just outside the lake on the grass. Lakes don't have an
-      // explicit "shore grass" radius, but the lake-edge collider ring sits
-      // at the lake radius, so dropping the camp at lakeR + 8m clears the
-      // colliders and leaves a few metres of buffer before the camp itself.
-      // Per-camp deterministic rng so two camps on the same lake look different
-      const campSeed = hash2(mcx * 211 + 17, mcz * 313 + i * 59);
-      const camp = buildCampsite(mulberry32(campSeed), 'small');
-      const r = bigR + camp.footprint + 4;
-      const cx = bigCx + Math.cos(theta) * r;
-      const cz = bigCz + Math.sin(theta) * r;
-      camp.group.position.set(cx, 0, cz);
-      // Face the lake — tents/EZ-up "open side" toward water
-      camp.group.rotation.y = Math.atan2(bigCz - cz, bigCx - cx);
+      const campSeed = hash2(mcx * 211 + 17 + i, mcz * 313 + i * 59);
+      const size = rng() < 0.4 ? 'small' : 'medium';
+      const camp = buildCampsite(mulberry32(campSeed), size);
+
+      // Place the camp at (shoreR + 6 + footprint) so there's a ~6m clear
+      // grass path between water and the camp — that's the band Zerble
+      // drives along.
+      const shoreR = outlineRAt(outline, theta);
+      const r = shoreR + 6 + camp.footprint;
+      const camX = cx + Math.cos(theta) * r;
+      const camZ = cz + Math.sin(theta) * r;
+      camp.group.position.set(camX, 0, camZ);
+      camp.group.rotation.y = Math.atan2(cz - camZ, cx - camX);  // face the lake
       group.add(camp.group);
+      lakeAnimEntries.push(camp.animatables);
+      camps.push({ x: camX, z: camZ, r: camp.footprint });
 
-      lakeAnimatableEntries.push(camp.animatables);
-
-      // Register a campsite attractor so any shore-bound NPCs gravitate
-      // toward the gathering. Small radius — we don't want crowd-pulling
-      // halfway across the festival.
       registryIds.push(registry.add({
         kind: 'campsite',
-        position: new THREE.Vector3(cx, 0, cz),
+        position: new THREE.Vector3(camX, 0, camZ),
         footprint: camp.footprint,
         attractor: { radius: 6, weight: 1.4 },
       }));
     }
 
-    if (lakeAnimatableEntries.length > 0) {
-      // Flatten so the updater walks one list per lake (not per-camp).
-      const flat = lakeAnimatableEntries.flat();
+    // Forest ring around the lake — sparse near the camps, denser further out.
+    // We sample N candidate positions in the shore-band (14-39m beyond shore);
+    // each candidate uses rng()^0.6 to bias the radial distance toward "far"
+    // so density visibly increases with distance. Candidates within camp
+    // footprint + 2.5m are rejected so camps stay clear.
+    const TREE_TARGET = 90 + Math.floor(rng() * 50);
+    let placed = 0;
+    let attempts = 0;
+    while (placed < TREE_TARGET && attempts < TREE_TARGET * 4) {
+      attempts++;
+      const ang = rng() * Math.PI * 2;
+      const sR = outlineRAt(outline, ang);
+      const radialT = Math.pow(rng(), 0.6);
+      const dRadial = 14 + radialT * 25;
+      const treeX = cx + Math.cos(ang) * (sR + dRadial);
+      const treeZ = cz + Math.sin(ang) * (sR + dRadial);
+
+      let closeToCamp = false;
+      for (const c of camps) {
+        if (Math.hypot(c.x - treeX, c.z - treeZ) < c.r + 2.5) { closeToCamp = true; break; }
+      }
+      if (closeToCamp) continue;
+
+      const tree = buildForestTree(rng);
+      tree.position.set(treeX, 0, treeZ);
+      const s = 0.85 + rng() * 0.35;
+      tree.scale.set(s, s, s);
+      group.add(tree);
+
+      // `forest_tree` collider — same kind as forests.js trees, so hitting one
+      // hurts the same way and panics nearby NPCs. No chunkKey so the tree
+      // survives chunk unload (it's bound to the lake's lifecycle).
+      registryIds.push(registry.add({
+        kind: 'forest_tree',
+        position: new THREE.Vector3(treeX, 0, treeZ),
+        footprint: 1.0,
+        collider: { radius: 1.0 * s, damage: 2 },
+      }));
+      placed++;
+    }
+
+    if (lakeAnimEntries.length > 0) {
       lakeAnimatables.push({
         lakeKey,
-        animatables: flat,
-        // Use macrocell center as a coarse position for distance gating in
-        // main.js — fine for "is this lakeside campsite worth ticking?".
+        animatables: lakeAnimEntries.flat(),
         centerX: (mcx + 0.5) * LAKE_CELL,
         centerZ: (mcz + 0.5) * LAKE_CELL,
       });
     }
   }
 
-  // ---- Canoe with paddler(s) drifting around the big lake ----
-  const canoe = createLakeCanoe(group, bigCx, bigCz, bigR, rng);
+  // ---- Canoes: 0/1/2 per lake. 30% / 50% / 20% distribution.
+  const canoes = [];
+  const canoeRoll = rng();
+  const canoeCount = canoeRoll < 0.30 ? 0 : (canoeRoll < 0.80 ? 1 : 2);
+  for (let i = 0; i < canoeCount; i++) {
+    canoes.push(createLakeCanoe(group, cx, cz, outline, rng));
+  }
 
   return {
-    center: new THREE.Vector3(bigCx, 0, bigCz),
-    bigR,
-    smallR,
+    center: new THREE.Vector3(cx, 0, cz),
+    radius: maxR,
     group,
     registryIds,
-    canoe,
+    canoes,
     lakeKey,
+    outline,
   };
 }
 
 // ---- Canoe ----------------------------------------------------------------
 
-function createLakeCanoe(parentGroup, lakeCx, lakeCz, lakeR, rng) {
+function createLakeCanoe(parentGroup, lakeCx, lakeCz, outline, rng) {
   const canoeGroup = new THREE.Group();
   canoeGroup.name = 'canoe';
   buildCanoe(canoeGroup, rng);
-  // Start at a random point well inside the lake.
+  // Start well inside the lake (40% of shore radius at a random angle).
   const ang = rng() * Math.PI * 2;
-  const r = lakeR * 0.4;
+  const shoreR = outlineRAt(outline, ang);
+  const r = shoreR * 0.4;
   canoeGroup.position.set(lakeCx + Math.cos(ang) * r, 0, lakeCz + Math.sin(ang) * r);
   canoeGroup.rotation.y = rng() * Math.PI * 2;
   parentGroup.add(canoeGroup);
 
   return {
     group: canoeGroup,
-    lakeCx, lakeCz,
-    safeR: lakeR * 0.78,           // stay inside this radius (off the shore)
+    lakeCx,
+    lakeCz,
+    outline,
     heading: canoeGroup.rotation.y,
-    speed: 0.7 + rng() * 0.5,
+    speed: 0.6 + rng() * 0.5,
     targetX: lakeCx,
     targetZ: lakeCz,
     timer: 0,
@@ -421,10 +518,13 @@ function createLakeCanoe(parentGroup, lakeCx, lakeCz, lakeR, rng) {
 
 function updateCanoe(canoe, dt) {
   canoe.timer -= dt;
-  // Pick a new target inside the lake's safe radius every 6-14s.
   if (canoe.timer <= 0) {
+    // Pick a new target inside the lake using the outline's angle-specific
+    // shore radius so canoes can explore elongated lakes (not just orbit the
+    // center).
     const ang = Math.random() * Math.PI * 2;
-    const r = Math.random() * canoe.safeR * 0.85;
+    const sR = outlineRAt(canoe.outline, ang);
+    const r = Math.random() * sR * 0.7;
     canoe.targetX = canoe.lakeCx + Math.cos(ang) * r;
     canoe.targetZ = canoe.lakeCz + Math.sin(ang) * r;
     canoe.timer = 6 + Math.random() * 8;
@@ -435,35 +535,38 @@ function updateCanoe(canoe, dt) {
   const dz = canoe.targetZ - canoe.group.position.z;
   const dist = Math.hypot(dx, dz);
   if (dist > 0.5) {
-    // Convention: canoe modeled with long axis along +Z. heading rotates around Y.
-    // We want forward direction = (sin(h), 0, cos(h)) (rotating +Z by Y rotation h
-    // gives (sin h, 0, cos h)). To face toward (dx, dz), heading = atan2(dx, dz).
+    // Canoe long axis is +Z; heading = atan2(dx, dz) faces the (dx,dz) vector.
     const targetHeading = Math.atan2(dx, dz);
     let diff = targetHeading - canoe.heading;
     while (diff > Math.PI) diff -= Math.PI * 2;
     while (diff < -Math.PI) diff += Math.PI * 2;
     canoe.heading += Math.sign(diff) * Math.min(Math.abs(diff), 0.7 * dt);
 
-    // Move forward in current heading direction.
     canoe.group.position.x += Math.sin(canoe.heading) * canoe.speed * dt;
     canoe.group.position.z += Math.cos(canoe.heading) * canoe.speed * dt;
   }
 
-  // Hard clamp inside the lake — if drift pushes the canoe past safeR, pull it back.
+  // Hard clamp against the outline-shaped safe zone (4m off the shore at the
+  // canoe's current angle). Replaces the old hardcoded `safeR = lakeR * 0.78`,
+  // which couldn't follow an irregular shape.
   const ox = canoe.group.position.x - canoe.lakeCx;
   const oz = canoe.group.position.z - canoe.lakeCz;
   const distFromCenter = Math.hypot(ox, oz);
-  if (distFromCenter > canoe.safeR) {
-    const inv = canoe.safeR / distFromCenter;
-    canoe.group.position.x = canoe.lakeCx + ox * inv;
-    canoe.group.position.z = canoe.lakeCz + oz * inv;
-    // Pick a new target back toward center
-    canoe.targetX = canoe.lakeCx;
-    canoe.targetZ = canoe.lakeCz;
-    canoe.timer = 4 + Math.random() * 3;
+  if (distFromCenter > 0.001) {
+    const canoeAng = Math.atan2(oz, ox);
+    const sR = outlineRAt(canoe.outline, canoeAng);
+    const safeR = Math.max(2, sR - 4);
+    if (distFromCenter > safeR) {
+      const inv = safeR / distFromCenter;
+      canoe.group.position.x = canoe.lakeCx + ox * inv;
+      canoe.group.position.z = canoe.lakeCz + oz * inv;
+      canoe.targetX = canoe.lakeCx;
+      canoe.targetZ = canoe.lakeCz;
+      canoe.timer = 4 + Math.random() * 3;
+    }
   }
 
-  // Gentle bob + sway for "floating on water" feel.
+  // Gentle bob + sway.
   canoe.bobPhase += dt * 1.3;
   canoe.group.position.y = 0.04 + Math.sin(canoe.bobPhase) * 0.04;
   canoe.group.rotation.y = canoe.heading;
@@ -471,49 +574,12 @@ function updateCanoe(canoe, dt) {
   canoe.group.rotation.z = Math.cos(canoe.bobPhase * 0.5) * 0.04;
 }
 
-// Sandbox helper — same builder, with a sensible default rng.
+// Sandbox helper — same builder, sensible-default rng.
 export function _buildCanoeMeshForSandbox(group, rng = Math.random) {
   buildCanoe(group, rng);
 }
 
-// Ring of overlapping sphere colliders around a lake. The cart's outer radius
-// (1.9m) + sphereR(2.2) means cart_edge meets the visible water exactly when
-// ringR = lakeR - sphereR. step = sphereR gives full overlap so the cart
-// can't tunnel between spheres.
-function addLakeRingColliders(registryIds, lcx, lcz, lakeR, causewayAngle, causewayHalfW, peninsulaAngle) {
-  const sphereR = 2.2;
-  const ringR = Math.max(2, lakeR - sphereR);
-  const circumference = 2 * Math.PI * ringR;
-  const step = sphereR;
-  const n = Math.max(20, Math.ceil(circumference / step));
-
-  // Causeway crosses the lake along causewayAngle. Compute the angular gap on
-  // the ring as the half-width / ringR (small-angle ok since causewayHalfW << ringR).
-  const causewayHalfArc = Math.atan2(causewayHalfW + 1.0, ringR);
-
-  for (let i = 0; i < n; i++) {
-    const ang = (i / n) * Math.PI * 2;
-
-    // Skip both ends of the causeway axis (entry and exit) so the cart can drive through.
-    const dCauseway = Math.min(
-      angDiff(ang, causewayAngle),
-      angDiff(ang, causewayAngle + Math.PI),
-    );
-    if (dCauseway < causewayHalfArc) continue;
-
-    // Skip peninsula attachment if applicable
-    if (peninsulaAngle != null && angDiff(ang, peninsulaAngle) < 0.20) continue;
-
-    const px = lcx + Math.cos(ang) * ringR;
-    const pz = lcz + Math.sin(ang) * ringR;
-    registryIds.push(registry.add({
-      kind: 'lake_edge',
-      position: new THREE.Vector3(px, 0.5, pz),
-      footprint: 0,
-      collider: { radius: sphereR, damage: 1 },
-    }));
-  }
-}
+// ---- Utility -------------------------------------------------------------
 
 function angDiff(a, b) {
   let d = a - b;
@@ -537,7 +603,6 @@ function destroyLake(scene, lake) {
   });
   scene.remove(lake.group);
   for (const id of lake.registryIds) registry.remove(id);
-  // Sweep lakeside campsite animatables tagged with this lake's key.
   if (lake.lakeKey) {
     for (let i = lakeAnimatables.length - 1; i >= 0; i--) {
       if (lakeAnimatables[i].lakeKey === lake.lakeKey) {
@@ -548,7 +613,9 @@ function destroyLake(scene, lake) {
 }
 
 // Helper for chunks.js to know whether a chunk should skip its standard paths
-// because a lake passes through it.
+// because a lake passes through it. Uses the bounding-circle footprint
+// registered by buildLake (kind: 'lake') — a slight over-approximation that
+// suppresses a few grass-only chunks near the lake's bounding box. Acceptable.
 export function chunkOverlapsLake(cxWorld, czWorld, halfChunk) {
   for (const e of registry.entries.values()) {
     if (e.kind !== 'lake' || !e.footprint) continue;
@@ -560,8 +627,7 @@ export function chunkOverlapsLake(cxWorld, czWorld, halfChunk) {
 }
 
 // Stricter check: is the chunk CENTER itself inside a lake footprint? Used to
-// suppress theme builders that would place a stage / food truck / drum
-// circle in the middle of the water.
+// suppress theme builders (stage / food truck / drum circle) on water.
 export function chunkInLake(cxWorld, czWorld) {
   for (const e of registry.entries.values()) {
     if (e.kind !== 'lake' || !e.footprint) continue;
@@ -572,11 +638,9 @@ export function chunkInLake(cxWorld, czWorld) {
   return false;
 }
 
-// If (x, z) is inside any lake's footprint, return the projected point on
-// the shoreline (just outside the radius by `margin`). Otherwise null.
-// Used by moving entities (brass band, puppet parade) to keep their paths
-// from walking on water.
-import { Vector3 } from 'three';
+// If (x, z) is inside any lake's footprint, project to the shoreline (just
+// outside the bounding circle by `margin`). Used by moving entities (brass
+// band, puppet parade) to keep their paths off water.
 export function projectOutOfLake(x, z, margin = 2.5) {
   for (const e of registry.entries.values()) {
     if (e.kind !== 'lake' || !e.footprint) continue;
@@ -584,8 +648,6 @@ export function projectOutOfLake(x, z, margin = 2.5) {
     const dz = z - e.position.z;
     const d = Math.hypot(dx, dz);
     if (d < e.footprint) {
-      // Push outward along the radial; if the point is exactly at the
-      // center pick an arbitrary axis so we don't divide by zero.
       const inv = d > 0.01 ? 1 / d : 1;
       const target = e.footprint + margin;
       return new Vector3(

@@ -50,9 +50,9 @@
       const isLocal = h === 'localhost' || h === '127.0.0.1' || h === '0.0.0.0' ||
         h.endsWith('.local') || /^10\./.test(h) || /^192\.168\./.test(h);
       const v = isLocal ? '?v=' + Date.now() : '';
-      const mods = ['zerble','lurleen','bubbles','smiles','registry','rng','perf','sound','chunks','crowd','lakes','debug','timeOfDay'];
-      const models = ['canoe','hammock','tent','tentStage','foodTruck','tree','heart','stage','performer',
-        'entranceArch','leafBanner','puppet','bandMember','parasolMarshal','kid','wook'];
+      const mods = ['zerble','lurleen','bubbles','smiles','registry','rng','perf','sound','chunks','crowd','lakes','debug','timeOfDay','trip','midiPlayer'];
+      const models = ['canoe','hammock','tent','tentStage','foodTruck','sugarShack','tree','heart','stage','performer',
+        'entranceArch','leafBanner','puppet','bandMember','parasolMarshal','kid','wook','hulaHooper','frisbeePlayer'];
       const base = new URL('./src/', document.baseURI).href;
       const imports = {
         'three': 'https://unpkg.com/three@0.160.0/build/three.module.js',
@@ -200,6 +200,51 @@
       </div>
       <button id="hit-it-btn" style="margin-top:4px;width:100%;display:none;background:rgba(255,100,100,0.20);color:#fdd;border:1px solid rgba(255,100,100,0.45);border-radius:3px;padding:4px;cursor:pointer;font:inherit">Hit it</button>
     </div>
+
+    <!-- Music + MIDI panel: trigger any stage-music style or the MIDI player
+         manually. The auto-attach via ENTITY_MUSIC_STYLE still fires when you
+         switch entities; this panel is for running a music style independent
+         of the entity (useful when iterating on trip + audio interactions).
+         The 4 style buttons mirror Sound.attachStageMusic(); MIDI button
+         lazy-loads Tone.js on first press just like the in-game M key. -->
+    <div class="music-panel" style="margin-top:8px;border-top:1px solid #2a4a5a;padding-top:6px">
+      <div style="opacity:0.7;margin-bottom:4px">Music
+        <span id="music-state" style="float:right;opacity:0.7;font-size:10px">—</span>
+      </div>
+      <div style="display:flex;flex-wrap:wrap;gap:3px;margin-bottom:4px">
+        <button data-style="jam"         class="music-btn" style="flex:1 0 40%;font:inherit;font-size:11px;padding:3px 4px;cursor:pointer;background:rgba(120,180,255,0.18);color:inherit;border:1px solid rgba(120,180,255,0.4);border-radius:4px">Jam</button>
+        <button data-style="brass"       class="music-btn" style="flex:1 0 40%;font:inherit;font-size:11px;padding:3px 4px;cursor:pointer;background:rgba(255,200,100,0.18);color:inherit;border:1px solid rgba(255,200,100,0.4);border-radius:4px">Brass</button>
+        <button data-style="drum"        class="music-btn" style="flex:1 0 40%;font:inherit;font-size:11px;padding:3px 4px;cursor:pointer;background:rgba(180,140,220,0.18);color:inherit;border:1px solid rgba(180,140,220,0.4);border-radius:4px">Drum</button>
+        <button data-style="forest_drum" class="music-btn" style="flex:1 0 40%;font:inherit;font-size:11px;padding:3px 4px;cursor:pointer;background:rgba(120,220,160,0.18);color:inherit;border:1px solid rgba(120,220,160,0.4);border-radius:4px">Forest</button>
+      </div>
+      <div style="display:flex;gap:3px">
+        <button id="music-stop" style="flex:1;font:inherit;font-size:11px;padding:3px 4px;cursor:pointer;background:rgba(255,140,140,0.18);color:inherit;border:1px solid rgba(255,140,140,0.4);border-radius:4px">Stop music</button>
+        <button id="midi-toggle" style="flex:1;font:inherit;font-size:11px;padding:3px 4px;cursor:pointer;background:rgba(255,224,102,0.18);color:inherit;border:1px solid rgba(255,224,102,0.4);border-radius:4px">♪ MIDI</button>
+      </div>
+    </div>
+
+    <!-- Trip panel — hidden by default. Toggle with the header button or T key.
+         Mirrors the in-game debug T panel: FIRE / DYNAMIC TRIP / COME DOWN,
+         microdose/standard/full presets, and eight per-effect sliders. The
+         sandbox tick drives Trip.update each frame with empty wookPositions
+         so nothing auto-fires — only the buttons here can start a trip. -->
+    <div class="trip-panel" style="margin-top:8px;border-top:1px solid #2a4a5a;padding-top:6px">
+      <button id="trip-toggle" style="width:100%;font:inherit;font-size:11px;padding:3px 4px;cursor:pointer;background:rgba(200,100,255,0.18);color:inherit;border:1px solid rgba(200,100,255,0.4);border-radius:4px;text-align:left">▶ Trip (T)</button>
+      <div id="trip-body" style="display:none;margin-top:6px">
+        <pre id="trip-state" style="margin:0 0 6px;font-size:10px;line-height:1.4;white-space:pre;color:#cef">state: idle | env: 0.00</pre>
+        <div style="display:flex;gap:3px;margin-bottom:4px">
+          <button data-preset="microdose" class="trip-preset" style="flex:1;font:inherit;font-size:10px;padding:3px 4px;cursor:pointer;background:rgba(255,224,102,0.15);color:inherit;border:1px solid rgba(255,224,102,0.4);border-radius:4px">Micro</button>
+          <button data-preset="standard"  class="trip-preset" style="flex:1;font:inherit;font-size:10px;padding:3px 4px;cursor:pointer;background:rgba(255,224,102,0.15);color:inherit;border:1px solid rgba(255,224,102,0.4);border-radius:4px">Std</button>
+          <button data-preset="full"      class="trip-preset" style="flex:1;font:inherit;font-size:10px;padding:3px 4px;cursor:pointer;background:rgba(255,224,102,0.15);color:inherit;border:1px solid rgba(255,224,102,0.4);border-radius:4px">Full</button>
+        </div>
+        <div style="display:flex;gap:3px;margin-bottom:4px">
+          <button id="trip-fire"     style="flex:1;font:inherit;font-size:10px;padding:3px 4px;cursor:pointer;background:rgba(255,100,100,0.22);color:#fdd;border:1px solid rgba(255,100,100,0.5);border-radius:4px">FIRE</button>
+          <button id="trip-dynamic"  style="flex:1;font:inherit;font-size:10px;padding:3px 4px;cursor:pointer;background:rgba(200,100,255,0.22);color:#fdf;border:1px solid rgba(200,100,255,0.5);border-radius:4px">DYNAMIC</button>
+          <button id="trip-comedown" style="flex:1;font:inherit;font-size:10px;padding:3px 4px;cursor:pointer;background:rgba(80,180,180,0.18);color:#bdf;border:1px solid rgba(80,180,180,0.4);border-radius:4px">COME DOWN</button>
+        </div>
+        <div id="trip-sliders"></div>
+      </div>
+    </div>
   </div>
 
   <script type="module">
@@ -241,6 +286,16 @@ import { buildSugarShack } from './src/models/sugarShack.js';
     } from './src/models/tribalFigures.js';
     import { Bubbles } from './src/bubbles.js';
     import { Smiles } from './src/smiles.js';
+    // Trip + MIDI imports for the audition panels added at the bottom of the
+    // HUD. Trip needs its post-process pass slotted into a composer, so we
+    // also import EffectComposer / RenderPass / OutputPass and switch the
+    // sandbox render loop from `renderer.render(scene, camera)` to a
+    // composer.render() pipeline below.
+    import { Trip } from './src/trip.js';
+    import { MidiPlayer } from './src/midiPlayer.js';
+    import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
+    import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
+    import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
 
     const canvas = document.getElementById('canvas');
     const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
@@ -278,6 +333,18 @@ import { buildSugarShack } from './src/models/sugarShack.js';
     const tod = new TimeOfDay(scene, { startT: 0.15 });
     tod.attach({ sky: null, sun, hemi, ambient });
 
+    // Post-processing chain so the sandbox can drive the Trip ShaderPass.
+    // Order: RenderPass → Trip.pass → OutputPass. The Trip panel below can
+    // FIRE / DYNAMIC TRIP / COME DOWN so model behavior can be auditioned
+    // under the same psychedelic effect that the game runs. Trip.pass is
+    // disabled (zero envelope) until something fires it, so cost is one
+    // skipped pass and an OutputPass at idle.
+    Trip.init();
+    const composer = new EffectComposer(renderer);
+    composer.addPass(new RenderPass(scene, camera));
+    composer.addPass(Trip.pass);
+    composer.addPass(new OutputPass());
+
     // Ground reference (flat grass disc) — toggle with L
     const groundGroup = new THREE.Group();
     {
@@ -313,6 +380,7 @@ import { buildSugarShack } from './src/models/sugarShack.js';
     function resize() {
       const w = window.innerWidth, h = window.innerHeight;
       renderer.setSize(w, h);
+      composer.setSize(w, h);
       camera.aspect = w / h;
       camera.updateProjectionMatrix();
     }
@@ -385,7 +453,7 @@ import { buildSugarShack } from './src/models/sugarShack.js';
     const select = document.getElementById('entity');
     const info = document.getElementById('info');
     // Expose for debugging / verification.
-    window.__sandbox = { scene, camera, get currentEntity() { return currentEntity; } };
+    window.__sandbox = { scene, camera, get currentEntity() { return currentEntity; }, Trip, get midi() { return midiPlayer; } };
 
     // Sound needs a user gesture to construct its AudioContext. Hook the
     // first interactive event on the sandbox so subsequent entity loads can
@@ -1511,14 +1579,168 @@ import { buildSugarShack } from './src/models/sugarShack.js';
       setInterval(updateReadout, 250);
     }
 
+    // ---- Music + MIDI panel wiring ----
+    // The four style buttons attach a stage-music engine at world origin —
+    // distinct from the per-entity auto-attach so you can audition a music
+    // style independent of the loaded entity. "Stop music" tears down any
+    // attached engine (auto or manual). MIDI button lazy-loads Tone.js on
+    // first press; subsequent presses toggle play/stop. State badge in the
+    // panel header reflects which style is playing.
+    let manualMusic = null;
+    const musicStateEl = document.getElementById('music-state');
+    function updateMusicState(text) {
+      musicStateEl.textContent = text || '—';
+    }
+    for (const btn of document.querySelectorAll('.music-btn')) {
+      btn.addEventListener('click', () => {
+        ensureSoundInit();
+        // Stop any prior manual or auto engine before attaching a fresh one.
+        if (manualMusic) { try { Sound.detachStageMusic(manualMusic); } catch (e) {} manualMusic = null; }
+        if (entityMusic) { try { Sound.detachStageMusic(entityMusic); } catch (e) {} entityMusic = null; }
+        const style = btn.dataset.style;
+        // Seed by style name so two clicks of "Jam" produce the same pattern.
+        let seed = 0;
+        for (let i = 0; i < style.length; i++) seed = (seed * 31 + style.charCodeAt(i)) | 0;
+        manualMusic = Sound.attachStageMusic(0, 1.5, 0, seed, style);
+        updateMusicState(style);
+      });
+    }
+    document.getElementById('music-stop').addEventListener('click', () => {
+      if (manualMusic) { try { Sound.detachStageMusic(manualMusic); } catch (e) {} manualMusic = null; }
+      if (entityMusic) { try { Sound.detachStageMusic(entityMusic); } catch (e) {} entityMusic = null; }
+      updateMusicState('—');
+    });
+
+    // MIDI player — same code path as the in-game M key. Lazy-loads Tone.js
+    // + @tonejs/midi on first press. The MidiPlayer reads Trip.progress()
+    // each frame to warp its effect chain, so firing a trip from the panel
+    // below WILL audibly affect the MIDI playback if both are running.
+    const midiPlayer = new MidiPlayer();
+    const midiBtn = document.getElementById('midi-toggle');
+    // Stub HUD so MidiPlayer.toggle's toast calls don't throw. Pipes its
+    // status messages into the entity info panel's text field.
+    const midiHud = { toast: (msg) => { info.textContent = msg; } };
+    midiBtn.addEventListener('click', async () => {
+      ensureSoundInit();
+      await midiPlayer.toggle(midiHud);
+      midiBtn.textContent = midiPlayer.isPlaying ? '■ MIDI' : '♪ MIDI';
+    });
+
+    // ---- Trip panel wiring ----
+    // Sliders are built from EFFECT_KEYS (mirroring debug.js); each writes
+    // to Trip.config[key] on input. Preset buttons call Trip.setPreset() and
+    // we sync the slider values back to whatever the preset set. FIRE uses
+    // Static mode (slider config), DYNAMIC uses the scripted timeline (the
+    // wook-flow experience). COME DOWN smoothly fades out from the current
+    // envelope. State readout updates each frame from Trip._envelope etc.
+    const tripBody = document.getElementById('trip-body');
+    const tripToggleBtn = document.getElementById('trip-toggle');
+    const tripStateEl = document.getElementById('trip-state');
+    const tripSlidersHost = document.getElementById('trip-sliders');
+    const tripSliders = {};
+    const TRIP_EFFECT_KEYS = [
+      ['hueShift',            'Hue'],
+      ['saturation',          'Sat'],
+      ['uvRipple',            'Ripple'],
+      ['chromaticAberration', 'Chroma'],
+      ['lensDistortion',      'Lens'],
+      ['posterize',           'Poster'],
+      ['vignettePulse',       'Vign'],
+      ['brightnessPulse',     'Bright'],
+    ];
+    for (const [key, label] of TRIP_EFFECT_KEYS) {
+      const row = document.createElement('div');
+      row.style.cssText = 'display:flex;align-items:center;gap:4px;margin-bottom:2px';
+      const lbl = document.createElement('span');
+      lbl.textContent = label;
+      lbl.style.cssText = 'flex:0 0 42px;font-size:10px;opacity:0.8';
+      const input = document.createElement('input');
+      input.type = 'range';
+      input.min = 0; input.max = 1; input.step = 0.01;
+      input.value = Trip.config[key];
+      input.style.cssText = 'flex:1;accent-color:#c8a0ff;cursor:pointer';
+      const readout = document.createElement('span');
+      readout.textContent = Trip.config[key].toFixed(2);
+      readout.style.cssText = 'width:30px;text-align:right;font-size:10px';
+      input.addEventListener('input', () => {
+        const v = parseFloat(input.value);
+        Trip.config[key] = v;
+        readout.textContent = v.toFixed(2);
+      });
+      row.append(lbl, input, readout);
+      tripSlidersHost.appendChild(row);
+      tripSliders[key] = { input, readout };
+    }
+    function syncTripSlidersFromConfig() {
+      for (const [key, s] of Object.entries(tripSliders)) {
+        s.input.value = Trip.config[key];
+        s.readout.textContent = Trip.config[key].toFixed(2);
+      }
+    }
+    for (const btn of document.querySelectorAll('.trip-preset')) {
+      btn.addEventListener('click', () => {
+        Trip.setPreset(btn.dataset.preset);
+        syncTripSlidersFromConfig();
+      });
+    }
+    document.getElementById('trip-fire').addEventListener('click', () => Trip.trigger());
+    document.getElementById('trip-dynamic').addEventListener('click', () => Trip.triggerDynamic());
+    document.getElementById('trip-comedown').addEventListener('click', () => Trip.comeDown());
+
+    // Toggle panel — click the header or press T (when not focused in an input).
+    let tripPanelOpen = false;
+    function setTripPanel(open) {
+      tripPanelOpen = open;
+      tripBody.style.display = open ? 'block' : 'none';
+      tripToggleBtn.textContent = (open ? '▼' : '▶') + ' Trip (T)';
+    }
+    tripToggleBtn.addEventListener('click', () => setTripPanel(!tripPanelOpen));
+    window.addEventListener('keydown', (e) => {
+      if (e.code === 'KeyT' && !e.target.matches('input, textarea, select, button')) {
+        e.preventDefault();
+        setTripPanel(!tripPanelOpen);
+      }
+    });
+
     // Render loop
     const clock = new THREE.Clock();
+    // Fake "Zerble" position for Trip.update — sandbox has no driver, so we
+    // pass a stationary point at origin and zero speed. wookPositions stays
+    // empty so the proximity-trigger path never fires; only the FIRE /
+    // DYNAMIC panel buttons can start a trip.
+    const _tripPos = new THREE.Vector3();
     function tick() {
-      requestAnimationFrame(tick);
+      // Preview MCP runs the page document.hidden — RAF throttles to ~0 fps
+      // when hidden. Fall back to setTimeout in that case so the sandbox
+      // keeps ticking inside the preview (same pattern as main.js).
+      if (document.hidden) setTimeout(tick, 16);
+      else requestAnimationFrame(tick);
       const dt = Math.min(clock.getDelta(), 0.05);
       tod.update(dt);
       if (updateFn) updateFn(dt);
-      renderer.render(scene, camera);
+      Trip.update(dt, _tripPos, 0, []);
+      // Feed trip progress into the MIDI player's effect chain so they warp
+      // together — same wiring as main.js. No-op if MIDI isn't playing.
+      if (midiPlayer && midiPlayer.isPlaying) {
+        midiPlayer.setTripState(Trip._envelope, Trip.progress());
+      }
+      // Refresh trip panel readouts only when visible (cheap when closed).
+      if (tripPanelOpen) {
+        tripStateEl.textContent =
+          `state: ${Trip.state.padEnd(11)} env: ${Trip._envelope.toFixed(2)}  ${Trip.dynamic ? 'DYN' : 'stat'}`;
+        // While Dynamic mode is driving a trip, mirror live values into the
+        // sliders so you can see the scripted timeline animating.
+        if (Trip.dynamic && Trip.isActive() && Trip.live) {
+          for (const [key, s] of Object.entries(tripSliders)) {
+            if (key in Trip.live) {
+              const v = Trip.live[key];
+              s.input.value = v;
+              s.readout.textContent = v.toFixed(2);
+            }
+          }
+        }
+      }
+      composer.render();
     }
     tick();
   </script>

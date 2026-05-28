@@ -51,7 +51,7 @@ Two entry points:
 | URL | When to use it |
 |---|---|
 | `http://127.0.0.1:8765/sandbox.html?entity=<name>` | **Default for any model/visual change.** Isolated viewer, deep-linkable, time-of-day slider, "Hit it" SFX button, free-orbit camera. Don't try to verify a model edit in the main game — verify it here. |
-| `http://127.0.0.1:8765/` | The full game. Use only when the change is emergent (world streaming, collision, chunk generation, crowd AI behavior) and not visible at the entity level. |
+| `http://127.0.0.1:8765/` | The full game. Use when the change is emergent (world streaming, collision, chunk generation, crowd AI behavior) and not visible at the entity level. **Also load the main game any time the edit touches a code path the sandbox doesn't exercise** (e.g. `chunks.js`, `crowd.js`, `world.js`, `main.js`) — sandbox-only verification can pass while the game itself crashes at boot. |
 
 The dev server sends `no-store` so module edits land on reload — `python3 -m
 http.server` won't, because Chrome heuristic-caches module bodies.
@@ -68,6 +68,29 @@ Force a perf tier with `?perf=low|mid|high`. Bugs that only show on low (e.g.
 the Safari module-namespace-freeze that took down `litFallback.js`) are easy
 to miss otherwise — test the lower tiers when touching materials, shaders, or
 boot order.
+
+### Smoke-test before declaring done
+
+A task isn't "done" because the sandbox renders the entity. The sandbox is
+*one* code path — `chunks.js`, world generation, and game-only systems (NPC
+crowd, audio bus wiring, registry chunkKey lifecycle, etc.) only run when
+the main app boots. **Before marking any task complete, load
+`http://127.0.0.1:8765/` and confirm:**
+
+1. The title card appears (no JS error at module load).
+2. Clicking "Let's go ZERBLIN'!" boots the world (no JS error during world
+   generation — `buildWorld → ChunkManager.update → _generate → theme
+   builder` is the longest call chain in the codebase and is where the
+   real bugs hide).
+3. Check `preview_console_logs` after a couple seconds of running — any
+   uncaught `TypeError` / `ReferenceError` / shader-compile failure shows
+   up here even when the canvas is rendering something.
+
+Sandbox-pass + game-fail has happened multiple times when an edit touched
+chunks/crowd/world but the sandbox case for that entity used a different
+constructor path (e.g. `buildCampChair` returns `{ group, color,
+footprint }` — the model sandbox cases extract `.group`, the chunks code
+forgot to). Always verify the full pipeline.
 
 ## The non-obvious things that will bite you
 

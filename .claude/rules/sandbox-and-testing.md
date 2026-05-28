@@ -136,7 +136,41 @@ Before you say "the change is in," ask yourself:
    blow out at midnight.
 4. **If the entity has a collision kind, did I press "Hit it"?** SFX
    regressions are silent (literally) without this.
+5. **Did I also boot the main game?** Sandbox-pass + game-crash has
+   happened — see below.
 
 If you answer "no" to any of these and the question is *easy to answer with
 the sandbox*, go answer it. The whole point is that verification is cheap
 here — use that.
+
+## ALWAYS boot the main game before "done"
+
+The sandbox is *one* code path. Game-only systems — `chunks.js` theme
+builders, world streaming, the crowd's per-frame `_updateNpc`, audio bus
+wiring, registry `chunkKey` lifecycle — only run when the main app boots.
+A sandbox-pass tells you the entity model is fine; it does NOT tell you
+the integration is fine.
+
+**Mandatory before declaring any task complete:**
+
+```
+preview_start (or reuse running) on http://127.0.0.1:8765/
+preview_eval — wait for DOM
+preview_click #start-btn
+preview_eval — wait ~2.5s for world to generate
+preview_console_logs — confirm no JS errors
+preview_screenshot — confirm the scene rendered
+```
+
+The longest call chain in the codebase is
+`buildWorld → ChunkManager.update → ChunkManager._generate → THEME_BUILDERS[theme](ctx)`
+— that's where the real boot bugs hide. **A boot-time `TypeError` is
+worse than a missing feature**; ship behind that.
+
+**Concrete failure that motivated this rule:** an edit added camp-chair
+clumps at every stage. The sandbox case for `stage_main` used a different
+sandbox-only helper, so the sandbox rendered fine. The chunks.js call site
+forgot that `buildCampChair` returns `{ group, color, footprint }` (not the
+Group directly), so the actual game crashed at world generation with
+`Cannot read properties of undefined (reading 'set')` and the title card
+hung. The sandbox said "ship it"; the game said "broken". Boot the game.

@@ -1165,17 +1165,20 @@ function buildStage(ctx, x, z, isMain) {
       // Each chair sits within ~1.4m of the clump center.
       const chairOffX = (ctx.rng() - 0.5) * 2.8;
       const chairOffZ = (ctx.rng() - 0.5) * 2.0;
+      // buildCampChair returns { group, color, footprint } — not the Group.
       const chair = buildCampChair(ctx.rng);
-      chair.position.set(x + clumpX + chairOffX, 0, z + clumpZ + chairOffZ);
+      const cx = x + clumpX + chairOffX;
+      const cz = z + clumpZ + chairOffZ;
+      chair.group.position.set(cx, 0, cz);
       // Face the stage: stage is at -Z direction in this local frame, but
       // chair default faces +Z (per buildCampChair), so we rotate π. Then
       // add a small per-chair yaw jitter so they're not all parallel.
-      chair.rotation.y = Math.PI + (ctx.rng() - 0.5) * 0.7;
+      chair.group.rotation.y = Math.PI + (ctx.rng() - 0.5) * 0.7;
+      ctx.group.add(chair.group);
       // Soft footprint so NPCs steer around the chair without big penalties.
-      ctx.group.add(chair);
       registry.add({
         kind: 'chair',
-        position: new THREE.Vector3(chair.position.x, 0, chair.position.z),
+        position: new THREE.Vector3(cx, 0, cz),
         footprint: 0.5,
         chunkKey: ctx.key,
       });

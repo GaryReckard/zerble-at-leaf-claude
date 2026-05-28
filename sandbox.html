@@ -935,6 +935,10 @@ import { buildSugarShack } from './src/models/sugarShack.js';
           };
 
           updateFn = (dt) => {
+            // Glow-in-the-dark frisbee — bump emissive intensity with night.
+            if (disc.userData.discMat) {
+              disc.userData.discMat.emissiveIntensity = 0.05 + tod.nightness * 3.0;
+            }
             if (state.phase === 'held') {
               disc.position.set(state.holder.position.x, 1.45, state.holder.position.z);
               disc.rotation.y += dt * 4;

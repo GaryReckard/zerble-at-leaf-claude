@@ -39,6 +39,8 @@ import {
   BrassBand,
   KidGaggle,
   Wooks,
+  HulaHoopers,
+  Frisbees,
 } from './obstacles.js';
 import { installDebug, shouldRunFrame, isGod, npcsFrozen } from './debug.js';
 import { PERF } from './perf.js';
@@ -195,6 +197,12 @@ const kids = new KidGaggle();
 scene.add(kids.group);
 const wooks = new Wooks();
 scene.add(wooks.group);
+// Hula-hoopers attach to attractor POIs (stages, drum circles, fire pits).
+// Built lazily after buildWorld() runs so the first registry scan has data.
+const hoopers = HulaHoopers.create();
+scene.add(hoopers.group);
+const frisbees = new Frisbees();
+scene.add(frisbees.group);
 
 // ---------- Camera ----------
 const chaseCam = new ChaseCamera(camera, zerble);
@@ -392,6 +400,8 @@ function tickBody(dt) {
     band.update(dt);
     kids.update(dt, bubbles, zerble, smiles);
     wooks.update(dt, zerble.position, Math.abs(zerble.speed));
+    hoopers.update(dt, zerble.position, nightness);
+    frisbees.update(dt, zerble.position, nightness);
     // Collect wook world positions for proximity detection
     const _wookPositions = wooks.wooks.map(w => w.position);
     Trip.update(dt, zerble.position, Math.abs(zerble.speed), _wookPositions);
@@ -498,6 +508,8 @@ function tickBody(dt) {
         ...band.colliders,
         ...kids.colliders,
         ...wooks.colliders,
+        ...hoopers.colliders,
+        ...frisbees.colliders,
         ...npcColliders,
       ];
       const hit = resolveCollision(zerble, allColliders);
@@ -566,7 +578,18 @@ const APPROACH_DAMAGE_THRESHOLD = 1.2;
 // around. Otherwise a curious NPC walking up to the cart would shove it
 // across the grass. Hard kinds (truck, tent, stage, arch, puppet, lurleen)
 // always block.
-const SOFT_PEOPLE_KINDS = new Set(['person', 'kid', 'wook', 'brass']);
+const SOFT_PEOPLE_KINDS = new Set(['person', 'kid', 'wook', 'brass', 'hula_hoop']);
+
+// Witty per-hit toasts for hula-hoopers — random pick keeps it from getting
+// stale if Zerble bumps into a few in a row.
+const HULA_HOOP_TOASTS = [
+  "You broke her flow, man!",
+  "Hoop dreams interrupted...",
+  "Easy! She's in the zone!",
+  "You crashed her hoop trance!",
+  "Bonked a hooper — bad karma!",
+  "That hoop was somebody's chakra!",
+];
 
 function resolveCollision(zerble, colliders) {
   // forward = (-sin(h), 0, -cos(h)); velocity = forward * speed
@@ -638,6 +661,7 @@ function toastForKind(kind) {
     case 'lake_edge': return 'Splash! Carts don\'t float.';
     case 'forest_tree': return 'Ow — that\'s a big tree!';
     case 'firepit': return 'Hot stone, ouch!';
+    case 'hula_hoop': return HULA_HOOP_TOASTS[Math.floor(Math.random() * HULA_HOOP_TOASTS.length)];
     case 'bench_ring': return 'Easy on the benches!';
     case 'island': return 'Tiny island, busy day.';
     case 'lurleen': return 'Easy, lover — that\'s Lurleen.';
@@ -683,6 +707,7 @@ installDebug({
   scene, camera, renderer,
   zerble, crowd, bubbles, smiles, registry,
   puppets, band, kids, wooks,
+  hoopers, frisbees,
   lurleen,                              // teleport menu uses .position
   getRunning: () => running,
   getTimeOfDay,

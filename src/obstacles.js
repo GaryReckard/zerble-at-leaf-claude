@@ -321,10 +321,15 @@ export class KidGaggle {
         // Honk-scatter timer: while > 0, the kid runs away from Zerble at
         // FLEE_SPEED. Set by KidGaggle.scatter() from main.js on honk.
         k.userData.scatterTimer = 0;
-        // Smile cooldown: prevents the same kid from spawning a smile every
-        // frame they're touching a bubble. Counts down with dt; smile fires
-        // only when this hits 0 AND the kid catches a bubble.
-        k.userData.smileCooldown = 0;
+        // Smile state — same model as crowd NPCs (see crowd.js): happiness
+        // ramps when near Zerble/bubbles, spawns a smile + resets at the
+        // threshold, then needs Zerble to drive SMILE_RESET_DIST away AND
+        // SMILE_TIME_COOLDOWN seconds before this kid can smile again. So
+        // parking next to a gaggle gets you one smile burst (one per kid),
+        // not a cheaty stream.
+        k.userData.happiness = 0;
+        k.userData.lastSmilePos = null;
+        k.userData.smileTimeCooldown = 0;
         this.group.add(k);
         this.kids.push(k);
         this.colliders.push({
@@ -423,7 +428,18 @@ export class KidGaggle {
     const BUBBLE_GRAB_RANGE = 0.7;         // close enough to "play with" it
     const BUBBLE_ATTRACT_SPEED = 4.2;      // sprint speed when chasing
     const FLEE_SPEED = 5.0;                // honk-scatter sprint speed
-    const KID_SMILE_COOLDOWN = 2.5;        // seconds between smiles from the same kid
+    // Smile economy — mirrors crowd.js. A kid must be within KID_SMILE_RANGE
+    // of Zerble (or right next to a bubble) for happiness to accrue; smile
+    // fires when happiness crosses KID_HAPPINESS_THRESHOLD, then locks out
+    // until Zerble has driven KID_SMILE_RESET_DIST away AND the time
+    // cooldown elapses.
+    const KID_HAPPINESS_THRESHOLD = 0.7;
+    const KID_SMILE_RANGE = 12;
+    const KID_SMILE_RESET_DIST = 28;
+    const KID_SMILE_TIME_COOLDOWN = 3;
+    const KID_BUBBLE_GAIN_RANGE = 1.5;     // bubble must be within this for gain
+    const KID_BUBBLE_GAIN = 0.6;           // happiness/sec at point-blank to a bubble
+    const KID_PROXIMITY_GAIN = 0.4;        // happiness/sec next to Zerble (linear falloff)
 
     for (let i = 0; i < this.kids.length; i++) {
       const k = this.kids[i];
@@ -441,21 +457,53 @@ export class KidGaggle {
 
       // Tick scatter timer first so the test below sees a fresh value.
       if (k.userData.scatterTimer > 0) k.userData.scatterTimer -= dt;
-      if (k.userData.smileCooldown > 0) k.userData.smileCooldown -= dt;
+      if (k.userData.smileTimeCooldown > 0) k.userData.smileTimeCooldown -= dt;
       const fleeing = k.userData.scatterTimer > 0 && zerble;
 
-      // Smile spawn — when a kid catches a bubble. The bubble-chase branch
-      // below moves the kid toward chaseDx/chaseDz; we check here so we
-      // catch the moment they ENTER the grab radius (smile fires once per
-      // catch, then the cooldown blocks re-fires until they reset).
-      if (
-        smiles &&
-        !fleeing &&
-        chaseD <= BUBBLE_GRAB_RANGE &&
-        k.userData.smileCooldown <= 0
-      ) {
-        smiles.spawn(k.position);
-        k.userData.smileCooldown = KID_SMILE_COOLDOWN;
+      // Smile economy — same model as crowd NPCs in crowd.js. Gates:
+      //   1. Time cooldown elapsed (3s since last smile from this kid)
+      //   2. Zerble has moved at least RESET_DIST from where this kid last
+      //      smiled, OR this kid has never smiled
+      //   3. Kid is within SMILE_RANGE of Zerble (so they're "with" him)
+      // Then happiness ramps with proximity + nearby bubbles. When it
+      // crosses threshold, spawn a smile and reset.
+      if (smiles && zerble && !fleeing) {
+        const dxZ = k.position.x - zerble.position.x;
+        const dzZ = k.position.z - zerble.position.z;
+        const dToZerble = Math.hypot(dxZ, dzZ);
+        const moved = k.userData.lastSmilePos === null
+          || zerble.position.distanceTo(k.userData.lastSmilePos) > KID_SMILE_RESET_DIST;
+        if (
+          k.userData.smileTimeCooldown <= 0
+          && moved
+          && dToZerble < KID_SMILE_RANGE
+        ) {
+          let gain = 0;
+          // Proximity to Zerble — linear falloff over SMILE_RANGE
+          gain += KID_PROXIMITY_GAIN * (1 - dToZerble / KID_SMILE_RANGE);
+          // Nearest bubble bonus: if any live bubble is within
+          // KID_BUBBLE_GAIN_RANGE, add proportional gain. Caps even if
+          // multiple bubbles are nearby — kids are excited about bubbles,
+          // not exponentially.
+          let bestBubbleD = Infinity;
+          for (const bp of bubblePositions) {
+            const bd = Math.hypot(bp.x - k.position.x, bp.z - k.position.z);
+            if (bd < bestBubbleD) bestBubbleD = bd;
+          }
+          if (bestBubbleD < KID_BUBBLE_GAIN_RANGE) {
+            gain += KID_BUBBLE_GAIN * (1 - bestBubbleD / KID_BUBBLE_GAIN_RANGE);
+          }
+          k.userData.happiness += gain * dt;
+          if (k.userData.happiness >= KID_HAPPINESS_THRESHOLD) {
+            k.userData.happiness = 0;
+            k.userData.smileTimeCooldown = KID_SMILE_TIME_COOLDOWN;
+            k.userData.lastSmilePos = zerble.position.clone();
+            smiles.spawn(k.position);
+          }
+        } else {
+          // Out of range / on cooldown — decay happiness slowly
+          k.userData.happiness = Math.max(0, k.userData.happiness - dt * 0.2);
+        }
       }
 
       if (fleeing) {

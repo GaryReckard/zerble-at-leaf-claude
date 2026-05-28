@@ -148,10 +148,27 @@ export function buildHulaHooper(rng = Math.random) {
   body.add(band);
 
   // ----- Hoop -----
-  // The hoop sits around the hips/waist. The hoopPivot is a separate child of
-  // the top-level group (NOT a child of body) so the caller can tilt body for
-  // hip gyration without dragging the hoop with it — the hoop stays roughly
+  // The hoop sits around the hips/waist. hoopPivot is a child of the
+  // top-level group (NOT a child of body) so the caller can tilt body for hip
+  // gyration without dragging the hoop with it — the hoop stays roughly
   // horizontal and rotates on its own.
+  //
+  // Hooping geometry: a real hula hoop doesn't spin centered on the body —
+  // its inner edge is in continuous contact with the body at one point, and
+  // *that contact rotates around the body* as the hoop revolves. We model
+  // that by offsetting the hoop's center from hoopPivot's Y axis by
+  // HOOP_OFFSET; hoopPivot.rotation.y then traces the hoop's center on a
+  // circle of radius HOOP_OFFSET around the body axis, so the contact point
+  // sweeps around the body the way real hooping reads.
+  //
+  // Math: body torso radius B=0.22 (CapsuleGeometry first arg above), hoop
+  // outer R=0.58, tube r=0.035, hoop inner = R-r = 0.545. Max body slack
+  // inside the hoop's inner ring before contact is (R-r) - B = 0.325. Body
+  // hip can sway up to ~0.17m laterally (bodyGroup rotates around its
+  // origin at the feet at ±0.20rad → 0.85*sin(0.20) ≈ 0.169). Choosing
+  // HOOP_OFFSET = 0.27 leaves ~5cm nominal clearance and brings the hoop
+  // into authentic contact-grazing range when body leans away from the
+  // hoop's current angular position. Reads as real hooping, not a halo.
   const hoopPivot = new THREE.Group();
   hoopPivot.position.y = 0.85;       // hip height
   g.add(hoopPivot);
@@ -165,11 +182,13 @@ export function buildHulaHooper(rng = Math.random) {
     metalness: 0.1,
   });
   const HOOP_RADIUS = 0.58;
+  const HOOP_OFFSET = 0.27;          // hoop center offset from body axis — see comment above
   const hoop = new THREE.Mesh(
     new THREE.TorusGeometry(HOOP_RADIUS, 0.035, 6, 24),
     hoopMat,
   );
   hoop.rotation.x = Math.PI / 2;     // lay flat in the XZ plane
+  hoop.position.x = HOOP_OFFSET;     // displace from hoopPivot axis — see comment above
   hoopPivot.add(hoop);
 
   g.userData.hoopMat = hoopMat;

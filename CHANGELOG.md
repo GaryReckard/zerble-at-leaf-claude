@@ -4,6 +4,10 @@ All notable changes to Zerble at the Festival. Newest at top. Following [Keep a 
 
 ## 2026-05-28
 
+### Fixed — Zerble no longer spawns inside or immediately in front of a structure
+- **Root cause: chunk (0,1) — the first chunk north of spawn — could randomly be a `food_plaza`, `side_stage`, or `tent_stage`.** Zerble spawns at `(0, 65)` pointing north. A food plaza centered at `(0, 80)` places trucks in a ring of radius ~24m, putting the closest truck at z≈56–59 with a 6m-radius collider extending to z≈62–65 — Zerble's exact spawn point. A side stage placed at the chunk's south edge puts its back deck face at z≈69 (only 4 m ahead), and a tent stage with the tent's depth axis along Z has its south wall at z=61–66, directly over spawn. Each scenario occurs ~35% of sessions combined.
+- **Fix: guarantee chunk (0,1) is always a low-obstacle theme.** Added a special case in `pickTheme` that restricts chunk (0,1) to `drum_circle` (35%), `vendor_row` (25%), `grove` (20%), or `open_lawn` (20%). All four place their content at or near the chunk centre (z≈80), leaving the southern edge clear. The session-seed RNG still varies *which* of the four themes appears, so the area isn't the same every run.
+
 ### Added — Debug panel collapsible sections + Render quality override panel
 - **All debug panel sections are now collapsible** (click the `▾/▸` header). Controls and Teleport default closed; Time of day, Audio, Render, and Lights default to their most useful states. Panel fits on screen without scrolling even with all sections open.
 - **New "Render" section** in the backtick overlay exposes every setting the adaptive quality system manages. Level dropdown picks "auto" (adaptive running) or any of the 7 named levels (baseline → pixel-50) to lock it. Bloom, Shadows, Cheap bubbles checkboxes and a Pixel ratio select become active when a level is locked — greyed and read-only in auto mode, but still live-update each frame to show what the adaptive system currently has applied (no mystery about what level did what). Switching back to "auto" re-enables the tuning loop.

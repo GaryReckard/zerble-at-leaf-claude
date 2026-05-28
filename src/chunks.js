@@ -411,6 +411,19 @@ function pickTheme(cx, cz) {
   const rng = mulberry32(worldHash(cx, cz, 1));
   const r = rng();
 
+  // Spawn-corridor chunk — directly north of origin, where Zerble starts at
+  // (0, 65).  Any stage or food plaza here can place large collidable geometry
+  // (tent walls, stage deck, food-truck ring) within 5–10 m of the spawn
+  // point, putting Zerble immediately inside or in front of a structure.
+  // Restrict to themes whose props cluster around the chunk centre (z≈80)
+  // and leave the southern edge (z≈40-65) clear.
+  if (cx === 0 && cz === 1) {
+    if (r < 0.35) return 'drum_circle';
+    if (r < 0.60) return 'vendor_row';
+    if (r < 0.80) return 'grove';
+    return 'open_lawn';
+  }
+
   // INNER ring (chunks immediately around the main stage): keep this band
   // light on stages so spawn doesn't feel cluttered with concert decks. The
   // main stage already lives at (0,0) — neighbors should be food/vendors

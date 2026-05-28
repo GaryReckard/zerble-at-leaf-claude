@@ -16,6 +16,15 @@ let ctx = null;
 let masterGain = null;
 let musicBus = null;     // shared bus for stage music sources (so we can balance vs. SFX)
 let musicDuckGain = null; // downstream attenuator — ducks when an external player (MIDI) is active
+// Trip effect chain — sits between musicDuckGain and masterGain. Always
+// wired in; only audibly active when `setMusicTrip(env, p)` ramps the
+// wet gain above zero. Drives a lowpass sweep + a feedback delay in
+// lockstep with the visual trip envelope. See `setMusicTrip` below.
+let _tripDryGain = null;
+let _tripWetGain = null;
+let _tripLowpass = null;
+let _tripDelay = null;
+let _tripFeedback = null;
 let sfxBus = null;       // shared bus for all SFX (engine, collisions, honks, bumps)
 let engineNodes = null;
 let initialized = false;
@@ -175,7 +184,39 @@ export const Sound = {
     musicDuckGain = ctx.createGain();
     musicDuckGain.gain.value = 1.0;
     musicBus.connect(musicDuckGain);
-    musicDuckGain.connect(masterGain);
+
+    // Trip effects chain (wet/dry) on the music path. Dry is the bypass — always
+    // 1.0. Wet routes through a lowpass + feedback delay, summed back at
+    // masterGain. `setMusicTrip(env, p)` ramps the wet gain and modulates the
+    // lowpass cutoff + delay feedback in lockstep with the visual trip. When
+    // env=0 the wet branch is silent, so the only steady-state cost is two
+    // Gain nodes + a BiquadFilter + a DelayNode all running at idle gain 0
+    // (still very cheap).
+    _tripDryGain = ctx.createGain();
+    _tripDryGain.gain.value = 1.0;
+    _tripWetGain = ctx.createGain();
+    _tripWetGain.gain.value = 0.0;
+    _tripLowpass = ctx.createBiquadFilter();
+    _tripLowpass.type = 'lowpass';
+    _tripLowpass.frequency.value = 18000;   // wide open at idle
+    _tripLowpass.Q.value = 1.0;
+    _tripDelay = ctx.createDelay(1.0);       // up to 1s of delay
+    _tripDelay.delayTime.value = 0.28;
+    _tripFeedback = ctx.createGain();
+    _tripFeedback.gain.value = 0.0;          // ramps with envelope (0..0.78)
+
+    // Wiring:
+    //   musicDuckGain ─┬─→ _tripDryGain ──→ masterGain        (dry path)
+    //                  └─→ _tripLowpass ──┬─→ _tripWetGain ──→ masterGain
+    //                                     └─→ _tripDelay ────→ _tripFeedback ──→ _tripLowpass  (delay loop)
+    musicDuckGain.connect(_tripDryGain);
+    _tripDryGain.connect(masterGain);
+    musicDuckGain.connect(_tripLowpass);
+    _tripLowpass.connect(_tripWetGain);
+    _tripWetGain.connect(masterGain);
+    _tripLowpass.connect(_tripDelay);
+    _tripDelay.connect(_tripFeedback);
+    _tripFeedback.connect(_tripLowpass);
 
     sfxBus = ctx.createGain();
     sfxBus.gain.value = 1.0;
@@ -264,6 +305,48 @@ export const Sound = {
   // the crackling-fire bed gates on it too. Cheap call — bare variable set.
   setNightness(n) {
     currentNightness = Math.max(0, Math.min(1, n));
+  },
+
+  // Drive the music-bus trip effect chain from the global Trip envelope.
+  // env (0..1)     — overall wet intensity. 0 = bypass, 1 = full effect.
+  // progress (0..1) — phase across the full trip. Used to layer a slow
+  //                   lowpass sweep and a feedback bell on top of the gate.
+  //
+  // The chain warps procedural music (bands, drums, drum circles) the same
+  // way the MIDI player's effects chain warps Tone.js playback — closing
+  // off the high end and pushing the feedback delay toward runaway near
+  // the climax (around p=1/3), then easing out.
+  //
+  // No-op until `Sound.init()` has wired the nodes.
+  setMusicTrip(env, progress) {
+    if (!_tripWetGain || !_tripLowpass || !_tripFeedback || !_tripDelay) return;
+    const e = Math.max(0, Math.min(1, env || 0));
+    const p = Math.max(0, Math.min(1, progress || 0));
+    const t = ctx.currentTime;
+
+    // Wet/dry crossfade. Dry never fully drops out — even at peak we keep
+    // some clean signal so the music remains recognizable.
+    const wet = e;
+    const dry = 1.0 - e * 0.55;
+    _tripWetGain.gain.setTargetAtTime(wet, t, 0.05);
+    _tripDryGain.gain.setTargetAtTime(dry, t, 0.05);
+
+    // Lowpass sweeps from open (18kHz) to muddy (~700Hz) on the wet branch
+    // proportionally to envelope. A slow extra wobble on `progress` adds
+    // life so the sweep doesn't sit at one cutoff for the whole trip.
+    const wobble = 0.5 + 0.5 * Math.sin(p * Math.PI * 2 * 1.5);
+    const cutoff = 18000 + (700 - 18000) * e * (0.55 + 0.45 * wobble);
+    _tripLowpass.frequency.setTargetAtTime(cutoff, t, 0.1);
+
+    // Feedback delay — runaway-ish near the climax (p≈1/3), tamer at the
+    // edges. Caps at 0.78 to keep the signal from blowing up entirely.
+    const peakBell = Math.exp(-Math.pow((p - 1 / 3) / 0.18, 2));
+    const fb = e * (0.35 + 0.43 * peakBell);
+    _tripFeedback.gain.setTargetAtTime(Math.min(0.78, fb), t, 0.1);
+
+    // Delay time drifts a hair so the echo isn't perfectly metronomic.
+    const dt = 0.28 + 0.08 * Math.sin(p * Math.PI * 2 * 0.7);
+    _tripDelay.delayTime.setTargetAtTime(dt, t, 0.1);
   },
 
   // ---- Spatial stage music ----

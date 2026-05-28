@@ -1737,6 +1737,10 @@ import { buildSugarShack } from './src/models/sugarShack.js';
       if (midiPlayer && midiPlayer.isPlaying) {
         midiPlayer.setTripState(Trip._envelope, Trip.progress());
       }
+      // Drive the procedural music bus's trip effects — same source of truth
+      // as main.js, so the band/drum styles selected from the sandbox Music
+      // panel will warp during FIRE/DYNAMIC trips just like in the game.
+      Sound.setMusicTrip(Trip._envelope, Trip.progress());
       // Refresh trip panel readouts only when visible (cheap when closed).
       if (tripPanelOpen) {
         tripStateEl.textContent =

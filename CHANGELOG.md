@@ -4,6 +4,15 @@ All notable changes to Zerble at the Festival. Newest at top. Following [Keep a 
 
 ## 2026-05-28
 
+### Added — Trip warps procedural music too (bands, drums, drum circles)
+- **Music bus gets a trippy lowpass + feedback delay chain.** Previously only MIDI playback warped during trips; the procedural music (`jam`/`brass`/`drum`/`forest_drum` engines synthesized in Web Audio) stayed clean. Added a wet/dry chain between `musicDuckGain` and `masterGain`:
+  ```
+  musicDuckGain ─┬─→ tripDryGain ─→ masterGain                    (always-on bypass)
+                 └─→ lowpass ─┬─→ tripWetGain ─→ masterGain        (wet branch)
+                              └─→ delay ─→ feedback ─→ lowpass     (echo loop)
+  ```
+  `Sound.setMusicTrip(env, p)` ramps wet gain with envelope, sweeps the lowpass from 18kHz → 700Hz, and pushes the feedback delay toward runaway (capped 0.78) around the visual climax at `p ≈ 1/3` — same peak moment the MIDI chain + visual posterize spike hit. Idle cost is two Gain nodes + a Biquad + a Delay at gain 0 — basically free until a trip fires. Wired from `main.js` tick (same pattern as `midi.setTripState`) and from `sandbox.html` so the Trip panel's FIRE/DYNAMIC buttons can audition the warp on any music style picked from the Music panel.
+
 ### Added — Camp-chair clumps in the stage audience
 - **Loose chair clumps in the audience zone, dancefloor stays chair-free.** Every stage (main + side) now spawns 2-5 clumps of 3-6 camp chairs in a band behind the immediate front zone, all loosely facing the stage with per-chair yaw jitter (no soldier-straight rows). Zones in stage-local +Z: dancefloor (no chairs) extends `9 * scale` past the deck edge; chair band from there to `(9 + 14) * scale`; lateral spread `±11 * scale`. Each chair registers a small `chair` footprint so NPCs steer around them. Reuses `buildCampChair` from `campsite.js`.
 

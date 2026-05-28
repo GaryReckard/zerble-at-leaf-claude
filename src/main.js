@@ -383,6 +383,11 @@ function tickBody(dt) {
     // personality curve. Peak audio climax lands at progress ≈ 1/3, same
     // as the visual posterize spike.
     midi.setTripState(Trip._envelope || 0, Trip.progress());
+    // Same warp applied to the procedural music bus (jam/brass/drum/forest_drum
+    // engines that aren't going through Tone.js). Lowpass sweep + feedback
+    // delay on the music bus, gated by the same envelope. Sound.setMusicTrip
+    // is a no-op until Sound.init() has wired the nodes.
+    Sound.setMusicTrip(Trip._envelope || 0, Trip.progress());
 
     // G key (held) cranks the bubble machine to ~2.8× output AND switches
     // the disco light into a fast, bright-white strobe so the effect reads

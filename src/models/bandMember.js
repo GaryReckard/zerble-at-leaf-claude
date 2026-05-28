@@ -159,5 +159,19 @@ export function buildBandMember(instrument, seed = 0) {
     body.add(bell);
   }
 
+  // Per-member bob phase offset so the band doesn't lockstep
+  g.userData.bobPhase = Math.random() * 10;
   return g;
+}
+
+// Per-frame marching bob — children[0] hops at the cadence rate. Game
+// (BrassBand.update) and sandbox both call this; the math lives here.
+// Caller still handles formation position + yaw (and the parasol twirl
+// for the marshal, which has its own tickParasolMarshal).
+export function tickBandMember(model, dt) {
+  const body = model.children[0];
+  if (!body) return;
+  const u = model.userData;
+  const t = performance.now() * 0.004 + u.bobPhase;
+  body.position.y = 0.85 + Math.abs(Math.sin(t * 2)) * 0.08;
 }

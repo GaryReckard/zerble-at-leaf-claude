@@ -177,5 +177,20 @@ export function buildWook(rng = Math.random) {
   wookGroup.add(brim);
 
   g.add(wookGroup);
+  // Per-wook sway phase so neighboring wooks don't move in lockstep.
+  g.userData.swayPhase = Math.random() * 100;
   return g;
+}
+
+// Per-frame sway animation. Game (Wooks.update in obstacles.js) and
+// sandbox both call this — keeps the dread/hip wobble in one place.
+// Doesn't touch position or yaw; that's the caller's job (orbit /
+// approach / dodge state lives there).
+export function tickWook(model, dt) {
+  const u = model.userData;
+  const t = performance.now() * 0.002 + u.swayPhase;
+  const body = model.children[0];
+  if (!body) return;
+  body.rotation.z = Math.sin(t) * 0.15;
+  body.rotation.x = Math.cos(t * 0.7) * 0.08;
 }

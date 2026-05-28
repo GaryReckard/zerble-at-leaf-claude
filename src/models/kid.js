@@ -200,5 +200,42 @@ export function buildKid(rng = Math.random) {
     body.add(balloon);
   }
 
+  // Per-kid bounce phase offset so two kids in the same gaggle don't bob
+  // in lockstep. Phase is in ms-space, scaled by 0.008 in tickKid.
+  g.userData.bouncePhase = Math.random() * 1000;
+
   return g;
+}
+
+// Per-frame visual animation. Game (KidGaggle.update) and sandbox both
+// call this — animation lives in ONE place. Gameplay decisions (chase /
+// scatter / smile) stay in the caller; this only owns the hop and the
+// smooth-rotation lerp.
+//
+// `excited` flag bumps the bounce amplitude — caller passes true when
+// the kid is chasing a bubble. `targetYaw` (optional) is the heading the
+// kid wants to face; we lerp the displayed yaw toward it shortest-arc
+// so 180° heading flips don't visually snap.
+export function tickKid(model, dt, opts = {}) {
+  const u = model.userData;
+  const excited = !!opts.excited;
+  const targetYaw = opts.targetYaw;
+
+  // Smooth-rotate displayed yaw toward target. Without this, any heading
+  // flip whips the model 180° instantly.
+  if (typeof targetYaw === 'number') {
+    if (u.displayedYaw === undefined) u.displayedYaw = targetYaw;
+    let diff = targetYaw - u.displayedYaw;
+    const TAU2 = Math.PI * 2;
+    while (diff > Math.PI) diff -= TAU2;
+    while (diff < -Math.PI) diff += TAU2;
+    u.displayedYaw += diff * Math.min(1, dt * 9);
+    model.rotation.y = u.displayedYaw;
+  }
+
+  // Bounce — amplitude depends on excitement. Toned down from earlier
+  // values (0.22 / 0.15) so kids look animated, not spasmodic.
+  const bouncy = excited ? 0.13 : 0.08;
+  const tMs = performance.now() * 0.008 + u.bouncePhase;
+  model.children[0].position.y = 0.55 + Math.abs(Math.sin(tMs * 2)) * bouncy;
 }

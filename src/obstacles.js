@@ -6,13 +6,13 @@
 // Geometry lives in src/models/. This file owns path/AI behavior + colliders.
 
 import * as THREE from 'three';
-import { buildPuppet } from './models/puppet.js';
-import { buildBandMember } from './models/bandMember.js';
-import { buildParasolMarshal } from './models/parasolMarshal.js';
-import { buildKid } from './models/kid.js';
-import { buildWook } from './models/wook.js';
+import { buildPuppet, tickPuppet } from './models/puppet.js';
+import { buildBandMember, tickBandMember } from './models/bandMember.js';
+import { buildParasolMarshal, tickParasolMarshal } from './models/parasolMarshal.js';
+import { buildKid, tickKid } from './models/kid.js';
+import { buildWook, tickWook } from './models/wook.js';
 import { buildHulaHooper, tickHulaHooper } from './models/hulaHooper.js';
-import { buildFrisbeePlayer, buildFrisbeeDisc } from './models/frisbeePlayer.js';
+import { buildFrisbeePlayer, buildFrisbeeDisc, tickFrisbeePlayer, tickFrisbeeDisc } from './models/frisbeePlayer.js';
 import { Sound } from './sound.js';
 import { projectOutOfLake } from './lakes.js';
 import { registry } from './registry.js';
@@ -127,10 +127,8 @@ export class PuppetParade {
       const yaw = Math.atan2(-dir.x, -dir.z);
       p.rotation.y = yaw;
 
-      // Per-puppet bob
-      const t = performance.now() * 0.002 + i;
-      p.children[0].position.y = 4 + Math.sin(t * 4) * 0.25;
-      p.children[0].rotation.z = Math.sin(t * 2) * 0.08;
+      // Per-puppet bob (sandbox calls the same tick — see models/puppet.js)
+      tickPuppet(p, dt);
 
       this.colliders[i].position.copy(p.position);
       this.colliders[i].position.y = 1;
@@ -262,14 +260,12 @@ export class BrassBand {
       m.position.set(leadPos.x + ox + dodgeOX, 0, leadPos.z + oz + dodgeOZ);
       m.rotation.y = yaw;
 
-      // Marching bob
-      const t = performance.now() * 0.004 + i;
-      m.children[0].position.y = 0.85 + Math.abs(Math.sin(t * 2)) * 0.08;
-
-      // The grand marshal's parasol twirls — handle separately.
+      // Marching bob + (for the marshal) parasol twirl — both live in
+      // the model files now so the sandbox uses the same animation.
       if (m.userData.instrument === 'parasol') {
-        const parasol = m.userData.parasol;
-        if (parasol) parasol.rotation.y += dt * 2.4;
+        tickParasolMarshal(m, dt);
+      } else {
+        tickBandMember(m, dt);
       }
 
       this.colliders[i].position.copy(m.position);
@@ -587,24 +583,12 @@ export class KidGaggle {
       // every frame. Kid radius treated as 0.4m for the overlap check.
       pushOutOfHardColliders(k, 0.4);
 
-      // Smooth-rotate the displayed yaw toward heading via shortest-arc
-      // lerp. Snapping rotation = visible 180° flips whenever heading
-      // changes sign (chase target switch, wander reroll). The lerp lets
-      // the heading whip internally without showing it.
-      let yawDiff = k.userData.heading - k.userData.displayedYaw;
-      // Wrap diff into [-π, π] so we always rotate the short way around
-      while (yawDiff > Math.PI) yawDiff -= TAU;
-      while (yawDiff < -Math.PI) yawDiff += TAU;
-      k.userData.displayedYaw += yawDiff * Math.min(1, dt * 9);
-      k.rotation.y = k.userData.displayedYaw;
-
-      // Lil hop — bouncier when chasing (they're excited). Amplitudes
-      // toned down further (was 0.22 / 0.15, now 0.13 / 0.08) so kids
-      // look animated, not spasmodic. Rate is performance.now() * 0.008
-      // (already reduced from 0.012).
-      const bouncy = chaseD < BUBBLE_ATTRACT_RANGE ? 0.13 : 0.08;
-      const tMs = performance.now() * 0.008 + i;
-      k.children[0].position.y = 0.55 + Math.abs(Math.sin(tMs * 2)) * bouncy;
+      // Visual animation (smooth yaw + bounce) lives in tickKid so the
+      // sandbox and game can't drift apart. See models/kid.js.
+      tickKid(k, dt, {
+        excited: chaseD < BUBBLE_ATTRACT_RANGE,
+        targetYaw: k.userData.heading,
+      });
 
       this.colliders[i].position.copy(k.position);
       this.colliders[i].position.y = 0.6;
@@ -818,10 +802,9 @@ export class Wooks {
         w.rotation.y = -w.userData.phase + Math.PI;
       }
 
-      // Sway (applies to everyone — including the creep walking up to you)
-      const t = performance.now() * 0.002 + i;
-      w.children[0].rotation.z = Math.sin(t) * 0.15;
-      w.children[0].rotation.x = Math.cos(t * 0.7) * 0.08;
+      // Sway (applies to everyone — including the creep walking up to you).
+      // See models/wook.js for the math; sandbox calls the same tick.
+      tickWook(w, dt);
 
       this.colliders[i].position.copy(w.position);
       this.colliders[i].position.y = 1;
@@ -1177,22 +1160,16 @@ export class Frisbees {
       }
     }
 
-    // Disc glow — dim by day, bright at night. Same curve as the hula-hoop.
-    const discGlow = 0.05 + nightness * 3.0;
-    for (const p of this.pairs) {
-      if (p.disc.userData.discMat) p.disc.userData.discMat.emissiveIntensity = discGlow;
-    }
-
     const tMs = performance.now() * 0.001;
 
     for (const p of this.pairs) {
-      // Idle micro-bob so they don't look frozen
-      p.playerA.userData.bobPhase = (p.playerA.userData.bobPhase || 0) + dt * 4;
-      p.playerB.userData.bobPhase = (p.playerB.userData.bobPhase || 0) + dt * 4;
-      const aBob = Math.abs(Math.sin(p.playerA.userData.bobPhase)) * 0.04;
-      const bBob = Math.abs(Math.sin(p.playerB.userData.bobPhase + 1.2)) * 0.04;
-      if (p.playerA.userData.bodyGroup) p.playerA.userData.bodyGroup.position.y = aBob;
-      if (p.playerB.userData.bodyGroup) p.playerB.userData.bodyGroup.position.y = bBob;
+      // Per-player idle bob + per-disc spin/glow now live in the model
+      // file (see models/frisbeePlayer.js → tickFrisbeePlayer / tickFrisbeeDisc).
+      // Sandbox calls the same ticks. We only own gameplay decisions
+      // (toss / catch / land / recycle) here.
+      tickFrisbeePlayer(p.playerA, dt);
+      tickFrisbeePlayer(p.playerB, dt);
+      tickFrisbeeDisc(p.disc, dt, p.discState, nightness);
 
       // Face each other (or the disc, if flying/landed)
       const lookAt = (player, tx, tz) => {
@@ -1204,7 +1181,6 @@ export class Frisbees {
         const handX = p.discHolder.position.x + Math.sin(p.discHolder.rotation.y) * 0.3;
         const handZ = p.discHolder.position.z - Math.cos(p.discHolder.rotation.y) * 0.3;
         p.disc.position.set(handX, 1.45, handZ);
-        p.disc.rotation.y += dt * 4;
 
         // Players look at each other while waiting
         lookAt(p.playerA, p.playerB.position.x, p.playerB.position.z);
@@ -1218,7 +1194,6 @@ export class Frisbees {
         p.disc.position.y += p.vel.y * dt;
         p.disc.position.z += p.vel.z * dt;
         p.vel.y -= FRISBEE_TOSS_GRAVITY * dt * 0.6;     // softer gravity so the arc reads slow + floaty
-        p.disc.rotation.y += dt * 14;                    // spin
 
         // Update catcher's predicted landing spot. We solve for time-to-hit-y≈0.4
         // (catch height ≈ 0.4m above ground) using current vel.y and y.

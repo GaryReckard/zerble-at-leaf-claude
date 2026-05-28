@@ -124,5 +124,18 @@ export function buildParasolMarshal() {
   parasol.add(tip);
 
   g.userData.parasol = parasol;
+  g.userData.bobPhase = Math.random() * 10;
   return g;
+}
+
+// Per-frame march bob + parasol twirl. Game (BrassBand.update) and
+// sandbox both call this — animation lives in ONE place. Caller still
+// owns formation position / yaw / honk-dodge offset.
+export function tickParasolMarshal(model, dt) {
+  const body = model.children[0];
+  if (!body) return;
+  const u = model.userData;
+  const t = performance.now() * 0.004 + u.bobPhase;
+  body.position.y = 0.85 + Math.abs(Math.sin(t * 2)) * 0.08;
+  if (u.parasol) u.parasol.rotation.y += dt * 2.4;
 }

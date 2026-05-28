@@ -132,7 +132,23 @@ export function buildPuppet(seed = 0) {
   pole.position.y = 2.8;
   g.add(pole);
 
+  // Per-puppet bob phase offset so puppets in a parade don't bob in sync.
+  g.userData.bobPhase = Math.random() * 10;
+
   return g;
+}
+
+// Per-frame floaty bob for the creature body (children[0]). Game
+// (PuppetParade.update) and sandbox both call this — the bob math lives
+// in ONE place. Doesn't touch path position / yaw; that's the caller's
+// job (paths + dodge-on-honk state).
+export function tickPuppet(model, dt) {
+  const body = model.children[0];
+  if (!body) return;
+  const u = model.userData;
+  const t = performance.now() * 0.002 + u.bobPhase;
+  body.position.y = 4 + Math.sin(t * 4) * 0.25;
+  body.rotation.z = Math.sin(t * 2) * 0.08;
 }
 
 // Compact NPC builder used inside other models (puppet handler, band

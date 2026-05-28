@@ -221,13 +221,13 @@ import { buildSugarShack } from './src/models/sugarShack.js';
     import { leafBannerTextures } from './src/models/leafBanner.js';
     import { buildStage, placeBandOnStage } from './src/models/stage.js';
     import { buildTentStage } from './src/models/tentStage.js';
-    import { buildPuppet } from './src/models/puppet.js';
-    import { buildBandMember } from './src/models/bandMember.js';
-    import { buildParasolMarshal } from './src/models/parasolMarshal.js';
-    import { buildKid } from './src/models/kid.js';
-    import { buildWook } from './src/models/wook.js';
+    import { buildPuppet, tickPuppet } from './src/models/puppet.js';
+    import { buildBandMember, tickBandMember } from './src/models/bandMember.js';
+    import { buildParasolMarshal, tickParasolMarshal } from './src/models/parasolMarshal.js';
+    import { buildKid, tickKid } from './src/models/kid.js';
+    import { buildWook, tickWook } from './src/models/wook.js';
     import { buildHulaHooper, tickHulaHooper } from './src/models/hulaHooper.js';
-    import { buildFrisbeePlayer, buildFrisbeeDisc } from './src/models/frisbeePlayer.js';
+    import { buildFrisbeePlayer, buildFrisbeeDisc, tickFrisbeePlayer, tickFrisbeeDisc } from './src/models/frisbeePlayer.js';
     import { buildPerformer } from './src/models/performer.js';
     import {
       buildCampTent, buildCampChair, buildChiminea, buildTikiTorch,
@@ -726,20 +726,13 @@ import { buildSugarShack } from './src/models/sugarShack.js';
           const g = buildPuppet(Math.random() * 6);
           scene.add(g);
           entityRoot = g;
-          // Re-create the puppet's per-frame bob so it looks alive in sandbox.
-          const startMs = performance.now();
-          updateFn = () => {
-            const t = (performance.now() - startMs) * 0.002;
-            g.children[0].position.y = 4 + Math.sin(t * 4) * 0.25;
-            g.children[0].rotation.z = Math.sin(t * 2) * 0.08;
-          };
+          updateFn = (dt) => tickPuppet(g, dt);
           cam.target.set(0, 3, 0);
           cam.dist = 12;
           applyCam();
           break;
         }
         case 'puppet_lineup': {
-          const startMs = performance.now();
           const puppets = [];
           for (let i = 0; i < 3; i++) {
             const g = buildPuppet(i);
@@ -748,13 +741,7 @@ import { buildSugarShack } from './src/models/sugarShack.js';
             puppets.push(g);
           }
           entityRoot = puppets[1];
-          updateFn = () => {
-            const t = (performance.now() - startMs) * 0.002;
-            puppets.forEach((g, i) => {
-              g.children[0].position.y = 4 + Math.sin(t * 4 + i) * 0.25;
-              g.children[0].rotation.z = Math.sin(t * 2 + i) * 0.08;
-            });
-          };
+          updateFn = (dt) => puppets.forEach((g) => tickPuppet(g, dt));
           cam.target.set(0, 3, 0);
           cam.dist = 16;
           applyCam();
@@ -769,12 +756,7 @@ import { buildSugarShack } from './src/models/sugarShack.js';
           const g = buildBandMember(inst);
           scene.add(g);
           entityRoot = g;
-          // Marching bob like the real BrassBand does
-          const startMs = performance.now();
-          updateFn = () => {
-            const t = (performance.now() - startMs) * 0.004;
-            g.children[0].position.y = 0.85 + Math.abs(Math.sin(t * 2)) * 0.08;
-          };
+          updateFn = (dt) => tickBandMember(g, dt);
           cam.target.set(0, 1.5, 0);
           cam.dist = 5;
           applyCam();
@@ -784,19 +766,13 @@ import { buildSugarShack } from './src/models/sugarShack.js';
           const g = buildParasolMarshal();
           scene.add(g);
           entityRoot = g;
-          const startMs = performance.now();
-          updateFn = (dt) => {
-            const tMs = (performance.now() - startMs) * 0.004;
-            g.children[0].position.y = 0.85 + Math.abs(Math.sin(tMs * 2)) * 0.08;
-            if (g.userData.parasol) g.userData.parasol.rotation.y += dt * 2.4;
-          };
+          updateFn = (dt) => tickParasolMarshal(g, dt);
           cam.target.set(0, 2, 0);
           cam.dist = 6;
           applyCam();
           break;
         }
         case 'brass_band': {
-          // Match the in-game formation including the parasol marshal up front.
           const formation = [
             [0, 1.6, 'parasol'],
             [-1.4, 0, 'trumpet'], [1.4, 0, 'trumpet'],
@@ -811,14 +787,10 @@ import { buildSugarShack } from './src/models/sugarShack.js';
             members.push(m);
           }
           entityRoot = members[0];
-          const startMs = performance.now();
-          updateFn = (dt) => {
-            const tMs = (performance.now() - startMs) * 0.004;
-            members.forEach((m, i) => {
-              m.children[0].position.y = 0.85 + Math.abs(Math.sin(tMs * 2 + i)) * 0.08;
-              if (m.userData.parasol) m.userData.parasol.rotation.y += dt * 2.4;
-            });
-          };
+          updateFn = (dt) => members.forEach((m) => {
+            if (m.userData.parasol) tickParasolMarshal(m, dt);
+            else tickBandMember(m, dt);
+          });
           cam.target.set(0, 1.8, -1.0);
           cam.dist = 12;
           applyCam();
@@ -828,11 +800,8 @@ import { buildSugarShack } from './src/models/sugarShack.js';
           const g = buildKid(Math.random);
           scene.add(g);
           entityRoot = g;
-          const startMs = performance.now();
-          updateFn = () => {
-            const t = (performance.now() - startMs) * 0.012;
-            g.children[0].position.y = 0.55 + Math.abs(Math.sin(t * 2)) * 0.15;
-          };
+          // Sandbox: idle kid, not chasing anything. Demo state.
+          updateFn = (dt) => tickKid(g, dt, { excited: false });
           cam.target.set(0, 0.8, 0);
           cam.dist = 4;
           applyCam();
@@ -842,13 +811,7 @@ import { buildSugarShack } from './src/models/sugarShack.js';
           const g = buildWook(Math.random);
           scene.add(g);
           entityRoot = g;
-          // Sway like the real Wooks do
-          const startMs = performance.now();
-          updateFn = () => {
-            const t = (performance.now() - startMs) * 0.002;
-            g.children[0].rotation.z = Math.sin(t) * 0.15;
-            g.children[0].rotation.x = Math.cos(t * 0.7) * 0.08;
-          };
+          updateFn = (dt) => tickWook(g, dt);
           cam.target.set(0, 1.5, 0);
           cam.dist = 5;
           applyCam();
@@ -884,12 +847,7 @@ import { buildSugarShack } from './src/models/sugarShack.js';
           const g = buildFrisbeePlayer(Math.random);
           scene.add(g);
           entityRoot = g;
-          // Idle bob
-          const startMs = performance.now();
-          updateFn = () => {
-            const t = (performance.now() - startMs) * 0.004;
-            g.userData.bodyGroup.position.y = Math.abs(Math.sin(t)) * 0.04;
-          };
+          updateFn = (dt) => tickFrisbeePlayer(g, dt);
           cam.target.set(0, 1.0, 0);
           cam.dist = 4.5;
           applyCam();
@@ -935,13 +893,14 @@ import { buildSugarShack } from './src/models/sugarShack.js';
           };
 
           updateFn = (dt) => {
-            // Glow-in-the-dark frisbee — bump emissive intensity with night.
-            if (disc.userData.discMat) {
-              disc.userData.discMat.emissiveIntensity = 0.05 + tod.nightness * 3.0;
-            }
+            // Player bob + disc spin/glow live in tickFrisbeePlayer / tickFrisbeeDisc.
+            // Game (Frisbees.update in obstacles.js) calls the same ones —
+            // toss/catch sim below is the only sandbox-specific code now.
+            tickFrisbeePlayer(playerA, dt);
+            tickFrisbeePlayer(playerB, dt);
+            tickFrisbeeDisc(disc, dt, state.phase, tod.nightness);
             if (state.phase === 'held') {
               disc.position.set(state.holder.position.x, 1.45, state.holder.position.z);
-              disc.rotation.y += dt * 4;
               lookAt(state.holder, state.catcher.position.x, state.catcher.position.z);
               lookAt(state.catcher, state.holder.position.x, state.holder.position.z);
               state.pauseTimer -= dt;
@@ -951,7 +910,6 @@ import { buildSugarShack } from './src/models/sugarShack.js';
               disc.position.y += state.vel.y * dt;
               disc.position.z += state.vel.z * dt;
               state.vel.y -= GRAVITY * dt;
-              disc.rotation.y += dt * 14;
               // Predict landing point + chase
               const g_ = GRAVITY, catchY = 0.4, vy = state.vel.y, y0 = disc.position.y;
               const A = -0.5 * g_, B = vy, C = y0 - catchY;

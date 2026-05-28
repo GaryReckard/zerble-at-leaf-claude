@@ -140,7 +140,18 @@ export function buildFrisbeePlayer(rng = Math.random) {
 
   g.userData.armPivots = armPivots;
   g.userData.bodyGroup = body;
+  g.userData.bobPhase = Math.random() * 10;
   return g;
+}
+
+// Per-frame idle bob — small breathing motion when the player isn't
+// running. Caller (Frisbees.update / sandbox) drives motion + lookAt;
+// this just adds the subtle "alive" hop. ~4cm peaks, no excitement.
+export function tickFrisbeePlayer(model, dt) {
+  const u = model.userData;
+  if (!u.bodyGroup) return;
+  const t = performance.now() * 0.004 + u.bobPhase;
+  u.bodyGroup.position.y = Math.abs(Math.sin(t)) * 0.04;
 }
 
 // Builds a small frisbee disc — flat-ish cylinder with a colored rim. Returns
@@ -175,4 +186,25 @@ export function buildFrisbeeDisc(rng = Math.random) {
   rim.rotation.x = Math.PI / 2;
   g.add(rim);
   return g;
+}
+
+// Per-frame disc animation — spin + glow. The caller (Frisbees.update in
+// the game, sandbox in the demo) drives the world position via held /
+// flying / landed state. This just spins the disc at the appropriate
+// rate (slow when held, fast when flying, settling when landed) and
+// bumps the emissive for the glow-in-the-dark effect.
+//
+// `state`: 'held' | 'flying' | 'landed' — spin speed varies by state.
+// `nightness`: 0..1 — ramps the disc's emissive intensity.
+export function tickFrisbeeDisc(disc, dt, state, nightness = 0) {
+  if (!disc) return;
+  if (state === 'flying') {
+    disc.rotation.y += dt * 14;            // fast spin in flight
+  } else if (state === 'held') {
+    disc.rotation.y += dt * 4;             // slow spin in hand
+  }
+  // landed: don't spin
+  if (disc.userData.discMat) {
+    disc.userData.discMat.emissiveIntensity = 0.05 + nightness * 3.0;
+  }
 }

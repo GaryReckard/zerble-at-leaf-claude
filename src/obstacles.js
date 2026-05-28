@@ -874,16 +874,19 @@ export class HulaHoopers {
       const h = this.hoopers[i];
       if (!h.visible) continue;
       const u = h.userData;
-      // Hip gyration — slow figure-8-ish lean of the body. Was much faster;
-      // dialled way back so it reads as a meditative flow, not jittery.
+      // Hip gyration — figure-8-ish lean of the body at the hooper's
+      // personal pace. gyrSpeed is now ~3× the original (1.35-2.55 vs
+      // 0.45-0.75) so the dance reads as active, not meditative.
       u.phase += dt * u.gyrSpeed;
       const swayX = Math.sin(u.phase) * 0.16;
       const swayZ = Math.cos(u.phase * 0.7) * 0.10;
       u.bodyGroup.rotation.z = swayX;
       u.bodyGroup.rotation.x = swayZ;
       u.bodyGroup.position.y = Math.sin(u.phase * 2) * 0.03;
-      // Hoop spin — also slowed; just enough to read as turning, not whirring.
-      u.hoopPivot.rotation.y = u.phase * 1.6;
+      // Hoop spin — uses a per-hooper hoopSpinMult so the hoop rotates
+      // somewhat independently of the hip speed (some folks whip the
+      // hoop faster than their hips, some slower).
+      u.hoopPivot.rotation.y = u.phase * u.hoopSpinMult;
       u.hoopPivot.rotation.x = Math.sin(u.phase) * 0.10;
       u.hoopPivot.rotation.z = Math.cos(u.phase * 1.1) * 0.08;
       // Bump emissive intensity from day→night
@@ -987,9 +990,14 @@ export class HulaHoopers {
         h.visible = true;
         h.userData.attractorId = e.id;
         h.userData.phase = Math.random() * TAU;
-        // Slow gyration — much slower than before (was 1.6-2.4). 0.45-0.75
-        // reads as a calm, flowing hoop dance instead of a fidget.
-        h.userData.gyrSpeed = 0.45 + Math.random() * 0.30;
+        // Hip gyration speed — ~3× the previous range (1.35-2.55 vs
+        // 0.45-0.75). Reads as an active hoop dance with clear per-hooper
+        // tempo variation (some folks are gentle, some are GOING).
+        h.userData.gyrSpeed = 1.35 + Math.random() * 1.20;
+        // Hoop spin multiplier — applied on top of phase. Range 1.2-2.3
+        // means the hoop turns at 1.2× to 2.3× the hip phase rate.
+        // Independent random pick so hoop and hips don't perfectly correlate.
+        h.userData.hoopSpinMult = 1.2 + Math.random() * 1.1;
         // Drift state: anchor + an offset target inside a ~1m bubble around it
         h.userData.anchorX = x;
         h.userData.anchorZ = z;

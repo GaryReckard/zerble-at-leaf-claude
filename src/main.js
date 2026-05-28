@@ -750,7 +750,7 @@ window.__game = {
 };
 
 installDebug({
-  scene, camera, renderer,
+  scene, camera, renderer, bloomPass,
   zerble, crowd, bubbles, smiles, registry,
   puppets, band, kids, wooks,
   hoopers, frisbees,

@@ -236,8 +236,53 @@ function _setShadowsOn(scene, renderer, on) {
 export function getLevel() { return state.level; }
 export function getLevelName() { return QUALITY_LEVELS[state.level].name; }
 export function getLevelCount() { return QUALITY_LEVELS.length; }
+export function getLevelNames() { return QUALITY_LEVELS.map(l => l.name); }
 
 // Phase 1 instrumentation — frame-time stats for the debug HUD.
 // Returns the most recently computed { avg, p95, max } (ms). Updated once
 // per ~60 frames, so it lags reality slightly — good enough for display.
 export function getFrameStats() { return state._statsCache; }
+
+// ---- Debug / manual override helpers ----
+// Used by the debug HUD Render panel so individual settings can be inspected
+// and overridden while the auto-tuning loop is paused (setEnabled(false)).
+
+// Force a specific quality level. Call setEnabled(false) first to keep it
+// pinned; otherwise the next tick may overwrite it.
+export function applyLevel(n) {
+  if (n >= 0 && n < QUALITY_LEVELS.length) {
+    _apply(n, state._statsCache.avg || 16);
+  }
+}
+
+// Toggle shadows directly (bypasses level logic; useful for manual overrides
+// while adaptive quality is paused).
+export function setShadows(on) {
+  if (!state.hooks) return;
+  _setShadowsOn(state.hooks.scene, state.hooks.renderer, on);
+}
+
+// Read current effective state of bloom and shadows so the debug UI can
+// initialise checkboxes to match reality rather than the level table.
+export function getBloomEnabled() {
+  const bp = state.hooks?.bloomPass;
+  return bp ? bp.enabled : true;
+}
+export function getShadowsEnabled() {
+  // _castersTurnedOff is non-null only while shadows are explicitly OFF.
+  return state._castersTurnedOff === null;
+}
+
+// Baseline pixel ratio captured at install() time. Level multipliers scale
+// from this value, so manual overrides should too.
+export function getBasePixelRatio() {
+  return state.basePixelRatio ?? 1;
+}
+
+// Set pixel ratio directly (mul relative to base). Used by the Render panel's
+// pixel-ratio override. Also re-syncs the composer size.
+export function setPixelRatio(mul) {
+  if (!state.hooks?.renderer) return;
+  state.hooks.renderer.setPixelRatio((state.basePixelRatio ?? 1) * mul);
+  state.hooks.composer?.setSize(window.innerWidth, window.innerHeight);
+}

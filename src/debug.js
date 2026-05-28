@@ -16,7 +16,12 @@ import { getForestAt } from './forests.js';
 import { PERF } from './perf.js';
 import { getSessionSeed } from './rng.js';
 import { chunkGenStats } from './chunks.js';
-import { getFrameStats, getLevelName } from './adaptiveQuality.js';
+import {
+  getFrameStats, getLevelName, getLevelNames, getLevelCount,
+  getLevel, setEnabled as aqSetEnabled, applyLevel as aqApplyLevel,
+  getBloomEnabled, getShadowsEnabled, getBasePixelRatio,
+  setShadows as aqSetShadows, setPixelRatio as aqSetPixelRatio,
+} from './adaptiveQuality.js';
 
 // Per-tier perf budgets. Numbers come from the r/threejs perf thread
 // guidance — these are "stay under or you're hurting low-end devices"
@@ -71,8 +76,8 @@ const state = {
 };
 
 export function installDebug(hooks) {
-  // hooks: { scene, camera, renderer, zerble, crowd, bubbles, smiles, registry,
-  //          puppets, band, kids, wooks, chunkManagerRef, getRunning, Trip }
+  // hooks: { scene, camera, renderer, bloomPass, zerble, crowd, bubbles, smiles,
+  //          registry, puppets, band, kids, wooks, getRunning, getTimeOfDay, Trip }
   state.hooks = hooks;
   buildPanel();
   buildTripPanel();
@@ -256,6 +261,37 @@ function api() {
   };
 }
 
+// Creates a collapsible panel section. Returns { wrapper, content }.
+// The wrapper has the border-top divider; content is the div to append
+// children to. Clicking the header row toggles content visibility.
+function makeSection(label, defaultOpen = true) {
+  const wrapper = document.createElement('div');
+  wrapper.style.cssText = 'margin-top:8px;border-top:1px solid #2a4a5a;padding-top:6px';
+
+  const header = document.createElement('div');
+  header.style.cssText = 'display:flex;align-items:center;gap:5px;cursor:pointer;user-select:none;margin-bottom:4px;opacity:0.7';
+
+  const arrow = document.createElement('span');
+  const title  = document.createElement('span');
+  title.textContent = label;
+  header.appendChild(arrow);
+  header.appendChild(title);
+  wrapper.appendChild(header);
+
+  const content = document.createElement('div');
+  wrapper.appendChild(content);
+
+  let open = defaultOpen;
+  const refresh = () => {
+    arrow.textContent = open ? '▾' : '▸';
+    content.style.display = open ? '' : 'none';
+  };
+  refresh();
+  header.addEventListener('click', () => { open = !open; refresh(); });
+
+  return { wrapper, content };
+}
+
 function buildPanel() {
   const el = document.createElement('div');
   el.id = PANEL_ID;
@@ -282,14 +318,10 @@ function buildPanel() {
   state.textEl = text;
 
   // ----- Keybindings cheat sheet -----
-  const helpBlock = document.createElement('div');
-  helpBlock.style.marginTop = '8px';
-  helpBlock.style.borderTop = '1px solid #2a4a5a';
-  helpBlock.style.paddingTop = '6px';
-  helpBlock.style.fontSize = '11px';
-  helpBlock.style.lineHeight = '1.5';
-  helpBlock.innerHTML = `
-    <div style="margin-bottom:4px;opacity:0.7">Controls</div>
+  const { wrapper: helpWrapper, content: helpContent } = makeSection('Controls', false);
+  helpContent.style.fontSize = '11px';
+  helpContent.style.lineHeight = '1.5';
+  helpContent.innerHTML = `
     <div><b>W A S D</b> drive · <b>Shift</b> boost · <b>Space</b> honk (random)</div>
     <div><b>B</b> bicycle bell · <b>H</b> clown horn (specific)</div>
     <div><b>← ↑ ↓ →</b> orbit/tilt camera</div>
@@ -298,17 +330,14 @@ function buildPanel() {
     <div><b>\`</b> toggle this debug panel</div>
     <div><b>T</b> toggle trip/psychedelic debug panel</div>
   `;
-  el.appendChild(helpBlock);
+  el.appendChild(helpWrapper);
 
   // ----- Time-of-day controls -----
   // A horizontal slider 0..1 maps to TimeOfDay.t. Three preset shortcut
   // buttons jump to common times.
-  const todBlock = document.createElement('div');
-  todBlock.style.marginTop = '8px';
-  todBlock.style.borderTop = '1px solid #2a4a5a';
-  todBlock.style.paddingTop = '6px';
-  todBlock.innerHTML = `
-    <div style="margin-bottom:4px;opacity:0.7">Time of day <span id="dbg-tod-readout" style="float:right"></span></div>
+  const { wrapper: todWrapper, content: todContent } = makeSection('Time of day');
+  todContent.innerHTML = `
+    <span id="dbg-tod-readout" style="float:right;opacity:0.6;font-size:10px"></span>
     <input id="dbg-tod-slider" type="range" min="0" max="1" step="0.001" value="0.15"
       style="width:100%;accent-color:#ffe066;cursor:pointer" />
     <div style="display:flex;gap:4px;margin-top:6px">
@@ -318,19 +347,14 @@ function buildPanel() {
       <button data-t="0.75" class="dbg-tod-preset">Midnight</button>
     </div>
   `;
-  el.appendChild(todBlock);
+  el.appendChild(todWrapper);
 
   // ----- Teleport menu -----
   // Like Minecraft's /locate + /tp combined: pick a landmark type, click Go,
   // and Zerble drops at the nearest one. For forests with paths, we drop
-  // him just outside the entrance so he can drive in — way more readable
-  // than landing on top of the firepit.
-  const tpBlock = document.createElement('div');
-  tpBlock.style.marginTop = '8px';
-  tpBlock.style.borderTop = '1px solid #2a4a5a';
-  tpBlock.style.paddingTop = '6px';
-  tpBlock.innerHTML = `
-    <div style="margin-bottom:4px;opacity:0.7">Teleport to nearest…</div>
+  // him just outside the entrance so he can drive in.
+  const { wrapper: tpWrapper, content: tpContent } = makeSection('Teleport', false);
+  tpContent.innerHTML = `
     <div style="display:flex;gap:4px">
       <select id="dbg-tp-select" style="flex:1;font:inherit;background:#0e1c28;color:#dff;border:1px solid #2a4a5a;border-radius:3px;padding:2px 4px">
         <option value="drum_circle">Drum circle (forest entrance)</option>
@@ -345,16 +369,14 @@ function buildPanel() {
     </div>
     <div id="dbg-tp-status" style="margin-top:3px;font-size:10px;opacity:0.6;min-height:13px"></div>
   `;
-  el.appendChild(tpBlock);
+  el.appendChild(tpWrapper);
 
   document.body.appendChild(el);
 
-  // Wire the teleport menu. Lookup logic runs from the player's current
-  // position so each click finds the closest landmark TO YOU, not the
-  // closest to spawn.
-  const tpSelect = tpBlock.querySelector('#dbg-tp-select');
-  const tpStatus = tpBlock.querySelector('#dbg-tp-status');
-  tpBlock.querySelector('#dbg-tp-go').addEventListener('click', () => {
+  // Wire the teleport menu.
+  const tpSelect = tpContent.querySelector('#dbg-tp-select');
+  const tpStatus = tpContent.querySelector('#dbg-tp-status');
+  tpContent.querySelector('#dbg-tp-go').addEventListener('click', () => {
     const dest = locateLandmark(tpSelect.value);
     if (dest) {
       state.hooks.zerble.position.set(dest.x, state.hooks.zerble.position.y, dest.z);
@@ -368,15 +390,15 @@ function buildPanel() {
 
   // Wire slider + buttons to the timeOfDay hook (which may be null until
   // world.js finishes booting — getTimeOfDay() resolves lazily).
-  const slider = todBlock.querySelector('#dbg-tod-slider');
-  const readout = todBlock.querySelector('#dbg-tod-readout');
+  const slider = todContent.querySelector('#dbg-tod-slider');
+  const readout = todContent.querySelector('#dbg-tod-readout');
   state.todSlider = slider;
   state.todReadout = readout;
   slider.addEventListener('input', () => {
     const tod = state.hooks.getTimeOfDay && state.hooks.getTimeOfDay();
     if (tod) tod.setT(parseFloat(slider.value));
   });
-  for (const btn of todBlock.querySelectorAll('.dbg-tod-preset')) {
+  for (const btn of todContent.querySelectorAll('.dbg-tod-preset')) {
     Object.assign(btn.style, {
       flex: '1', font: 'inherit', padding: '3px 4px', cursor: 'pointer',
       background: 'rgba(255,224,102,0.15)', color: 'inherit',
@@ -390,18 +412,14 @@ function buildPanel() {
   }
 
   // ----- Audio volume controls -----
-  const audioBlock = document.createElement('div');
-  audioBlock.style.marginTop = '8px';
-  audioBlock.style.borderTop = '1px solid #2a4a5a';
-  audioBlock.style.paddingTop = '6px';
+  const { wrapper: audioWrapper, content: audioContent } = makeSection('Audio');
 
   const masterVol = Sound.isReady() ? Sound.getMasterVolume() : 0.55;
   const musicVol  = Sound.isReady() ? Sound.getMusicVolume()  : 1.6;
   const sfxVol    = Sound.isReady() ? Sound.getSfxVolume()    : 1.0;
   const midiVol   = Sound.isReady() ? Sound.getMidiVolume()   : 1.0;
 
-  audioBlock.innerHTML = `
-    <div style="margin-bottom:4px;opacity:0.7">Audio</div>
+  audioContent.innerHTML = `
     <div style="display:flex;align-items:center;gap:6px;margin-bottom:4px">
       <span style="width:48px;opacity:0.8">Master</span>
       <input id="dbg-vol-master" type="range" min="0" max="2" step="0.01" value="${masterVol.toFixed(2)}"
@@ -427,51 +445,156 @@ function buildPanel() {
       <span id="dbg-vol-sfx-readout" style="width:32px;text-align:right">${sfxVol.toFixed(2)}</span>
     </div>
   `;
-  el.appendChild(audioBlock);
+  el.appendChild(audioWrapper);
 
   // Wire audio sliders
-  audioBlock.querySelector('#dbg-vol-master').addEventListener('input', (e) => {
+  audioContent.querySelector('#dbg-vol-master').addEventListener('input', (e) => {
     const v = parseFloat(e.target.value);
     Sound.setMasterVolume(v);
-    audioBlock.querySelector('#dbg-vol-master-readout').textContent = v.toFixed(2);
+    audioContent.querySelector('#dbg-vol-master-readout').textContent = v.toFixed(2);
   });
-  audioBlock.querySelector('#dbg-vol-music').addEventListener('input', (e) => {
+  audioContent.querySelector('#dbg-vol-music').addEventListener('input', (e) => {
     const v = parseFloat(e.target.value);
     Sound.setMusicVolume(v);
-    audioBlock.querySelector('#dbg-vol-music-readout').textContent = v.toFixed(2);
+    audioContent.querySelector('#dbg-vol-music-readout').textContent = v.toFixed(2);
   });
-  audioBlock.querySelector('#dbg-vol-midi').addEventListener('input', (e) => {
+  audioContent.querySelector('#dbg-vol-midi').addEventListener('input', (e) => {
     const v = parseFloat(e.target.value);
     Sound.setMidiVolume(v);
-    audioBlock.querySelector('#dbg-vol-midi-readout').textContent = v.toFixed(2);
+    audioContent.querySelector('#dbg-vol-midi-readout').textContent = v.toFixed(2);
   });
-  audioBlock.querySelector('#dbg-vol-sfx').addEventListener('input', (e) => {
+  audioContent.querySelector('#dbg-vol-sfx').addEventListener('input', (e) => {
     const v = parseFloat(e.target.value);
     Sound.setSfxVolume(v);
-    audioBlock.querySelector('#dbg-vol-sfx-readout').textContent = v.toFixed(2);
+    audioContent.querySelector('#dbg-vol-sfx-readout').textContent = v.toFixed(2);
+  });
+
+  // ----- Render / adaptive quality overrides -----
+  // Quality preset dropdown locks to a specific level (disabling auto-tuning).
+  // Individual checkboxes become active when locked and let you override
+  // specific settings independently of the level preset.
+  // In "auto" mode the checkboxes are read-only — they just mirror reality.
+  const { wrapper: renderWrapper, content: renderContent } = makeSection('Render');
+
+  const levelNames = getLevelNames();
+  const levelOpts  = levelNames.map((n, i) => `<option value="${i}">${n}</option>`).join('');
+  const prOpts = [
+    ['auto', 'auto'],
+    ['2',    '2×'],
+    ['1.5',  '1.5×'],
+    ['1',    '1×'],
+    ['0.875','0.875×'],
+    ['0.75', '0.75×'],
+    ['0.5',  '0.5×'],
+  ].map(([v, l]) => `<option value="${v}">${l}</option>`).join('');
+
+  renderContent.innerHTML = `
+    <div style="display:flex;align-items:center;gap:6px;margin-bottom:5px">
+      <span style="opacity:0.8;min-width:40px">Level</span>
+      <select id="dbg-aq-level" style="flex:1;font:inherit;background:#0e1c28;color:#dff;border:1px solid #2a4a5a;border-radius:3px;padding:2px 4px">
+        <option value="auto">auto</option>
+        ${levelOpts}
+      </select>
+    </div>
+    <label id="dbg-aq-bloom-label" style="display:flex;align-items:center;gap:6px;cursor:pointer;margin-bottom:3px">
+      <input id="dbg-aq-bloom" type="checkbox" style="cursor:pointer">
+      <span>Bloom</span>
+    </label>
+    <label id="dbg-aq-shadows-label" style="display:flex;align-items:center;gap:6px;cursor:pointer;margin-bottom:3px">
+      <input id="dbg-aq-shadows" type="checkbox" style="cursor:pointer">
+      <span>Shadows</span>
+    </label>
+    <label id="dbg-aq-bubbles-label" style="display:flex;align-items:center;gap:6px;cursor:pointer;margin-bottom:5px">
+      <input id="dbg-aq-bubbles-cheap" type="checkbox" style="cursor:pointer">
+      <span>Cheap bubbles</span>
+    </label>
+    <div style="display:flex;align-items:center;gap:6px">
+      <span style="opacity:0.8;min-width:40px">Pixel ratio</span>
+      <select id="dbg-aq-pr" style="flex:1;font:inherit;background:#0e1c28;color:#dff;border:1px solid #2a4a5a;border-radius:3px;padding:2px 4px">
+        ${prOpts}
+      </select>
+    </div>
+    <div style="opacity:0.55;font-size:10px;margin-top:4px" id="dbg-aq-hint">
+      Pick a level to lock and enable overrides.
+    </div>
+  `;
+  el.appendChild(renderWrapper);
+
+  // Helpers to get/set the locked-vs-auto state of the Render panel.
+  const aqLevelSel     = renderContent.querySelector('#dbg-aq-level');
+  const aqBloomCb      = renderContent.querySelector('#dbg-aq-bloom');
+  const aqShadowsCb    = renderContent.querySelector('#dbg-aq-shadows');
+  const aqBubblesCb    = renderContent.querySelector('#dbg-aq-bubbles-cheap');
+  const aqPrSel        = renderContent.querySelector('#dbg-aq-pr');
+  const aqHint         = renderContent.querySelector('#dbg-aq-hint');
+  const aqBloomLabel   = renderContent.querySelector('#dbg-aq-bloom-label');
+  const aqShadowsLabel = renderContent.querySelector('#dbg-aq-shadows-label');
+  const aqBubblesLabel = renderContent.querySelector('#dbg-aq-bubbles-label');
+
+  function aqRefreshCheckboxStates() {
+    aqBloomCb.checked     = getBloomEnabled();
+    aqShadowsCb.checked   = getShadowsEnabled();
+    aqBubblesCb.checked   = state.hooks.bubbles?.mesh?.material !== state.hooks.bubbles?._fancyMat;
+  }
+  function aqSetLocked(locked) {
+    const opacity = locked ? '1' : '0.45';
+    const ptr     = locked ? 'pointer' : 'not-allowed';
+    for (const el of [aqBloomLabel, aqShadowsLabel, aqBubblesLabel]) {
+      el.style.opacity = opacity;
+      el.style.cursor  = ptr;
+    }
+    aqBloomCb.disabled   = !locked;
+    aqShadowsCb.disabled = !locked;
+    aqBubblesCb.disabled = !locked;
+    aqPrSel.disabled     = !locked;
+    aqPrSel.style.opacity = opacity;
+    aqHint.textContent   = locked
+      ? 'Adaptive quality paused. Overrides active.'
+      : 'Pick a level to lock and enable overrides.';
+  }
+
+  // Initialise to "auto" state.
+  aqLevelSel.value = 'auto';
+  aqRefreshCheckboxStates();
+  aqSetLocked(false);
+
+  aqLevelSel.addEventListener('change', () => {
+    const v = aqLevelSel.value;
+    if (v === 'auto') {
+      aqSetEnabled(true);
+      aqSetLocked(false);
+    } else {
+      aqSetEnabled(false);
+      aqApplyLevel(parseInt(v, 10));
+      aqRefreshCheckboxStates();
+      aqSetLocked(true);
+    }
+  });
+  aqBloomCb.addEventListener('change', () => {
+    const bp = state.hooks.bloomPass ?? null;
+    if (bp) bp.enabled = aqBloomCb.checked;
+  });
+  aqShadowsCb.addEventListener('change', () => {
+    aqSetShadows(aqShadowsCb.checked);
+  });
+  aqBubblesCb.addEventListener('change', () => {
+    state.hooks.bubbles?.setCheapMaterial?.(aqBubblesCb.checked);
+  });
+  aqPrSel.addEventListener('change', () => {
+    const v = aqPrSel.value;
+    if (v !== 'auto') aqSetPixelRatio(parseFloat(v));
   });
 
   // ----- Graphics opt-ins -----
-  // Two tiers, both off by default everywhere (the per-fragment cost of
-  // extra dynamic lights is steep on most GPUs):
-  //   Context lights = proxy PointLight per cluster (firepits, Sugar Shack
-  //                    interior + spots). Cheap-ish — one per logical
-  //                    location.
-  //   Fancy lights   = real PointLight per torch / bulb / fixture on top of
-  //                    context lights. Light count can balloon fast.
-  // Toggling persists to localStorage and prompts a reload, since lights
-  // are wired at model-build time.
-  const gfxBlock = document.createElement('div');
-  gfxBlock.style.marginTop = '8px';
-  gfxBlock.style.borderTop = '1px solid #2a4a5a';
-  gfxBlock.style.paddingTop = '6px';
+  // Two tiers, both off by default everywhere (per-fragment light cost).
+  // Toggling persists to localStorage and prompts a reload.
+  const { wrapper: gfxWrapper, content: gfxContent } = makeSection('Lights', false);
   let contextNow = false, fancyNow = false;
   try {
     contextNow = localStorage.getItem('zerble.contextLights') === '1';
     fancyNow   = localStorage.getItem('zerble.fancyLights')   === '1';
   } catch (e) {}
-  gfxBlock.innerHTML = `
-    <div style="margin-bottom:4px;opacity:0.7">Graphics</div>
+  gfxContent.innerHTML = `
     <label style="display:flex;align-items:center;gap:6px;cursor:pointer;margin-bottom:3px">
       <input id="dbg-context-lights" type="checkbox" ${contextNow ? 'checked' : ''} style="cursor:pointer">
       <span style="flex:1">Context lights <span style="opacity:0.55">(firepits, Sugar Shack)</span></span>
@@ -482,10 +605,10 @@ function buildPanel() {
     </label>
     <div style="opacity:0.55;font-size:10px;margin-top:3px">Reload to apply. Heavier on the GPU.</div>
   `;
-  el.appendChild(gfxBlock);
+  el.appendChild(gfxWrapper);
 
   function bindLightsToggle(id, key, label) {
-    gfxBlock.querySelector(id).addEventListener('change', (e) => {
+    gfxContent.querySelector(id).addEventListener('change', (e) => {
       const on = e.target.checked;
       try { localStorage.setItem(key, on ? '1' : '0'); } catch (err) {}
       if (confirm(`${label} ${on ? 'ON' : 'OFF'}. Reload now to apply?`)) {
@@ -623,6 +746,22 @@ function updatePanel(dt) {
   if (tod && state.todSlider && document.activeElement !== state.todSlider) {
     state.todSlider.value = String(tod.t);
     if (state.todReadout) state.todReadout.textContent = todStr;
+  }
+
+  // Keep Render panel checkboxes in sync with the adaptive quality system.
+  // When the dropdown is "auto" the checkboxes are greyed but still show
+  // the current effective state so there's no mystery about what AQ did.
+  if (state.panelEl) {
+    const aqLvSel = state.panelEl.querySelector('#dbg-aq-level');
+    if (aqLvSel && aqLvSel.value === 'auto') {
+      const bloomCb   = state.panelEl.querySelector('#dbg-aq-bloom');
+      const shadowsCb = state.panelEl.querySelector('#dbg-aq-shadows');
+      const bubblesCb = state.panelEl.querySelector('#dbg-aq-bubbles-cheap');
+      if (bloomCb)   bloomCb.checked   = getBloomEnabled();
+      if (shadowsCb) shadowsCb.checked = getShadowsEnabled();
+      if (bubblesCb) bubblesCb.checked =
+        h.bubbles?.mesh?.material !== h.bubbles?._fancyMat;
+    }
   }
 }
 

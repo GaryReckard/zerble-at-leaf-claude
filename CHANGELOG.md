@@ -4,6 +4,12 @@ All notable changes to Zerble at the Festival. Newest at top. Following [Keep a 
 
 ## 2026-05-28
 
+### Added — Debug panel collapsible sections + Render quality override panel
+- **All debug panel sections are now collapsible** (click the `▾/▸` header). Controls and Teleport default closed; Time of day, Audio, Render, and Lights default to their most useful states. Panel fits on screen without scrolling even with all sections open.
+- **New "Render" section** in the backtick overlay exposes every setting the adaptive quality system manages. Level dropdown picks "auto" (adaptive running) or any of the 7 named levels (baseline → pixel-50) to lock it. Bloom, Shadows, Cheap bubbles checkboxes and a Pixel ratio select become active when a level is locked — greyed and read-only in auto mode, but still live-update each frame to show what the adaptive system currently has applied (no mystery about what level did what). Switching back to "auto" re-enables the tuning loop.
+- **`bloomPass` added to `installDebug` hooks** so the Render panel can read and toggle bloom state directly.
+- **New exports on `adaptiveQuality.js`**: `applyLevel(n)`, `setShadows(on)`, `getBloomEnabled()`, `getShadowsEnabled()`, `getBasePixelRatio()`, `getLevelNames()`, `setPixelRatio(mul)`.
+
 ### Fixed — MIDI music now responds to Master and MIDI volume sliders
 - **Root cause: Tone.js was creating its own AudioContext.** The MIDI player lazy-loads Tone.js on the first M press. By default Tone.js creates a fresh `AudioContext`, which is a completely separate audio graph from Sound.js's `ctx`. Cross-context node connections are illegal in Web Audio, so none of the three debug HUD sliders (Master, Music, SFX) could touch MIDI volume.
 - **Fix: share Sound.js's AudioContext with Tone.js.** Before `Tone.start()`, `midiPlayer` now calls `Tone.setContext(new Tone.Context({ context: Sound.getContext() }))`. Tone.js v14 supports wrapping an existing AudioContext. With a shared context, all nodes live in the same graph and cross-module connections are legal.

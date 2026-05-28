@@ -2,6 +2,12 @@
 
 All notable changes to Zerble at the Festival. Newest at top. Following [Keep a Changelog](https://keepachangelog.com); the project isn't versioned yet, so entries are grouped by date.
 
+## 2026-05-28
+
+### Fixed
+- **Wook tie-dye squares.** The 4 splotches on the wook's torso were 0.4×0.4×0.02 `BoxGeometry`s — the square silhouette + 2cm depth read as cube-faces stuck to the body, not splotches on fabric. Replaced with 7 thin elliptical `CircleGeometry` discs at 0.18-0.28m radius, non-uniform x/y scale (0.7-1.3), `DoubleSide` so glancing angles don't drop out, positioned at 0.451m (just outside body radius 0.45) with `lookAt` pointing the normal radially outward. Now reads as organic tie-dye patches.
+- **Wook dread clipping.** Dreads emerged from `baseR = 0.28` (just *inside* the head's 0.30 radius) and only drooped outward at `*0.10` per segment — by segment 4 the strand was at ~0.39m, well inside body radius 0.45, so dreads sank straight through the torso. Bumped `baseR` to 0.30 (flush on the head) and droop coefficient to `*0.30` per segment. By segment 2 the strand clears the body (~0.48m) and angles increasingly outward as it falls. Side-view profile now shows a clean curtain hanging behind the body instead of dreads visibly intersecting the torso.
+
 ## 2026-05-27
 
 ### Added — Hula-hoopers, frisbee players, tie-dye shirts

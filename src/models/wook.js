@@ -22,18 +22,31 @@ export function buildWook(rng = Math.random) {
   body.castShadow = true;
   wookGroup.add(body);
 
-  // Tie-dye splotches
-  for (let i = 0; i < 4; i++) {
+  // Tie-dye splotches — thin elliptical discs hugging the body surface.
+  // Was BoxGeometry(0.4, 0.4, 0.02): the square silhouette + 2cm depth read
+  // as cube-faces jutting out of the torso, not as splotches on fabric.
+  // CircleGeometry has zero depth, and a non-uniform x-scale turns each disc
+  // into an ellipse so they don't read as perfect cookies stamped on the
+  // body. Position is just outside body radius (0.45) so the disc rests on
+  // the surface; `lookAt` points its +Z normal outward radially.
+  const SPLOTCH_COUNT = 7;
+  for (let i = 0; i < SPLOTCH_COUNT; i++) {
+    const r = 0.18 + rng() * 0.10;          // 0.18-0.28m disc radius
     const splotch = new THREE.Mesh(
-      new THREE.BoxGeometry(0.4, 0.4, 0.02),
+      new THREE.CircleGeometry(r, 12),
       new THREE.MeshStandardMaterial({
         color: colors[Math.floor(rng() * colors.length)],
         roughness: 0.95,
+        side: THREE.DoubleSide,             // visible from either side at glancing angles
       })
     );
     const a = rng() * TAU;
-    splotch.position.set(Math.cos(a) * 0.45, 0.5 + rng() * 1.4, Math.sin(a) * 0.45);
+    // 0.451 = just barely outside body radius 0.45 so the disc sits flush.
+    splotch.position.set(Math.cos(a) * 0.451, 0.45 + rng() * 1.45, Math.sin(a) * 0.451);
     splotch.lookAt(splotch.position.clone().multiplyScalar(2));
+    // Squash to an ellipse — more organic than a perfect circle.
+    splotch.scale.x = 0.7 + rng() * 0.6;
+    splotch.scale.y = 0.7 + rng() * 0.6;
     wookGroup.add(splotch);
   }
 
@@ -116,13 +129,18 @@ export function buildWook(rng = Math.random) {
     const segments = 4 + Math.floor(rng() * 2);
     const segLen = len / segments;
 
-    // Base on the back of the scalp — radius 0.28 (just inside head r=0.30)
-    // and y=2.30 (upper hemisphere of head centered at y=2.15).
-    const baseR = 0.28;
+    // Base on the back of the scalp — radius 0.30 (right on head surface) and
+    // y=2.30 (upper hemisphere of head centered at y=2.15). Previously baseR
+    // was 0.28 (just inside the head), and droopX was *0.10 — by segment 4
+    // dreads only reached radius ~0.39, well inside body radius 0.45, so they
+    // sank through the torso. Now baseR sits flush on the head and droop
+    // pushes out *0.30 per segment so the strand clears body radius by
+    // segment 2 (≈0.48m at s=1) and angles increasingly outward as it falls.
+    const baseR = 0.30;
     const baseX = Math.cos(ang) * baseR;
     const baseZ = Math.sin(ang) * baseR;
-    const droopX = baseX * 0.10;
-    const droopZ = baseZ * 0.10;
+    const droopX = baseX * 0.30;
+    const droopZ = baseZ * 0.30;
 
     let prevX = baseX;
     let prevZ = baseZ;

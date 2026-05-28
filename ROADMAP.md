@@ -46,6 +46,8 @@ The MIDI player (M key) ships with a single shared PolySynth(FMSynth) for all tr
 
 ## Audio polish
 
+- **Crickets at night.** Quiet sin-based chirps gated on `nightness > 0.5`, panned wide. Each chirp is a short envelope on a 4-5kHz sin pair with a small detune — same synthesis pattern the fire-crackle bed already uses. Cheap. Fills the night ambience gap.
+- **Music cross-fade between stages.** Currently when Zerble enters a new stage's audible range, the spatial music handle abruptly swaps — feels like changing radio stations. Cross-fade the two PannerNodes' gains over ~1.5s so the new stage's music swells in as the old one fades. Already have per-stage `attachStageMusic` handles.
 - **`Sound.setVolume(0)` proper-mute API.** The localStorage clamp (≥0.05) is a safety net against an accidentally-dragged slider; a real "fully mute" path should bypass the clamp so intentional muting works.
 - **Output-routing detection.** If iOS sound is still broken after the v2 unlock, log whether the audio is routed to a ghost Bluetooth device. Surface in `Sound.diagnostics()`.
 - **`?sounddebug=1` discoverability.** The mobile audio debug toast only shows when the URL param is set. Consider gating it on a debug build flag rather than a query string, so it never accidentally appears in production.
@@ -65,9 +67,30 @@ The MIDI player (M key) ships with a single shared PolySynth(FMSynth) for all tr
 
 ---
 
+## Gameplay verbs
+
+- **Tricks via boost + hop key.** Tap Space+Shift (or a dedicated key) mid-drive for a small 0.3s hop. Air time + bubbles in-air = bonus smiles when you land near NPCs (NPC reaction: "oooh!"). Reuses Zerble's existing arcade physics — just adds a vertical impulse and a "in-air" flag. New verb, no geometry.
+- **Passenger requests.** Sometimes a boarding rider has a small icon over their head (a tent? a stage? a food truck?). Drop them within X meters of that POI = big smile bonus + maybe a token currency. Uses the existing boarding flow + the registry's POI kinds (`stage_front`, `food_truck`, `tent`, etc.).
+- **Vendor stand power-ups.** Extend `vendor_row` chunk themes with rare lemonade / pretzel / glow-stick stands. Drive by, get a 10s buff: faster bubble output, brighter eye glow, louder honk. Tiny new builders that reuse `foodTruck.js` patterns; existing food-truck attractor logic carries the trigger.
+
+---
+
 ## World
 
+- **Bubble inhabitants.** Once in a while a bubble drifts past with a tiny waving figure inside it (silhouette billboard, ~0.1m). Rare enough to read as an Easter egg. One mesh, low spawn rate, despawn with parent bubble.
+- **Birds overhead.** Small triangular birds in instanced flocks circling the festival, occasionally dipping low past Zerble. Single `InstancedMesh`, one update loop, ~60 instances global. Big vibe lift for almost nothing.
+- **Fireworks at midnight.** Cheap instanced point sprites + emissive ramp, gated on `nightness > 0.85`. Triggers ~once per minute. Almost every NPC stops and looks up to take notice — same "watching" state crowd already supports, just biased to face up. Hooker for the day/night cycle's climax.
+- **Crowd photographer.** A specific NPC type with a camera who occasionally crouches and "takes a photo" of Zerble (small flash sprite). Pure animation + a brief emissive pop. Builds the festival-vibe story.
 - **Real lake reflections via `Reflector`.** An earlier procedural "twinkly stars" shader patch on the water surface looked like fake sparkles fading in/out — not reflection physics. Removed in favor of plain water for now. A proper Reflector (`three/examples/jsm/objects/Reflector`) would render the scene from the mirrored camera into a texture and sample it from the water surface — actual mirror of sky + stars + moon + nearby objects. Cost is roughly a second scene render whenever the player can see a lake; would gate to high tier only, and possibly half-res target + nightness-driven wet/dry mix so it only matters when reflections matter.
+
+---
+
+## HUD / juice
+
+- **Smile counter pulse + color shift** when score increments. Pure CSS animation on `#smiles .value` — scale bump + brief warm-tone color flash, then ease back.
+- **Personal-best confetti.** When BEST gets beaten, a brief DOM confetti shower over the score panel. Pure HTML/CSS — no three.js cost. One-time trigger per session.
+- **Boost streaks.** Visible trail behind Zerble at high speed — short fading emissive ring instances, ~8 in a pool, spawned at the rear during boost and fading over ~0.4s. Reads as motion without changing collision or perf budget.
+- **Day/night HUD indicator.** Tiny sun/moon icon in the corner arcing across a strip showing time of day. Pure DOM/SVG, syncs to `getTimeOfDay().t`. Tells the player when the trippy night content (drum circles, stage lights, fireworks once shipped) is coming.
 
 ## Performance
 

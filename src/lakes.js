@@ -67,6 +67,9 @@ const WATER_MAT = new THREE.MeshStandardMaterial({
   opacity: 0.88,
   flatShading: true,
   depthWrite: false,
+  side: THREE.DoubleSide,   // ShapeGeometry winding + rotation flip leaves
+                            //   normals pointing either way depending on the
+                            //   particular shape; DoubleSide sidesteps it.
 });
 WATER_MAT.userData.shared = true;
 WATER_MAT.customProgramCacheKey = () => 'lake-water-stars-v4';
@@ -196,20 +199,25 @@ function buildLakeOutline(rng, baseR) {
     return points;
   }
 
-  const a = 1 + rng() * 0.7;          // 1.0-1.7 major axis multiplier
-  const b = 0.55 + rng() * 0.35;      // 0.55-0.90 minor axis multiplier
+  const a = 1 + rng() * 0.55;         // 1.0-1.55 major axis multiplier
+  const b = 0.65 + rng() * 0.3;       // 0.65-0.95 minor axis multiplier
   const phi = rng() * Math.PI * 2;    // ellipse rotation
 
+  // Two lobe perturbations — broad + finer — both smooth sinusoids. Tuned
+  // down from the original aggressive amplitudes; the previous outline
+  // (high amps + ±8% per-vertex jitter) read as a jagged spiky polygon
+  // rather than a natural shoreline.
   const lobeFreqA = 2 + Math.floor(rng() * 2);  // 2 or 3 broad lobes
-  const lobeAmpA = 0.06 + rng() * 0.12;
+  const lobeAmpA = 0.04 + rng() * 0.08;
   const lobePhaseA = rng() * Math.PI * 2;
-  const lobeFreqB = 4 + Math.floor(rng() * 3);  // 4-6 secondary lobes
-  const lobeAmpB = 0.03 + rng() * 0.06;
+  const lobeFreqB = 3 + Math.floor(rng() * 3);  // 3-5 finer lobes
+  const lobeAmpB = 0.02 + rng() * 0.04;
   const lobePhaseB = rng() * Math.PI * 2;
 
-  // Per-vertex micro-jitter (±8%) so the outline isn't perfectly smooth.
+  // Per-vertex micro-jitter tuned WAY down (was ±8%). Even ±2% reads as
+  // "natural irregularity" without producing visible spikes.
   const wobble = [];
-  for (let i = 0; i < N; i++) wobble.push(0.92 + rng() * 0.16);
+  for (let i = 0; i < N; i++) wobble.push(0.98 + rng() * 0.04);
 
   for (let i = 0; i < N; i++) {
     const ang = (i / N) * Math.PI * 2;
@@ -250,10 +258,19 @@ function outlineRAt(outline, angle) {
 // ---- Sealed perimeter colliders -------------------------------------------
 
 // Walk the closed outline and place overlapping sphere colliders along it
-// at SPHERE_R arc-length intervals — fully sealed, no gaps. Each collider's
-// position is pushed inward by SPHERE_R along the radial direction so the
-// cart's outer edge (≈1.9m) meets the visible water exactly when the cart
-// hits the collider, rather than spheres protruding onto the grass.
+// at SPHERE_R arc-length intervals — fully sealed, no gaps.
+//
+// Each collider is pushed inward along the EDGE NORMAL (perpendicular to the
+// local tangent), not along the radial direction from lake center. Radial
+// offset matches the shore normal only for circular shapes; on irregular
+// lakes with lobes + concavities, radial drift away from normal makes the
+// collider ring visibly drift away from the outline. Using the edge normal
+// keeps the collider ring tracing the outline at every angle.
+//
+// CCW polygon convention: my outline samples (cos a, sin a) for a in
+// [0, 2π) which winds CCW when viewed from +Y. For CCW winding the interior
+// is to the LEFT of each edge as you walk it; rotating the edge tangent
+// 90° CCW gives the inward normal: (tx, tz) → (-tz, tx).
 function placeSealedColliders(registryIds, cx, cz, outline) {
   const N = outline.length;
   const closed = outline.concat([outline[0]]);
@@ -280,11 +297,15 @@ function placeSealedColliders(registryIds, cx, cz, outline) {
     const tInSeg = (target - acc) / Math.max(0.001, segLen[seg]);
     const ax = closed[seg].x + (closed[seg + 1].x - closed[seg].x) * tInSeg;
     const az = closed[seg].z + (closed[seg + 1].z - closed[seg].z) * tInSeg;
-    // Inward shift along radial direction by SPHERE_R.
-    const r = Math.hypot(ax, az);
-    const inv = Math.max(0.1, (r - SPHERE_R)) / Math.max(0.001, r);
-    const px = cx + ax * inv;
-    const pz = cz + az * inv;
+    // Inward normal of this edge (CCW polygon, interior to the left):
+    // edge direction (dx, dz) → inward normal (-dz, dx) / |edge|
+    const edx = closed[seg + 1].x - closed[seg].x;
+    const edz = closed[seg + 1].z - closed[seg].z;
+    const eL = Math.max(0.001, Math.hypot(edx, edz));
+    const nx = -edz / eL;
+    const nz =  edx / eL;
+    const px = cx + ax + nx * SPHERE_R;
+    const pz = cz + az + nz * SPHERE_R;
     registryIds.push(registry.add({
       kind: 'lake_edge',
       position: new THREE.Vector3(px, 0.5, pz),
@@ -339,13 +360,25 @@ export function buildLake(scene, mcx, mcz, rng, opts = {}) {
   // ---- Water surface — ShapeGeometry from outline ----
   // ShapeGeometry's triangulated polygon naturally handles concave/lobed
   // outlines (unlike CircleGeometry which only does round discs).
+  //
+  // Frame alignment: shape vertices sit in XY plane; rotating by +π/2 around
+  // X maps (sx, sy, 0) → (sx, 0, sy), so a shape walked from outline.(x, z)
+  // ends up at world (outline.x, 0, outline.z) — same frame the colliders /
+  // camps / trees / beach all use. Earlier attempt used rotation.x = -π/2
+  // which maps to (sx, 0, -sy), mirroring Z, making the visible water lay
+  // perpendicular to where its colliders thought it was on irregular shapes.
+  //
+  // To keep the polygon facing +Y (up) at this rotation, the shape needs
+  // CW winding (a CCW polygon under +π/2 rotation faces -Y / back-culled).
+  // We walk the outline IN REVERSE to get CW.
   const shape = new THREE.Shape();
-  shape.moveTo(outline[0].x, outline[0].z);
-  for (let i = 1; i < outline.length; i++) shape.lineTo(outline[i].x, outline[i].z);
-  shape.lineTo(outline[0].x, outline[0].z);
+  const lastIdx = outline.length - 1;
+  shape.moveTo(outline[lastIdx].x, outline[lastIdx].z);
+  for (let i = lastIdx - 1; i >= 0; i--) shape.lineTo(outline[i].x, outline[i].z);
+  shape.lineTo(outline[lastIdx].x, outline[lastIdx].z);
   const waterGeo = new THREE.ShapeGeometry(shape);
   const water = new THREE.Mesh(waterGeo, waterMat);
-  water.rotation.x = -Math.PI / 2;
+  water.rotation.x = Math.PI / 2;
   water.position.set(cx, 0.08, cz);
   water.receiveShadow = true;
   water.renderOrder = 0;
@@ -414,12 +447,15 @@ export function buildLake(scene, mcx, mcz, rng, opts = {}) {
   scene.add(group);
 
   // ---- Registry ----
-  // Single bounding-circle `lake` footprint for chunk/lake checks.
+  // Single bounding-circle `lake` footprint for chunk/lake checks. Outline is
+  // also stashed on the entry so `isPointInLake` can do an exact in-outline
+  // check (not just the conservative bounding circle).
   const registryIds = [];
   registryIds.push(registry.add({
     kind: 'lake',
     position: new THREE.Vector3(cx, 0, cz),
     footprint: maxR,
+    outline,
   }));
 
   // Sealed collider ring — no gaps for causeways or paths. The cart cannot
@@ -471,11 +507,17 @@ export function buildLake(scene, mcx, mcz, rng, opts = {}) {
       const size = rng() < 0.4 ? 'small' : 'medium';
       const camp = buildCampsite(mulberry32(campSeed), size);
 
-      // Place the camp at (shoreR + 6 + footprint) so there's a ~6m clear
-      // grass path between water and the camp — that's the band Zerble
-      // drives along.
-      const shoreR = outlineRAt(outline, theta);
-      const r = shoreR + 6 + camp.footprint;
+      // Place the camp `6m + footprint` beyond the FARTHEST nearby shore in
+      // an angular wedge around theta — not just shoreR at theta itself.
+      // For elongated/lobed lakes, a lobe at theta+ε can extend past the
+      // shore at theta and the camp would end up partly in water. Sampling
+      // ±0.30rad (≈±17°) is well over the camp's own angular footprint at
+      // these distances (~footprint / r ≈ 0.07rad for footprint=5, r=70).
+      let maxShoreNearby = 0;
+      for (let dt = -0.30; dt <= 0.30; dt += 0.05) {
+        maxShoreNearby = Math.max(maxShoreNearby, outlineRAt(outline, theta + dt));
+      }
+      const r = maxShoreNearby + 6 + camp.footprint;
       const camX = cx + Math.cos(theta) * r;
       const camZ = cz + Math.sin(theta) * r;
       camp.group.position.set(camX, 0, camZ);
@@ -503,7 +545,12 @@ export function buildLake(scene, mcx, mcz, rng, opts = {}) {
     while (placed < TREE_TARGET && attempts < TREE_TARGET * 4) {
       attempts++;
       const ang = rng() * Math.PI * 2;
-      const sR = outlineRAt(outline, ang);
+      // Same wedge-max trick as campsites — use the farthest shore within
+      // ±0.15rad so a lobe doesn't poke under a tree at the chosen angle.
+      let sR = 0;
+      for (let dt = -0.15; dt <= 0.15; dt += 0.05) {
+        sR = Math.max(sR, outlineRAt(outline, ang + dt));
+      }
       const radialT = Math.pow(rng(), 0.6);
       const dRadial = 14 + radialT * 25;
       const treeX = cx + Math.cos(ang) * (sR + dRadial);
@@ -708,6 +755,25 @@ export function chunkInLake(cxWorld, czWorld) {
     const dx = e.position.x - cxWorld;
     const dz = e.position.z - czWorld;
     if (Math.hypot(dx, dz) < e.footprint) return true;
+  }
+  return false;
+}
+
+// Is (x, z) inside any lake's actual outline (not just the bounding circle)?
+// Bounding-circle check first as a cheap rejection, then exact in-outline
+// check for points inside the bounding circle. Used by ambient-crowd spawn
+// to keep NPCs out of the water (canoes are the only entities allowed in).
+export function isPointInLake(x, z) {
+  for (const e of registry.entries.values()) {
+    if (e.kind !== 'lake' || !e.footprint) continue;
+    const dx = x - e.position.x;
+    const dz = z - e.position.z;
+    const d = Math.hypot(dx, dz);
+    if (d > e.footprint) continue;       // outside bounding circle — safe
+    if (!e.outline) return true;         // no outline stored — fall back to bounding circle
+    const ang = Math.atan2(dz, dx);
+    const shoreR = outlineRAt(e.outline, ang);
+    if (d < shoreR) return true;
   }
   return false;
 }

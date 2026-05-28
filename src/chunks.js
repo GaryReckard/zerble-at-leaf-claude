@@ -20,7 +20,7 @@ import { hash2, mulberry32 } from './rng.js';
 import { Sound } from './sound.js';
 import { PERF } from './perf.js';
 import { register as registerContextLight } from './contextLights.js';
-import { chunkOverlapsLake, chunkInLake } from './lakes.js';
+import { chunkOverlapsLake, chunkInLake, isPointInLake } from './lakes.js';
 import { getForestAt, buildForestChunk, chunkInForest, forestAnimatables, forestDrumCircles, forestDrumMusic } from './forests.js';
 import { buildCampsite } from './models/campsite.js';
 import { buildTent } from './models/tent.js';
@@ -1271,6 +1271,7 @@ function spawnAmbientCrowd(ctx, count) {
   for (let i = 0; i < count; i++) {
     let x, z;
     let tries = 0;
+    let blocked;
     do {
       // 70% chance to spawn near an attractor (if any), 30% random in chunk
       if (chunkAttractors.length > 0 && ctx.rng() < 0.7) {
@@ -1284,7 +1285,12 @@ function spawnAmbientCrowd(ctx, count) {
         z = ctx.czWorld + (ctx.rng() - 0.5) * (CHUNK_SIZE - 8);
       }
       tries++;
-    } while (registry.closestBuilding(new THREE.Vector3(x, 0, z), 1.5) && tries < 6);
+      // Reject positions inside a lake's actual outline. Shore-attractor
+      // spawns can land inside the water on lobed lakes; this catches them.
+      blocked = registry.closestBuilding(new THREE.Vector3(x, 0, z), 1.5)
+        || isPointInLake(x, z);
+    } while (blocked && tries < 8);
+    if (blocked) continue;   // 8 retries blocked → skip this slot rather than spawn in water
 
     ctx.crowd.spawn({
       pos: new THREE.Vector3(x, 0, z),

@@ -698,7 +698,7 @@ import { buildSugarShack } from './src/models/sugarShack.js';
           // dial in another via `?entity=big_lake` and edit if you want a
           // bare-water variant for comparison.
           const lakeGroup = new THREE.Group();
-          buildLake(lakeGroup, 1, 1, mulberry32(0x7));
+          buildLake(lakeGroup, 1, 1, mulberry32(0x101));
           // The lake builds with absolute coordinates within a macrocell —
           // recenter the lake group on the sandbox origin so it's visible.
           const box = new THREE.Box3().setFromObject(lakeGroup);

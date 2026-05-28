@@ -14,7 +14,23 @@ import { buildWook, tickWook } from './models/wook.js';
 import { buildHulaHooper, tickHulaHooper } from './models/hulaHooper.js';
 import { buildFrisbeePlayer, buildFrisbeeDisc, tickFrisbeePlayer, tickFrisbeeDisc } from './models/frisbeePlayer.js';
 import { Sound } from './sound.js';
-import { projectOutOfLake } from './lakes.js';
+import { projectOutOfLake, isPointInLake } from './lakes.js';
+
+// Pick a position at radius `[rNear, rFar]` from `(centerX, centerZ)` that
+// is NOT inside a lake outline. Up to 6 tries; falls back to the last
+// candidate even if it's still in a lake (better than infinite-looping —
+// the per-frame projectOutOfLake pass below catches the corner case).
+function _pickPositionAvoidingLakes(centerX, centerZ, rNear, rFar) {
+  let nx = centerX, nz = centerZ;
+  for (let tries = 0; tries < 6; tries++) {
+    const ang = Math.random() * TAU;
+    const r = rNear + Math.random() * (rFar - rNear);
+    nx = centerX + Math.cos(ang) * r;
+    nz = centerZ + Math.sin(ang) * r;
+    if (!isPointInLake(nx, nz)) return { x: nx, z: nz };
+  }
+  return { x: nx, z: nz };
+}
 import { registry } from './registry.js';
 
 const TAU = Math.PI * 2;
@@ -398,13 +414,30 @@ export class KidGaggle {
         const ddx = k.position.x - zerble.position.x;
         const ddz = k.position.z - zerble.position.z;
         if (ddx * ddx + ddz * ddz > RECYCLE_DIST2) {
-          const ang = Math.random() * TAU;
-          const r = RECYCLE_NEAR + Math.random() * (RECYCLE_FAR - RECYCLE_NEAR);
-          const nx = zerble.position.x + Math.cos(ang) * r;
-          const nz = zerble.position.z + Math.sin(ang) * r;
-          k.position.set(nx, 0, nz);
-          k.userData.center.set(nx, 0, nz);
+          const p = _pickPositionAvoidingLakes(
+            zerble.position.x, zerble.position.z, RECYCLE_NEAR, RECYCLE_FAR,
+          );
+          k.position.set(p.x, 0, p.z);
+          k.userData.center.set(p.x, 0, p.z);
           k.userData.scatterTimer = 0;
+        }
+      }
+    }
+
+    // Per-frame safety net: any kid that ended up inside a lake (slow drift
+    // pushed them past the steering repulsion, or the anchor follow-Zerble
+    // lerp dropped them into a lobe) gets projected to the shore. Cheap
+    // bounding-circle reject first, then exact in-outline check via
+    // isPointInLake; only a handful of kids will ever hit this fallback.
+    for (const k of this.kids) {
+      if (isPointInLake(k.position.x, k.position.z)) {
+        const shore = projectOutOfLake(k.position.x, k.position.z, 3.0);
+        if (shore) {
+          k.position.x = shore.x;
+          k.position.z = shore.z;
+          // Re-anchor so they don't immediately wander back in.
+          k.userData.center.x = shore.x;
+          k.userData.center.z = shore.z;
         }
       }
     }
@@ -713,13 +746,15 @@ export class Wooks {
         const adx = a.x - zerblePos.x;
         const adz = a.z - zerblePos.z;
         if (adx * adx + adz * adz > FAR_THRESHOLD2) {
-          // Try up to 8 angles to find a position with adequate spread.
+          // Try up to 8 angles to find a position with adequate spread
+          // AND not inside a lake.
           let placed = false;
           for (let attempt = 0; attempt < 8; attempt++) {
             const ang = Math.random() * TAU;
             const dist = RECYCLE_MIN + Math.random() * (RECYCLE_MAX - RECYCLE_MIN);
             const nx = zerblePos.x + Math.cos(ang) * dist;
             const nz = zerblePos.z + Math.sin(ang) * dist;
+            if (isPointInLake(nx, nz)) continue;
             let tooClose = false;
             for (let j = 0; j < this.wooks.length; j++) {
               if (j === i) continue;
@@ -733,12 +768,14 @@ export class Wooks {
               break;
             }
           }
-          // Fallback: if spread couldn't be satisfied (unlikely with only 5
-          // wooks), accept the last candidate — better than not recycling.
+          // Fallback: if spread + lake-avoid couldn't be satisfied (unlikely
+          // with only 5 wooks), accept any non-lake spot — better than not
+          // recycling. The per-frame projection below catches the remainder.
           if (!placed) {
-            const ang = Math.random() * TAU;
-            const dist = RECYCLE_MIN + Math.random() * (RECYCLE_MAX - RECYCLE_MIN);
-            a.set(zerblePos.x + Math.cos(ang) * dist, 0, zerblePos.z + Math.sin(ang) * dist);
+            const p = _pickPositionAvoidingLakes(
+              zerblePos.x, zerblePos.z, RECYCLE_MIN, RECYCLE_MAX,
+            );
+            a.set(p.x, 0, p.z);
           }
           // Re-randomize so all recycled wooks don't lock to the same orbit phase
           w.userData.phase = Math.random() * TAU;
@@ -815,6 +852,21 @@ export class Wooks {
       // the main collision resolver skips it.
       this.colliders[i].passive = isApproaching;
       this.colliders[i].damage = isApproaching ? 0 : 5;
+    }
+
+    // Per-frame safety net — any wook whose orbit/dodge ended up inside a
+    // lake gets projected to the shore (and re-anchored there so they don't
+    // orbit straight back in). Same pattern as KidGaggle.update.
+    for (let i = 0; i < this.wooks.length; i++) {
+      const w = this.wooks[i];
+      if (isPointInLake(w.position.x, w.position.z)) {
+        const shore = projectOutOfLake(w.position.x, w.position.z, 3.0);
+        if (shore) {
+          w.position.x = shore.x;
+          w.position.z = shore.z;
+          w.userData.anchor.set(shore.x, 0, shore.z);
+        }
+      }
     }
   }
 }

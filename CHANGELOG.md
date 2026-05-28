@@ -4,6 +4,9 @@ All notable changes to Zerble at the Festival. Newest at top. Following [Keep a 
 
 ## 2026-05-28
 
+### Fixed
+- **Kids + wooks no longer end up in lakes.** Two more spawn paths weren't checking `isPointInLake` before placing: `KidGaggle.update`'s recycle (re-anchors any kid >200m from Zerble to a random spot 30-80m away) and `Wooks.update`'s recycle (re-anchors any wook with anchor >300m from Zerble to a spot 90-160m away). Both now use a shared `_pickPositionAvoidingLakes` helper (6 tries; falls through to the per-frame projection below if all candidates land in water). Each pool also gets a per-frame safety net: any kid/wook whose position is `isPointInLake` gets pushed to the shoreline via `projectOutOfLake` and re-anchored there so the next wander doesn't immediately drift back in. Drove Zerble through a lake center and verified the water surface is now NPC-free; all crowd activity stays on the shore.
+
 ### Added
 - **Tent stage chair clumps INSIDE the tent.** Initial attempt placed chairs outside the tent canvas (behind the open-tent walls), which left the tent interior just as empty as before. Repositioned: chair band sits in the back 2/3 of the tent's audience floor, in tent-local coordinates between the stage front (z = `stagePos.z + stageDepth/2`) and just in front of the soundboard (z = `mixerPos.z - 1.5`). Front 1/3 stays chair-free as a dance area; 4-5 clumps of 3-6 chairs each populate the rest; an additional clump lands just behind the soundboard 70% of the time for variety. Lateral spread `tent.width - 5` keeps chairs inside the tent walls. All positions rotated through the existing `worldXZ` helper so they honor the tent's random `yaw`; chairs face `yaw + π` (toward the stage) with a small jitter. Hula-hoopers attach automatically via the existing `stage_front` attractor. The tent's own `crowdSpots` (18 indoor NPCs + sound engineer) keeps the audience density up.
 

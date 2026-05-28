@@ -1,37 +1,49 @@
 // Adaptive quality monitor. Watches frame time over a rolling window and
-// downgrades render quality (pixel ratio, bloom, shadows) when sustained
-// performance drops below a threshold. Ramps back up if the budget
-// recovers. Surfaces transitions as a HUD toast so the player knows what
-// changed.
+// downgrades render quality (pixel ratio, bloom, shadows, bubble material)
+// when sustained performance drops below a threshold. Ramps back up if the
+// budget recovers. Surfaces transitions as a HUD toast.
 //
-// Design notes:
-//   * We tweak the LIVE renderer/composer/PERF settings rather than
-//     reloading. Pixel ratio change forces a renderer.setSize() recompute.
-//   * Shadows toggle dynamically by setting `renderer.shadowMap.enabled`
-//     (cheap), but on transitions we have to flag shadowMap.needsUpdate
-//     so it actually re-renders.
-//   * Bloom toggle is just `bloomPass.enabled = false/true`.
-//   * Hysteresis: we use different "drop" and "raise" thresholds so the
-//     system doesn't oscillate when FPS sits near the boundary.
+// Design notes (perf-pass-4 update):
+//   * Pixel ratio is dropped FIRST — on Retina displays (dPR 2) it's the
+//     largest single GPU cost. Old order (bloom first) was backwards.
+//   * Each level carries a `bubbles` property ('fancy'|'cheap') so the
+//     caller can drive material switching via the `onLevelChange` hook
+//     without this module knowing about bubbles.js.
+//   * DROP triggers on: avg frame time > 22ms sustained, OR p95 > 33ms
+//     sustained, OR two consecutive frames > 80ms (single-frame hitch).
+//   * RAISE requires all three metrics to be healthy simultaneously so
+//     spikes block restoration even when avg looks fine.
+//   * We tweak LIVE renderer/composer/PERF rather than reloading.
+//   * Shadows use the castShadow-walk trick (not shadowMap.enabled) so
+//     stale ghost shadows don't freeze on the ground.
 //
-// Usage from main.js (per frame, after composer.render):
+// Usage from main.js (per frame):
 //   AdaptiveQuality.tick(dt);
 
 import { PERF } from './perf.js';
 
-const TARGET_FPS = 50;          // we aim to stay above this
-const DROP_FRAME_MS = 24;       // ~42 fps — drop quality if sustained
-const RAISE_FRAME_MS = 15;      // ~66 fps — safe to raise quality
-const WINDOW = 90;              // ~1.5 sec of frames at 60fps
-const SUSTAIN_FRAMES = 60;      // need this many consecutive bad/good frames
+const DROP_FRAME_MS   = 22;  // avg > this → drop  (~45fps)
+const RAISE_FRAME_MS  = 18;  // avg < this → maybe raise  (~55fps)
+const DROP_P95_MS     = 33;  // p95 > this → drop (catches sustained jitter)
+const RAISE_P95_MS    = 22;  // p95 < this required before raise
+const DROP_MAX_MS     = 80;  // two consecutive frames > this → immediate drop
+const RAISE_MAX_MS    = 33;  // max < this required before raise
+const WINDOW          = 90;  // rolling window size (~1.5s at 60fps)
+const SUSTAIN_FRAMES  = 60;  // consecutive bad/good frames to trigger
+const STATS_INTERVAL  = 10;  // recompute p95/max every N frames (fresh enough
+                              // for trigger decisions without sorting every tick)
 
+// Each level builds on the previous. `bubbles` is a signal for the caller
+// (main.js) to swap the Bubbles material; this module doesn't import bubbles.js.
+// `pixelRatioMul` scales the PERF baseline ratio (set at install time).
 const QUALITY_LEVELS = [
-  // Level 0 = the saved PERF tier (whatever the user / detection picked).
-  { name: 'baseline' },
-  // Each subsequent level peels something off.
-  { name: 'no-bloom',     bloom: false },
-  { name: 'no-shadows',   bloom: false, shadows: false },
-  { name: 'half-pixels',  bloom: false, shadows: false, pixelRatioMul: 0.5 },
+  { name: 'baseline',   pixelRatioMul: 1.0,   bubbles: 'fancy' },
+  { name: 'pixel-87',   pixelRatioMul: 0.875, bubbles: 'fancy' },
+  { name: 'no-bloom',   pixelRatioMul: 0.875, bubbles: 'fancy',  bloom: false },
+  { name: 'pixel-75',   pixelRatioMul: 0.75,  bubbles: 'fancy',  bloom: false },
+  { name: 'cheap-bubs', pixelRatioMul: 0.75,  bubbles: 'cheap',  bloom: false },
+  { name: 'no-shadows', pixelRatioMul: 0.75,  bubbles: 'cheap',  bloom: false, shadows: false },
+  { name: 'pixel-50',   pixelRatioMul: 0.5,   bubbles: 'cheap',  bloom: false, shadows: false },
 ];
 
 const state = {
@@ -41,19 +53,19 @@ const state = {
   goodRun: 0,
   frameTimes: [],
   hooks: null,
-  // List of meshes whose castShadow we turned off when we dropped to the
-  // no-shadows level. Restored on raise. See `_setShadowsOn` below.
+  // castShadow list saved when we killed shadows; restored on raise.
   _castersTurnedOff: null,
-  // Derived frame-time stats — updated once per second from the rolling
-  // frameTimes window. Exposed via getFrameStats() for the debug HUD.
+  // Derived frame-time stats — updated every STATS_INTERVAL frames.
+  // Shared between the adaptive trigger logic and the debug HUD display.
   // Phase 1 instrumentation (perf-pass-4).
   _statsCache: { avg: 0, p95: 0, max: 0 },
   _statsTick: 0,
-  // Raw wall-clock tracking — performance.now() at the previous tick call.
-  // We track this independently of dt because dt is capped at 50ms in
-  // main.js (Math.min(clock.getDelta(), 0.05)), so using dt would clamp
-  // every frame over 50fps, making avg/p95/max useless for diagnosing jitter.
+  // Raw wall-clock tracking — performance.now() at the previous tick.
+  // Independent of dt because dt is capped at 50ms in main.js
+  // (Math.min(clock.getDelta(), 0.05)); using dt would clamp p95/max.
   _lastPerfTime: 0,
+  // Consecutive-frame counter for the instant-drop hitch detector.
+  _maxSpikesInRow: 0,
 };
 
 export function install(hooks) {
@@ -70,34 +82,26 @@ export function setEnabled(v) {
 export function tick(dt) {
   if (!state.enabled || !state.hooks) return;
 
-  // Use raw wall-clock delta for frame-time stats so we capture actual
-  // jitter instead of the dt-capped value (which is clamped at 50ms by
-  // main.js and would make p95/max meaningless for anything under 20fps).
+  // Wall-clock delta — raw, unclamped. dt from main.js is capped at 50ms
+  // so we don't use it for frame-time measurement.
   const now = performance.now();
   const wallMs = state._lastPerfTime > 0 ? now - state._lastPerfTime : dt * 1000;
   state._lastPerfTime = now;
 
-  // Adaptive quality uses the original dt-based ms for its drop/raise
-  // thresholds (those are calibrated against the clamped game tick), but
-  // the stats window records wall-clock time so the HUD is truthful.
-  const ms = dt * 1000;
   state.frameTimes.push(wallMs);
   if (state.frameTimes.length > WINDOW) state.frameTimes.shift();
-  // Need a real sample window before judging — don't whipsaw at boot when
-  // the first few frames include shader compile spikes.
+
+  // Don't judge until the window is full — avoids whipsawing on boot spikes.
   if (state.frameTimes.length < WINDOW) return;
 
-  // Average frame time over the window. Median would be more robust against
-  // GC spikes; mean is good enough for the coarse on/off transitions here.
+  // Recompute avg every frame (cheap sum), p95+max every STATS_INTERVAL
+  // frames (needs a sort — still fast at 90 samples, but skip it most ticks).
   let sum = 0;
   for (const x of state.frameTimes) sum += x;
   const avg = sum / state.frameTimes.length;
 
-  // Derived stats (p95 + max) — computed once per ~60 frames to avoid
-  // a sorted copy every tick. p95 catches sustained jitter; max catches
-  // single-frame hitches like chunk-load spikes.
   state._statsTick++;
-  if (state._statsTick >= 60) {
+  if (state._statsTick >= STATS_INTERVAL) {
     state._statsTick = 0;
     const sorted = state.frameTimes.slice().sort((a, b) => a - b);
     const p95Idx = Math.floor(sorted.length * 0.95);
@@ -108,23 +112,51 @@ export function tick(dt) {
     };
   }
 
-  if (avg > DROP_FRAME_MS) {
+  const { p95, max } = state._statsCache;
+
+  // ---- DROP logic ----
+  // Three independent triggers; any one fires the bad-run counter.
+  // The hitch detector is special: two consecutive worst-case frames
+  // immediately apply one downgrade without waiting for SUSTAIN_FRAMES.
+  const sustained_bad = avg > DROP_FRAME_MS || p95 > DROP_P95_MS;
+  if (sustained_bad) {
     state.badRun++;
     state.goodRun = 0;
     if (state.badRun >= SUSTAIN_FRAMES && state.level < QUALITY_LEVELS.length - 1) {
       _apply(state.level + 1, avg);
       state.badRun = 0;
+      state._maxSpikesInRow = 0;
+      return;
     }
-  } else if (avg < RAISE_FRAME_MS) {
+  } else {
+    state.badRun = Math.max(0, state.badRun - 1);
+  }
+
+  // Instant hitch drop: two consecutive frames over DROP_MAX_MS.
+  if (wallMs > DROP_MAX_MS) {
+    state._maxSpikesInRow++;
+    if (state._maxSpikesInRow >= 2 && state.level < QUALITY_LEVELS.length - 1) {
+      _apply(state.level + 1, avg);
+      state.badRun = 0;
+      state._maxSpikesInRow = 0;
+      return;
+    }
+  } else {
+    state._maxSpikesInRow = 0;
+  }
+
+  // ---- RAISE logic ----
+  // All three metrics must be healthy — spikes block restore even if avg looks fine.
+  const all_good = avg < RAISE_FRAME_MS && p95 < RAISE_P95_MS && max < RAISE_MAX_MS;
+  if (all_good) {
     state.goodRun++;
     state.badRun = 0;
     if (state.goodRun >= SUSTAIN_FRAMES && state.level > 0) {
       _apply(state.level - 1, avg);
       state.goodRun = 0;
     }
-  } else {
-    // In the middle band — neither drop nor raise.
-    state.badRun = Math.max(0, state.badRun - 1);
+  } else if (!sustained_bad) {
+    // Middle band — decay both counters slowly.
     state.goodRun = Math.max(0, state.goodRun - 1);
   }
 }
@@ -140,18 +172,21 @@ function _apply(newLevel, avgMs) {
   }
   // Shadows
   _setShadowsOn(scene, renderer, lvl.shadows !== false && PERF.shadows);
-  // Pixel ratio
+  // Pixel ratio — scale from the baseline captured at install time.
   const pixMul = lvl.pixelRatioMul ?? 1;
   renderer.setPixelRatio(state.basePixelRatio * pixMul);
-  // Composer needs its size re-applied so the bloom render target tracks.
+  // Composer size must re-sync so bloom render targets track the new resolution.
   composer.setSize(window.innerWidth, window.innerHeight);
 
-  // Tell the player what happened. Short toast — easy to miss is fine.
-  const fps = (1000 / avgMs).toFixed(0);
+  // Toast uses wall-clock avg (avgMs here is the live avg, not clamped dt).
+  const fps = avgMs > 0 ? (1000 / avgMs).toFixed(0) : '?';
   const msg = newLevel > 0
     ? `perf: ${lvl.name} (~${fps}fps)`
     : `perf: full quality (~${fps}fps)`;
   hud?.toast?.(msg, 1800);
+
+  // Notify caller — main.js uses this to swap bubble material without
+  // creating a direct dependency between this module and bubbles.js.
   state.hooks.onLevelChange?.(newLevel, lvl);
 }
 
@@ -200,6 +235,7 @@ function _setShadowsOn(scene, renderer, on) {
 
 export function getLevel() { return state.level; }
 export function getLevelName() { return QUALITY_LEVELS[state.level].name; }
+export function getLevelCount() { return QUALITY_LEVELS.length; }
 
 // Phase 1 instrumentation — frame-time stats for the debug HUD.
 // Returns the most recently computed { avg, p95, max } (ms). Updated once

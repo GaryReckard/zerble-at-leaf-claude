@@ -278,6 +278,13 @@ AdaptiveQuality.install({
   composer,
   bloomPass,
   hud: HUD,
+  // Phase 3 will add bubbles.setCheapMaterial(); the hook is wired now so
+  // the quality-level ladder encodes the 'bubbles' property correctly from
+  // day one. The optional-chain guard means Phase 3 just needs to add the
+  // method — no change needed here.
+  onLevelChange: (_level, lvl) => {
+    bubbles.setCheapMaterial?.(lvl.bubbles === 'cheap');
+  },
 });
 
 // iOS Safari still fires deprecated GestureEvents for pinch — those can zoom

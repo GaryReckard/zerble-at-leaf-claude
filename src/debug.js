@@ -16,7 +16,7 @@ import { getForestAt } from './forests.js';
 import { PERF } from './perf.js';
 import { getSessionSeed } from './rng.js';
 import { chunkGenStats } from './chunks.js';
-import { getFrameStats } from './adaptiveQuality.js';
+import { getFrameStats, getLevelName } from './adaptiveQuality.js';
 
 // Per-tier perf budgets. Numbers come from the r/threejs perf thread
 // guidance — these are "stay under or you're hurting low-end devices"
@@ -591,6 +591,7 @@ function updatePanel(dt) {
     `~ debug (P pause · . step · C colliders · G god · F freeze)\n` +
     `fps          ${fps}    ${state.paused ? '[PAUSED]' : ''}\n` +
     `frame        ${ftStr}\n` +
+    `quality      ${getLevelName()}\n` +
     `draws        ${drawsStr}\n` +
     `tris         ${trisStr}\n` +
     `gpu mem      geo ${geoCount}  tex ${texCount}${heap}\n` +

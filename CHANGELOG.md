@@ -4,6 +4,14 @@ All notable changes to Zerble at the Festival. Newest at top. Following [Keep a 
 
 ## 2026-05-28
 
+### Added — NPCs dance on the dancefloor
+- **Crowd NPCs within ~9m of a `stage_front` attractor go into dance mode.** While `onDancefloor`, the existing matrix-write path layers a much bigger animation set:
+  - **Vertical bounce** at ~0.07m peak + a smaller off-beat ripple at 0.025m — clear hop without floating.
+  - **Hip tilt** sway around Z at 0.18 rad (~10°) peak — applied via the existing `m.multiply(_tmpDanceMat)` path so it reuses the per-NPC scratch matrix.
+  - **Yaw shimmy** of ±0.20 rad layered onto `npc.yaw` in the Euler — back-and-forth twist.
+  Each component uses `npc.bob` with frequencies offset by `npc.dance` (the per-NPC personality value seeded at spawn), so neighbors aren't in lockstep — each dancer has a slightly different rhythm and amplitude. Detection runs once per NPC per frame walking `registry.byKind.get('stage_front')` (O(N × stages) — typically ≤4 stages, cheap).
+- **Chair clumps line up with this radius.** `chunks.js buildStage`'s `dancefloorDepth = 9 * scale` matches the dancefloor detect radius — chairs sit just outside the dance zone, so dancers have room and seated NPCs don't accidentally trigger dance moves.
+
 ### Added — Trip warps procedural music too (bands, drums, drum circles)
 - **Music bus gets a trippy lowpass + feedback delay chain.** Previously only MIDI playback warped during trips; the procedural music (`jam`/`brass`/`drum`/`forest_drum` engines synthesized in Web Audio) stayed clean. Added a wet/dry chain between `musicDuckGain` and `masterGain`:
   ```

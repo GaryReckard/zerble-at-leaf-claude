@@ -514,6 +514,30 @@ export class Crowd {
     npc.bob += dt * (1 + 0.4 * npc.dance);
     if (npc.rideTimer != null) npc.rideTimer -= dt;
 
+    // Dancefloor detection — NPC is in the front zone of a stage's audience
+    // if they're within ~9m of any `stage_front` attractor. While there, the
+    // `_writeMatrices` path layers a much bigger bounce + body sway on top
+    // of the regular animation, giving the impression of a dance crowd.
+    // Cheap O(stages) check per NPC per frame; with ≤4 stages in load
+    // distance it's negligible.
+    if (registry.byKind.has('stage_front')) {
+      let nearest = Infinity;
+      for (const id of registry.byKind.get('stage_front')) {
+        const e = registry.entries.get(id);
+        if (!e) continue;
+        const fx = npc.pos.x - e.position.x;
+        const fz = npc.pos.z - e.position.z;
+        const fd = Math.hypot(fx, fz);
+        if (fd < nearest) nearest = fd;
+      }
+      // 9m radius approximates the area between the deck and the chair band
+      // (`9 * scale` dancefloor depth from chunks.js buildStage). NPCs that
+      // wander past the chair clumps stop dancing.
+      npc.onDancefloor = nearest < 9;
+    } else {
+      npc.onDancefloor = false;
+    }
+
     const dx = zerble.position.x - npc.pos.x;
     const dz = zerble.position.z - npc.pos.z;
     const dToZerble = Math.hypot(dx, dz);
@@ -918,18 +942,41 @@ export class Crowd {
     // Reuse scratch Quaternion/Euler — avoids ~30k allocations/sec at 500 NPCs × 60fps.
     // hammock_riding NPCs need a supine rotation (X=+π/2 face up, then Y=yaw); all
     // others just rotate around Y by yaw. Build the right quat per branch.
+    // Dancefloor NPCs bounce harder + sway more, on a phase seeded by their
+    // dance value so neighbors aren't in lockstep. Unique-feeling moves come
+    // from a sum of sin terms at staggered frequencies — different `dance`
+    // values produce visibly different rhythms within the crowd. Computed
+    // BEFORE the quat composition so the yaw wiggle can layer onto npc.yaw.
+    let bobY;
+    let danceTilt;
+    let danceYawWiggle = 0;
+    if (npc.onDancefloor) {
+      const t = npc.bob;
+      // Vertical bounce: a dominant low-frequency hop + a slight off-beat
+      // ripple. Scale 0.06-0.10m so it reads clearly without floating.
+      bobY = (Math.sin(t * 1.8) * 0.07 + Math.sin(t * 3.7 + npc.dance * 6) * 0.025);
+      // Hip sway around Z axis — 0.18 rad peak (~10°) per personality.
+      danceTilt = Math.sin(t * 1.5 + npc.dance * 3) * 0.18;
+      // Yaw shimmy — a slow back-and-forth that varies per NPC.
+      danceYawWiggle = Math.sin(t * 0.9 + npc.dance * 5) * 0.20;
+    } else {
+      bobY = Math.sin(npc.bob) * 0.04;
+      danceTilt = npc.dance > 0.6 && (npc.state === 'idle' || npc.state === 'watching' || npc.state === 'riding')
+        ? Math.sin(npc.bob * 2) * 0.05 * (npc.dance - 0.5)
+        : 0;
+    }
+
     let quat;
     if (npc.state === 'hammock_riding') {
       // Compose Y * X — applies X first (supine), then Y (align with hammock yaw)
-      this._supineQuatY.setFromAxisAngle(this._axisY, npc.yaw);
+      this._supineQuatY.setFromAxisAngle(this._axisY, npc.yaw + danceYawWiggle);
       quat = this._tmpQuat.multiplyQuaternions(this._supineQuatY, this._supineQuatX);
     } else {
-      quat = this._tmpQuat.setFromEuler(this._tmpEuler.set(0, npc.yaw, 0));
+      // Yaw + per-NPC dance shimmy. The Z-axis hip tilt (`danceTilt`) is
+      // applied SEPARATELY below via `m.multiply(this._tmpDanceMat)` — don't
+      // double up here by adding it to the Euler.
+      quat = this._tmpQuat.setFromEuler(this._tmpEuler.set(0, npc.yaw + danceYawWiggle, 0));
     }
-    const bobY = Math.sin(npc.bob) * 0.04;
-    const danceTilt = npc.dance > 0.6 && (npc.state === 'idle' || npc.state === 'watching' || npc.state === 'riding')
-      ? Math.sin(npc.bob * 2) * 0.05 * (npc.dance - 0.5)
-      : 0;
 
     // Happy bounce: while smile cooldown is active the body bobs up by a small
     // sin wave (~6cm amplitude) so the whole figure (body + mouth) hops.
